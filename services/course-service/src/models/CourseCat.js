@@ -8,6 +8,7 @@ module.exports = (sequelize) => {
             wp_term_id: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
             name: { type: DataTypes.STRING(200), allowNull: false },
             slug: { type: DataTypes.STRING(200), allowNull: true },
+            is_featured: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         },
         {
             tableName: 'course_cats',

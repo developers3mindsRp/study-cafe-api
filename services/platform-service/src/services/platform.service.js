@@ -1,10 +1,49 @@
 const { Op } = require('sequelize');
 const { QueryTypes } = require('sequelize');
+
+/**
+ * Normalize a plan's `features` value from the DB into a clean string[].
+ * Handles every format that may have been stored historically:
+ *   - null / undefined              → []
+ *   - string[]  (correct format)    → returned as-is
+ *   - string[] with HTML items      → each item is HTML-stripped and re-split
+ *   - string    (plain or HTML)     → split by HTML block tags / newlines
+ */
+function normalizeFeatures(raw) {
+  if (!raw) return [];
+
+  // Flatten: if it's a single-element array wrapping a big HTML string, unwrap it
+  const value = Array.isArray(raw)
+    ? (raw.length === 1 && typeof raw[0] === 'string' && raw[0].includes('<') ? raw[0] : null)
+    : typeof raw === 'string' ? raw : null;
+
+  if (value !== null) {
+    // value is an HTML or plain string — parse it
+    const withNewlines = value
+      .replace(/<\/p>/gi, '\n')
+      .replace(/<\/li>/gi, '\n')
+      .replace(/<br\s*\/?>/gi, '\n');
+    const plain = withNewlines.replace(/<[^>]+>/g, '');
+    const decoded = plain
+      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&nbsp;/g, ' ').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+    return decoded.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+  }
+
+  // It's a proper string[] — strip HTML from each item just in case
+  return raw
+    .map((item) => {
+      if (typeof item !== 'string') return String(item);
+      if (!item.includes('<')) return item.trim();
+      const plain = item.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+      return plain;
+    })
+    .filter((l) => l.length > 0);
+}
 const { paginate } = require('../../../../shared');
 const {
   sequelize,
   CmsPage,
-  HomeSection,
   State,
   Testimonial,
   FooterData,
@@ -21,6 +60,7 @@ const {
   Tag,
   ArticleType,
   Court,
+  MediaAsset,
 } = require('../models');
 
 /** Get display_name for one author from users table (same DB). */
@@ -51,45 +91,137 @@ function toPlain(row) {
   return row ? row.get({ plain: true }) : null;
 }
 
+/**
+ * Home page data is stored as a CmsPage with slug = 'home'.
+ * The `meta` JSON field holds: { hero, features[], stats[], testimonialHighlight }
+ * The `content` field can hold raw HTML for the page if needed.
+ */
+
+const defaultHero = {
+  title: 'Master Your Skills with Professional Courses',
+  subtitle: 'Learn from industry experts, get certified, and boost your career with our comprehensive online courses',
+  ctaText: 'View Memberships',
+  ctaLink: '/plans',
+  badge: 'Welcome to StudyCafe Learning Platform',
+};
+
+function buildHomeData(page) {
+  const m = (page && page.meta && typeof page.meta === 'object') ? page.meta : {};
+
+  const hero = (m.hero && typeof m.hero === 'object')
+    ? {
+        title: m.hero.title ?? defaultHero.title,
+        subtitle: m.hero.subtitle ?? defaultHero.subtitle,
+        ctaText: m.hero.ctaText ?? defaultHero.ctaText,
+        ctaLink: m.hero.ctaLink ?? defaultHero.ctaLink,
+        imageUrl: m.hero.imageUrl ?? null,
+        badge: m.hero.badge ?? defaultHero.badge,
+      }
+    : { ...defaultHero };
+
+  const features = Array.isArray(m.features)
+    ? m.features.map((f, i) => ({
+        id: f.id || `f${i + 1}`,
+        title: f.title ?? '',
+        description: f.description ?? '',
+        icon: f.icon ?? null,
+        order: f.order ?? i,
+      }))
+    : [];
+
+  let stats = [];
+  if (Array.isArray(m.stats)) {
+    stats = m.stats.map((s) => ({
+      label: s.label ?? '',
+      value: s.value ?? '',
+      suffix: s.suffix ?? null,
+    }));
+  } else if (m.stats && typeof m.stats === 'object') {
+    // Fixed display order matching the frontend layout
+    const orderedKeys = [
+      { key: 'students',           label: 'Active Students' },
+      { key: 'courses',            label: 'Total Courses' },
+      { key: 'certificatesIssued', label: 'Certificates Issued' },
+      { key: 'successRate',        label: 'Success Rate' },
+    ];
+    stats = orderedKeys
+      .filter(({ key }) => m.stats[key] !== undefined)
+      .map(({ key, label }) => ({
+        label,
+        value: String(m.stats[key]),
+        suffix: null,
+      }));
+  }
+
+  return {
+    hero,
+    ...(features.length > 0 && { features }),
+    ...(stats.length > 0 && { stats }),
+    ...(page && page.updated_at && { updatedAt: page.updated_at }),
+  };
+}
+
 async function getHomePublic() {
-  const rows = await HomeSection.findAll({
-    where: { is_active: true },
-    order: [['sort_order', 'ASC']],
-    attributes: ['section_key', 'title', 'content', 'meta'],
+  const page = await CmsPage.findOne({ where: { slug: 'home' } });
+  const data = buildHomeData(page ? page.get({ plain: true }) : null);
+
+  const [testimonialRows, faqRows] = await Promise.all([
+    Testimonial.findAll({
+      where: { is_active: true },
+      order: [['sort_order', 'ASC']],
+      attributes: ['id', 'name', 'role', 'quote', 'avatar_url', 'sort_order'],
+    }),
+    Faq.findAll({
+      where: { is_active: true },
+      order: [['sort_order', 'ASC']],
+      attributes: ['id', 'question', 'answer', 'sort_order'],
+    }),
+  ]);
+
+  data.testimonials = testimonialRows.map((r) => {
+    const t = r.get({ plain: true });
+    return {
+      id: String(t.id),
+      quote: t.quote ?? '',
+      authorName: t.name ?? '',
+      authorRole: t.role ?? null,
+      avatarUrl: t.avatar_url ?? null,
+      order: t.sort_order ?? 0,
+    };
   });
-  return rows.reduce((acc, r) => {
-    const p = r.get({ plain: true });
-    acc[p.section_key] = { title: p.title, content: p.content, meta: p.meta || null };
-    return acc;
-  }, {});
+
+  data.faqs = faqRows.map((r) => {
+    const f = r.get({ plain: true });
+    return {
+      id: String(f.id),
+      question: f.question ?? '',
+      answer: f.answer ?? '',
+      order: f.sort_order ?? 0,
+    };
+  });
+
+  return data;
 }
 
-async function getHomeSectionsInternal() {
-  const rows = await HomeSection.findAll({
-    order: [['sort_order', 'ASC']],
-  });
-  return rows.map((r) => r.get({ plain: true }));
+/** Returns the raw cms_pages row for slug='home' for admin editing. */
+async function getHomePageInternal() {
+  const page = await CmsPage.findOne({ where: { slug: 'home' } });
+  if (!page) return { slug: 'home', title: null, content: null, meta: null };
+  return page.get({ plain: true });
 }
 
-async function upsertHomeSection(key, data) {
-  const { title, content, meta, sort_order, is_active } = data;
-  const [row, created] = await HomeSection.findOrCreate({
-    where: { section_key: key },
-    defaults: {
-      title: title ?? '',
-      content: content ?? null,
-      meta: meta || null,
-      sort_order: sort_order ?? 0,
-      is_active: is_active !== undefined ? !!is_active : true,
-    },
+/** Upsert the cms_pages row for slug='home'. */
+async function upsertHomePage(data) {
+  const { title, content, meta } = data;
+  const [row, created] = await CmsPage.findOrCreate({
+    where: { slug: 'home' },
+    defaults: { title: title ?? null, content: content ?? null, meta: meta || null },
   });
   if (!created) {
     await row.update({
       ...(title !== undefined && { title }),
       ...(content !== undefined && { content }),
       ...(meta !== undefined && { meta }),
-      ...(sort_order !== undefined && { sort_order }),
-      ...(is_active !== undefined && { is_active: !!is_active }),
     });
   }
   return row.get({ plain: true });
@@ -249,22 +381,22 @@ async function getPlansPublic() {
       ['sort_order', 'ASC'],
       ['id', 'ASC'],
     ],
-    attributes: ['id', 'name', 'slug', 'description', 'price', 'currency', 'duration_days', 'features', 'sort_order'],
+    attributes: ['id', 'name', 'slug', 'description', 'price', 'currency', 'duration_days', 'is_lifetime', 'features', 'is_popular', 'sort_order'],
   });
   return rows.map((r) => {
     const p = r.get({ plain: true });
-    return { ...p, features: p.features || [] };
+    return { ...p, features: normalizeFeatures(p.features) };
   });
 }
 
 async function getPlanBySlugPublic(slug) {
   const row = await PremiumPlan.findOne({
     where: { slug, is_active: true },
-    attributes: ['id', 'name', 'slug', 'description', 'price', 'currency', 'duration_days', 'features', 'sort_order'],
+    attributes: ['id', 'name', 'slug', 'description', 'price', 'currency', 'duration_days', 'is_lifetime', 'features', 'is_popular', 'sort_order'],
   });
   if (!row) return null;
   const p = row.get({ plain: true });
-  return { ...p, features: p.features || [] };
+  return { ...p, features: normalizeFeatures(p.features) };
 }
 
 async function getPlansInternal() {
@@ -289,7 +421,7 @@ async function getPlanByIdInternal(id) {
   const course_cat_ids = catRows.map((r) => Number(r.course_cat_id));
   return {
     ...p,
-    features: p.features || [],
+    features: normalizeFeatures(p.features),
     course_ids,
     course_cat_ids,
   };
@@ -340,6 +472,13 @@ async function updatePlan(id, data) {
   if (data.features !== undefined) updates.features = data.features;
   if (data.sort_order !== undefined) updates.sort_order = data.sort_order;
   if (data.is_active !== undefined) updates.is_active = !!data.is_active;
+  if (data.is_popular !== undefined) {
+    // If marking this plan popular, clear the flag on any other plan first
+    if (data.is_popular) {
+      await PremiumPlan.update({ is_popular: false }, { where: { is_popular: true } });
+    }
+    updates.is_popular = !!data.is_popular;
+  }
   await row.update(updates);
   if (data.course_ids !== undefined) {
     await PlanCourse.destroy({ where: { plan_id: id } });
@@ -356,6 +495,16 @@ async function updatePlan(id, data) {
     }
   }
   return getPlanByIdInternal(id);
+}
+
+async function togglePopular(id, is_popular) {
+  const row = await PremiumPlan.findByPk(id);
+  if (!row) return null;
+  if (is_popular) {
+    await PremiumPlan.update({ is_popular: false }, { where: { is_popular: true } });
+  }
+  await row.update({ is_popular: !!is_popular });
+  return row.get({ plain: true });
 }
 
 async function deletePlan(id) {
@@ -782,8 +931,8 @@ async function deleteSeoMetadata(id) {
 module.exports = {
   home: {
     getHomePublic,
-    getHomeSectionsInternal,
-    upsertHomeSection,
+    getHomePageInternal,
+    upsertHomePage,
   },
   states: {
     getStatesPublic,
@@ -826,6 +975,7 @@ module.exports = {
     getPlanByIdInternal,
     createPlan,
     updatePlan,
+    togglePopular,
     deletePlan,
   },
   articles: {
@@ -847,6 +997,11 @@ module.exports = {
     getCmsPagesInternal,
     getCmsPageBySlug,
     upsertCmsPageBySlug,
+  },
+  mediaAssets: {
+    getMediaAssetsInternal,
+    createMediaAsset,
+    deleteMediaAsset,
   },
 };
 
@@ -880,4 +1035,24 @@ async function upsertCmsPageBySlug(slug, data) {
     });
   }
   return row.get({ plain: true });
+}
+
+// ── Media Assets ────────────────────────────────────────────────────
+
+async function getMediaAssetsInternal(category) {
+  const where = category ? { category } : {};
+  const rows = await MediaAsset.findAll({ where, order: [['created_at', 'DESC']] });
+  return rows.map((r) => r.get({ plain: true }));
+}
+
+async function createMediaAsset({ url, label, category = 'icon' }) {
+  const row = await MediaAsset.create({ url, label, category });
+  return row.get({ plain: true });
+}
+
+async function deleteMediaAsset(id) {
+  const row = await MediaAsset.findByPk(id);
+  if (!row) return null;
+  await row.destroy();
+  return { id };
 }

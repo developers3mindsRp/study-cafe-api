@@ -6,6 +6,11 @@ const { validate } = require('../../../../shared');
 function register(router) {
   // Public routes
   router.get('/courses', coursesController.list);
+  router.get('/course-cats', coursesController.listCourseCatsPublic);
+  router.get('/courses/by-category', coursesController.listByCategory);
+  // Slug-based lookup (must be before /:id to avoid being caught as a numeric id)
+  router.get('/courses/slug/:slug', coursesController.getBySlug);
+  router.get('/courses/slug/:slug/sessions', coursesController.getSessionsBySlug);
   router.get('/courses/:id', validate(schemas.idParam), coursesController.getById);
   router.get('/courses/:id/sessions', validate(schemas.idParam), coursesController.getSessions);
   router.get('/courses/:id/materials', validate(schemas.idParam), coursesController.getMaterials);
@@ -15,6 +20,9 @@ function register(router) {
   router.get('/internal/courses/:id', internalAuth, validate(schemas.idParam), coursesController.getByIdInternal);
   router.get('/internal/courses/:id/sessions', internalAuth, validate(schemas.idParam), coursesController.getSessionsInternal);
   router.get('/internal/course-cats', internalAuth, coursesController.listCourseCatsInternal);
+  router.post('/internal/course-cats', internalAuth, coursesController.createCourseCat);
+  router.put('/internal/course-cats/:id', internalAuth, coursesController.updateCourseCat);
+  router.delete('/internal/course-cats/:id', internalAuth, coursesController.deleteCourseCat);
   router.post('/internal/courses', internalAuth, validate(schemas.createCourse), coursesController.createCourse);
   router.put('/internal/courses/:id', internalAuth, validate(schemas.updateCourse), coursesController.updateCourse);
   router.post('/internal/courses/:id/batches', internalAuth, validate(schemas.createBatch), coursesController.createBatch);

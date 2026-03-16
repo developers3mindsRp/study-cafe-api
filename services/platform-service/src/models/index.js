@@ -1,5 +1,5 @@
-const { Sequelize } = require('sequelize');
-const config = require('../config');
+const { Sequelize } = require("sequelize");
+const config = require("../config");
 
 const sequelize = new Sequelize(
   config.mysql.database,
@@ -8,7 +8,7 @@ const sequelize = new Sequelize(
   {
     host: config.mysql.host,
     port: config.mysql.port,
-    dialect: 'mysql',
+    dialect: "mysql",
     logging: false,
     pool: {
       max: config.mysql.connectionLimit || 10,
@@ -17,41 +17,66 @@ const sequelize = new Sequelize(
       idle: 10000,
     },
     define: { underscored: true },
-  }
+  },
 );
 
-const Category = require('./Category')(sequelize);
-const Tag = require('./Tag')(sequelize);
-const ArticleType = require('./ArticleType')(sequelize);
-const Court = require('./Court')(sequelize);
+const Category = require("./Category")(sequelize);
+const Tag = require("./Tag")(sequelize);
+const ArticleType = require("./ArticleType")(sequelize);
+const Court = require("./Court")(sequelize);
 
-const ArticleCategoryMap = require('./ArticleCategoryMap')(sequelize);
-const ArticleTagMap = require('./ArticleTagMap')(sequelize);
-const ArticleTypeMap = require('./ArticleTypeMap')(sequelize);
-const ArticleCourtMap = require('./ArticleCourtMap')(sequelize);
+const ArticleCategoryMap = require("./ArticleCategoryMap")(sequelize);
+const ArticleTagMap = require("./ArticleTagMap")(sequelize);
+const ArticleTypeMap = require("./ArticleTypeMap")(sequelize);
+const ArticleCourtMap = require("./ArticleCourtMap")(sequelize);
 
-const Article = require('./Article')(sequelize);
-const Comment = require('./Comment')(sequelize);
+const Article = require("./Article")(sequelize);
+const Comment = require("./Comment")(sequelize);
 
-const CmsPage = require('./CmsPage')(sequelize);
-const HomeSection = require('./HomeSection')(sequelize);
-const State = require('./State')(sequelize);
-const Testimonial = require('./Testimonial')(sequelize);
-const FooterData = require('./FooterData')(sequelize);
-const PremiumPlan = require('./PremiumPlan')(sequelize);
-const PlanCourse = require('./PlanCourse')(sequelize);
-const PlanCourseCategory = require('./PlanCourseCategory')(sequelize);
-const Faq = require('./Faq')(sequelize);
-const SeoMetadata = require('./SeoMetadata')(sequelize);
+const CmsPage = require("./CmsPage")(sequelize);
+const State = require("./State")(sequelize);
+const Testimonial = require("./Testimonial")(sequelize);
+const FooterData = require("./FooterData")(sequelize);
+const PremiumPlan = require("./PremiumPlan")(sequelize);
+const PlanCourse = require("./PlanCourse")(sequelize);
+const PlanCourseCategory = require("./PlanCourseCategory")(sequelize);
+const Faq = require("./Faq")(sequelize);
+const SeoMetadata = require("./SeoMetadata")(sequelize);
+const MediaAsset = require("./MediaAsset")(sequelize);
 
-Article.associate({ Comment, Category, Tag, ArticleType, Court, ArticleCategoryMap, ArticleTagMap, ArticleTypeMap, ArticleCourtMap });
+Article.associate({
+  Comment,
+  Category,
+  Tag,
+  ArticleType,
+  Court,
+  ArticleCategoryMap,
+  ArticleTagMap,
+  ArticleTypeMap,
+  ArticleCourtMap,
+});
 
 const models = {
-  Article, Comment,
-  Category, Tag, ArticleType, Court,
-  ArticleCategoryMap, ArticleTagMap, ArticleTypeMap, ArticleCourtMap,
+  Article,
+  Comment,
+  Category,
+  Tag,
+  ArticleType,
+  Court,
+  ArticleCategoryMap,
+  ArticleTagMap,
+  ArticleTypeMap,
+  ArticleCourtMap,
   CmsPage,
-  HomeSection, State, Testimonial, FooterData, PremiumPlan, PlanCourse, PlanCourseCategory, Faq, SeoMetadata,
+  State,
+  Testimonial,
+  FooterData,
+  PremiumPlan,
+  PlanCourse,
+  PlanCourseCategory,
+  Faq,
+  SeoMetadata,
+  MediaAsset,
 };
 
 async function connect() {

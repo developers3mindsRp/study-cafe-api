@@ -20,14 +20,34 @@ const keyParam = {
     }),
 };
 
-// ── Home ────────────────────────────────────────────────────────────
+// ── Home (stored as cms_pages with slug='home') ──────────────────────
 
-const upsertHomeSection = {
-    params: keyParam.params,
+const upsertHomePage = {
     body: Joi.object({
-        value: Joi.alternatives().try(Joi.string(), Joi.object(), Joi.array()).required(),
-        sort_order: Joi.number().integer().min(0),
-        is_active: Joi.boolean(),
+        title: Joi.string().max(500).allow(null, ''),
+        content: Joi.string().allow(null, ''),
+        meta: Joi.object({
+            hero: Joi.object({
+                title: Joi.string().allow('', null),
+                subtitle: Joi.string().allow('', null),
+                ctaText: Joi.string().allow('', null),
+                ctaLink: Joi.string().allow('', null),
+                imageUrl: Joi.string().uri().allow('', null),
+                badge: Joi.string().allow('', null),
+            }),
+            features: Joi.array().items(Joi.object({
+                id: Joi.string().allow('', null),
+                title: Joi.string().allow('', null),
+                description: Joi.string().allow('', null),
+                icon: Joi.string().allow('', null),
+                order: Joi.number().integer().min(0),
+            })),
+            stats: Joi.array().items(Joi.object({
+                label: Joi.string().allow('', null),
+                value: Joi.alternatives().try(Joi.string(), Joi.number()),
+                suffix: Joi.string().allow('', null),
+            })),
+        }).allow(null),
     }),
 };
 
@@ -55,13 +75,12 @@ const updateState = {
 const createTestimonial = {
     body: Joi.object({
         author_name: Joi.string().max(255).required(),
-        author_designation: Joi.string().max(255).allow('', null),
-        author_image: Joi.string().uri().allow('', null),
+        author_role: Joi.string().max(255).allow('', null),
+        avatar_url: Joi.string().allow('', null),
         content: Joi.string().required(),
         rating: Joi.number().integer().min(1).max(5).allow(null),
-        is_featured: Joi.boolean().default(false),
         is_active: Joi.boolean().default(true),
-        sort_order: Joi.number().integer().min(0),
+        sort_order: Joi.number().integer().min(0).default(0),
     }),
 };
 
@@ -69,11 +88,10 @@ const updateTestimonial = {
     params: idParam.params,
     body: Joi.object({
         author_name: Joi.string().max(255),
-        author_designation: Joi.string().max(255).allow('', null),
-        author_image: Joi.string().uri().allow('', null),
+        author_role: Joi.string().max(255).allow('', null),
+        avatar_url: Joi.string().allow('', null),
         content: Joi.string(),
         rating: Joi.number().integer().min(1).max(5).allow(null),
-        is_featured: Joi.boolean(),
         is_active: Joi.boolean(),
         sort_order: Joi.number().integer().min(0),
     }),
@@ -117,11 +135,16 @@ const createPlan = {
         slug: Joi.string().max(255),
         description: Joi.string().allow('', null),
         price: Joi.number().min(0).required(),
+        currency: Joi.string().max(10).allow('', null),
         sale_price: Joi.number().min(0).allow(null),
-        duration_days: Joi.number().integer().min(1),
+        duration_days: Joi.number().integer().min(1).allow(null),
+        is_lifetime: Joi.boolean().default(false),
         features: Joi.alternatives().try(Joi.array(), Joi.string()).allow(null),
         is_active: Joi.boolean().default(true),
+        is_popular: Joi.boolean().default(false),
         sort_order: Joi.number().integer().min(0),
+        course_ids: Joi.array().items(Joi.number().integer().positive()),
+        course_cat_ids: Joi.array().items(Joi.number().integer().positive()),
         courses: Joi.array().items(Joi.number().integer().positive()),
         categories: Joi.array().items(Joi.number().integer().positive()),
     }),
@@ -134,11 +157,16 @@ const updatePlan = {
         slug: Joi.string().max(255),
         description: Joi.string().allow('', null),
         price: Joi.number().min(0),
+        currency: Joi.string().max(10).allow('', null),
         sale_price: Joi.number().min(0).allow(null),
-        duration_days: Joi.number().integer().min(1),
+        duration_days: Joi.number().integer().min(1).allow(null),
+        is_lifetime: Joi.boolean(),
         features: Joi.alternatives().try(Joi.array(), Joi.string()).allow(null),
         is_active: Joi.boolean(),
+        is_popular: Joi.boolean(),
         sort_order: Joi.number().integer().min(0),
+        course_ids: Joi.array().items(Joi.number().integer().positive()),
+        course_cat_ids: Joi.array().items(Joi.number().integer().positive()),
         courses: Joi.array().items(Joi.number().integer().positive()),
         categories: Joi.array().items(Joi.number().integer().positive()),
     }),
@@ -240,7 +268,7 @@ module.exports = {
     idParam,
     slugParam,
     keyParam,
-    upsertHomeSection,
+    upsertHomePage,
     createState,
     updateState,
     createTestimonial,

@@ -23,6 +23,7 @@
     "migrate:wp-to-ms": "node scripts/migrate-wp-to-ms.js",
     "ensure-cms-pages": "node scripts/ensure-cms-pages-table.js",
     "ensure-faqs": "node scripts/ensure-faqs-table.js",
+    "ensure-home-sections": "node scripts/ensure-home-sections-meta.js",
     "sync": "bash scripts/run-full-migration.sh",
     "seed:admin": "npm run seed:admin --prefix services/auth-service"
   },

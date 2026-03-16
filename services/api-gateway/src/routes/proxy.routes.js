@@ -11,7 +11,10 @@ function register(app) {
   const courseProxy = createProxyMiddleware({
     target: config.courseServiceUrl,
     changeOrigin: true,
-    pathRewrite: { '^/api/courses': '/courses' },
+    pathRewrite: {
+      '^/api/courses': '/courses',
+      '^/api/course-cats': '/course-cats',
+    },
   });
   const orderProxy = createProxyMiddleware({
     target: config.orderServiceUrl,
@@ -54,6 +57,10 @@ function register(app) {
   app.use('/api/auth', authProxy);
   app.use('/api/access', validateJWT, authProxy);
   app.use('/api/users', validateJWT, usersProxy);
+  app.get('/api/course-cats', courseProxy);
+  app.get('/api/courses/by-category', courseProxy);
+  app.get('/api/courses/slug/:slug', optionalJWT, courseProxy);
+  app.get('/api/courses/slug/:slug/sessions', optionalJWT, courseProxy);
   app.get('/api/courses', optionalJWT, courseProxy);
   app.get('/api/courses/:id', optionalJWT, courseProxy);
   app.get('/api/courses/:id/sessions', validateJWT, requireCourseAccess, courseProxy);

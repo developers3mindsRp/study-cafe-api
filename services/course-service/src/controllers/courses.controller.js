@@ -12,8 +12,20 @@ const getById = asyncHandler(async (req, res) => {
   sendSuccess(res, course);
 });
 
+const getBySlug = asyncHandler(async (req, res) => {
+  const course = await coursesService.getBySlug(req.params.slug);
+  if (!course) throw new AppError('Course not found', 404);
+  sendSuccess(res, course);
+});
+
 const getSessions = asyncHandler(async (req, res) => {
   const result = await coursesService.getSessionsByCourseId(req.params.id);
+  if (result === null) throw new AppError('Course not found', 404);
+  sendSuccess(res, result);
+});
+
+const getSessionsBySlug = asyncHandler(async (req, res) => {
+  const result = await coursesService.getSessionsBySlug(req.params.slug);
   if (result === null) throw new AppError('Course not found', 404);
   sendSuccess(res, result);
 });
@@ -85,9 +97,39 @@ const listAllInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, rows);
 });
 
+const listCourseCatsPublic = asyncHandler(async (req, res) => {
+  const rows = await coursesService.listCourseCatsPublic();
+  sendSuccess(res, rows);
+});
+
 const listCourseCatsInternal = asyncHandler(async (req, res) => {
   const rows = await coursesService.listCourseCats();
   sendSuccess(res, rows);
+});
+
+const createCourseCat = asyncHandler(async (req, res) => {
+  const row = await coursesService.createCourseCat(req.body);
+  sendCreated(res, row);
+});
+
+const updateCourseCat = asyncHandler(async (req, res) => {
+  const row = await coursesService.updateCourseCat(req.params.id, req.body);
+  if (!row) throw new AppError('Course category not found', 404);
+  sendSuccess(res, row);
+});
+
+const deleteCourseCat = asyncHandler(async (req, res) => {
+  const ok = await coursesService.deleteCourseCat(req.params.id);
+  if (!ok) throw new AppError('Course category not found', 404);
+  sendSuccess(res, { deleted: true });
+});
+
+const listByCategory = asyncHandler(async (req, res) => {
+  const { category, search = '', sort = 'latest', price = 'all' } = req.query;
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 9), 24);
+  const result = await coursesService.listPublishedByCategory(category, { page, limit, search, sort, price });
+  sendSuccess(res, result);
 });
 
 const getByIdInternal = asyncHandler(async (req, res) => {
@@ -161,8 +203,12 @@ const removeBatchEnrollment = asyncHandler(async (req, res) => {
 
 module.exports = {
   list,
+  listByCategory,
+  listCourseCatsPublic,
   getById,
+  getBySlug,
   getSessions,
+  getSessionsBySlug,
   getSessionsInternal,
   getMaterials,
   createCourse,
@@ -184,6 +230,9 @@ module.exports = {
   addMaterial,
   listAllInternal,
   listCourseCatsInternal,
+  createCourseCat,
+  updateCourseCat,
+  deleteCourseCat,
   getByIdInternal,
   getPageSettings,
   updatePageSetting,

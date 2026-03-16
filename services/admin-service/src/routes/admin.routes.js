@@ -13,6 +13,9 @@ function register(router) {
   router.get('/admin/courses/:id', requireAdmin, controller.getCourse);
   router.get('/admin/courses/:id/sessions', requireAdmin, controller.getCourseSessions);
   router.get('/admin/course-cats', requireAdmin, controller.getCourseCats);
+  router.post('/admin/course-cats', requireAdmin, controller.createCourseCat);
+  router.put('/admin/course-cats/:id', requireAdmin, controller.updateCourseCat);
+  router.delete('/admin/course-cats/:id', requireAdmin, controller.deleteCourseCat);
   router.get('/admin/orders', requireAdmin, controller.getOrders);
   router.get('/admin/orders/:orderId', requireAdmin, controller.getOrderByOrderId);
   router.post('/admin/courses', requireAdmin, controller.createCourse);
@@ -36,7 +39,7 @@ function register(router) {
 
   const p = controller.platform;
   router.get('/admin/platform/home', requireAdmin, p.getHome);
-  router.put('/admin/platform/home/:key', requireAdmin, p.putHome);
+  router.put('/admin/platform/home', requireAdmin, p.putHome);
   router.get('/admin/platform/states', requireAdmin, p.getStates);
   router.post('/admin/platform/states', requireAdmin, p.postState);
   router.put('/admin/platform/states/:id', requireAdmin, p.putState);
@@ -61,6 +64,7 @@ function register(router) {
   router.get('/admin/platform/plans/:id', requireAdmin, p.getPlan);
   router.post('/admin/platform/plans', requireAdmin, p.postPlan);
   router.put('/admin/platform/plans/:id', requireAdmin, p.putPlan);
+  router.put('/admin/platform/plans/:id/popular', requireAdmin, p.togglePlanPopular);
   router.delete('/admin/platform/plans/:id', requireAdmin, p.deletePlan);
   router.get('/admin/platform/articles', requireAdmin, p.getArticles);
   router.get('/admin/platform/articles/:id', requireAdmin, p.getArticle);
@@ -75,6 +79,11 @@ function register(router) {
   router.get('/admin/platform/cms-pages/:slug', requireAdmin, p.getCmsPageBySlug);
   router.put('/admin/platform/cms-pages/:slug', requireAdmin, p.putCmsPage);
   router.post('/admin/upload', requireAdmin, uploadImageMw, controller.uploadImage);
+
+  // ── Media assets (icons library) ────────────────────────────────────
+  router.get('/admin/platform/media-assets', requireAdmin, p.getMediaAssets);
+  router.post('/admin/platform/media-assets', requireAdmin, p.postMediaAsset);
+  router.delete('/admin/platform/media-assets/:id', requireAdmin, p.deleteMediaAsset);
 }
 
 module.exports = { register };

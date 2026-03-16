@@ -8,13 +8,13 @@ const getHome = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
-const getHomeSectionsInternal = asyncHandler(async (req, res) => {
-  const data = await platformService.home.getHomeSectionsInternal();
+const getHomeInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.home.getHomePageInternal();
   sendSuccess(res, data);
 });
 
-const upsertHomeSection = asyncHandler(async (req, res) => {
-  const data = await platformService.home.upsertHomeSection(req.params.key, req.body);
+const putHomePage = asyncHandler(async (req, res) => {
+  const data = await platformService.home.upsertHomePage(req.body);
   sendSuccess(res, data);
 });
 
@@ -119,6 +119,12 @@ const createPlan = asyncHandler(async (req, res) => {
 
 const updatePlan = asyncHandler(async (req, res) => {
   const data = await platformService.plans.updatePlan(req.params.id, req.body);
+  if (!data) throw new AppError('Plan not found', 404);
+  sendSuccess(res, data);
+});
+
+const togglePlanPopular = asyncHandler(async (req, res) => {
+  const data = await platformService.plans.togglePopular(req.params.id, req.body.is_popular);
   if (!data) throw new AppError('Plan not found', 404);
   sendSuccess(res, data);
 });
@@ -245,6 +251,27 @@ const uploadImage = asyncHandler(async (req, res) => {
   sendSuccess(res, { url });
 });
 
+// ── Media Assets ────────────────────────────────────────────────────
+
+const getMediaAssets = asyncHandler(async (req, res) => {
+  const { category } = req.query;
+  const data = await platformService.mediaAssets.getMediaAssetsInternal(category || null);
+  sendSuccess(res, data);
+});
+
+const createMediaAsset = asyncHandler(async (req, res) => {
+  const { url, label, category } = req.body;
+  if (!url) throw new AppError('url is required', 400);
+  const data = await platformService.mediaAssets.createMediaAsset({ url, label, category });
+  sendCreated(res, data);
+});
+
+const deleteMediaAsset = asyncHandler(async (req, res) => {
+  const result = await platformService.mediaAssets.deleteMediaAsset(req.params.id);
+  if (!result) throw new AppError('Media asset not found', 404);
+  sendNoContent(res);
+});
+
 // ── FAQs ───────────────────────────────────────────────────────────
 
 const getFaqs = asyncHandler(async (req, res) => {
@@ -318,8 +345,8 @@ const deleteSeoMetadata = asyncHandler(async (req, res) => {
 
 module.exports = {
   getHome,
-  getHomeSectionsInternal,
-  upsertHomeSection,
+  getHomeInternal,
+  putHomePage,
   getStates,
   getStatesInternal,
   createState,
@@ -350,6 +377,7 @@ module.exports = {
   getPlanByIdInternal,
   createPlan,
   updatePlan,
+  togglePlanPopular,
   deletePlan,
   getArticles,
   getArticleBySlug,
@@ -368,4 +396,7 @@ module.exports = {
   getCmsPageBySlugInternal,
   putCmsPageBySlug,
   uploadImage,
+  getMediaAssets,
+  createMediaAsset,
+  deleteMediaAsset,
 };

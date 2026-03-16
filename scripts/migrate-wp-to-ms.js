@@ -2,10 +2,14 @@
 /**
  * migrate-wp-to-ms.js
  *
- * Full sync: copies data from source DB (sc_* / users on port 3306)
- * into the microservices DB (port 3307). Re-runnable and future-proof:
- * every run does a full sync (replace target from source). Use for initial
- * migration and for going-live sync (pull latest source, then run this).
+ * Sync data from source DB (sc_* / users on port 3306) into the
+ * microservices DB (port 3307). Re-runnable and safe:
+ *   - Source-synced tables (users, articles, courses, orders, etc.)
+ *     are refreshed from source on every run.
+ *   - Admin-managed tables (home_sections, faqs, testimonials, cms_pages,
+ *     footer_data, states, payment_config, admin_logs, batch_enrollments,
+ *     materials, payments, outbox_events, roles) are NEVER truncated;
+ *     data you add via the admin panel is preserved across runs.
  *
  * Usage:
  *   node scripts/migrate-wp-to-ms.js
@@ -348,7 +352,8 @@ async function createAllTables(tgt) {
       id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
       wp_term_id BIGINT UNSIGNED,
       name VARCHAR(200) NOT NULL,
-      slug VARCHAR(200)
+      slug VARCHAR(200),
+      is_featured TINYINT(1) NOT NULL DEFAULT 0
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
     -- Course Categories junction
@@ -594,13 +599,13 @@ async function createAllTables(tgt) {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-    -- Home Sections (platform-service)
+    -- Home Sections (platform-service). meta = JSON for hero/features/stats/testimonial_highlight.
     CREATE TABLE IF NOT EXISTS home_sections (
       id INT AUTO_INCREMENT PRIMARY KEY,
       section_key VARCHAR(64) NOT NULL UNIQUE,
       title VARCHAR(255),
-      subtitle VARCHAR(500),
-      content JSON,
+      content TEXT,
+      meta JSON,
       sort_order INT DEFAULT 0,
       is_active TINYINT(1) DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -658,6 +663,7 @@ async function createAllTables(tgt) {
       features JSON,
       sort_order INT NOT NULL DEFAULT 0,
       is_active TINYINT(1) NOT NULL DEFAULT 1,
+      is_popular TINYINT(1) NOT NULL DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -694,6 +700,7 @@ async function ensurePremiumPlansColumns(tgt) {
         "ALTER TABLE premium_plans ADD COLUMN currency VARCHAR(10) NOT NULL DEFAULT 'INR' AFTER price",
         "ALTER TABLE premium_plans ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
         "ALTER TABLE premium_plans ADD COLUMN is_lifetime TINYINT(1) NOT NULL DEFAULT 0 AFTER duration_days",
+        "ALTER TABLE premium_plans ADD COLUMN is_popular TINYINT(1) NOT NULL DEFAULT 0 AFTER is_active",
     ];
     for (const sql of alters) {
         try {
@@ -704,18 +711,28 @@ async function ensurePremiumPlansColumns(tgt) {
     }
 }
 
-/** Truncate all data tables on target (3307) so we can do a full re-sync. */
+// Tables managed via admin panel / other scripts — NEVER truncated by migration.
+// Data you add through the admin panel or other scripts is preserved across runs.
+const ADMIN_MANAGED_TABLES = new Set([
+    'home_sections', 'faqs', 'testimonials', 'footer_data', 'states',
+    'cms_pages', 'payment_config', 'admin_logs', 'batch_enrollments',
+    'materials', 'outbox_events', 'payments', 'roles',
+    'batches', 'sessions', 'recordings',
+]);
+
+/** Truncate only source-synced tables on target (3307). Admin-managed tables are preserved. */
 async function clearTargetDatabase(tgt) {
     const tables = [
-        'plan_course_categories', 'plan_courses', 'premium_plans', 'footer_data', 'testimonials', 'faqs', 'states', 'home_sections',
-        'payment_config', 'admin_logs', 'coupons', 'outbox_events', 'payments', 'orders', 'materials', 'recordings', 'sessions',
-        'batches', 'enrollments', 'course_authors', 'forum_topics', 'media', 'redirections', 'pages', 'file_categories', 'files',
+        'plan_course_categories', 'plan_courses', 'premium_plans',
+        'coupons', 'orders',
+        'enrollments', 'course_authors', 'forum_topics', 'media', 'redirections', 'pages', 'file_categories', 'files',
         'file_cats', 'course_categories', 'course_cats', 'courses', 'comments', 'article_courts', 'article_types_map', 'article_tags',
-        'article_categories', 'articles', 'courts', 'article_types', 'tags', 'categories', 'user_memberships', 'user_courses', 'users', 'roles',
+        'article_categories', 'articles', 'courts', 'article_types', 'tags', 'categories', 'user_memberships', 'user_courses', 'users',
     ];
     await tgt.query('SET FOREIGN_KEY_CHECKS = 0', { raw: true });
     try {
         for (const table of tables) {
+            if (ADMIN_MANAGED_TABLES.has(table)) continue;
             try {
                 await tgt.query(`TRUNCATE TABLE \`${table}\``, { raw: true });
             } catch (e) {
@@ -726,6 +743,7 @@ async function clearTargetDatabase(tgt) {
     } finally {
         await tgt.query('SET FOREIGN_KEY_CHECKS = 1', { raw: true });
     }
+    console.log(`   ⏩ Preserved admin-managed tables: ${[...ADMIN_MANAGED_TABLES].join(', ')}`);
 }
 
 // ──────────── Migration functions ────────────
@@ -1248,70 +1266,70 @@ async function migrateCourses(src, tgt) {
     console.log(`   ✅ ${rows.length} courses`);
 }
 
-/** Migrate batches (course batches). Source: batches or sc_batches if present. */
+/** Migrate batches (course batches). Source: batches or sc_batches if present. Uses upsert to preserve admin-created batches. */
 async function migrateBatches(src, tgt) {
     const tables = await src.query(
         "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('batches', 'sc_batches')",
         { type: QueryTypes.SELECT }
     );
     const name = tables.some(t => t.TABLE_NAME === 'sc_batches') ? 'sc_batches' : (tables.some(t => t.TABLE_NAME === 'batches') ? 'batches' : null);
-    if (!name) { console.log('   ⏭️  No batches/sc_batches in source; skip.'); return; }
-    console.log('📦 Migrating batches...');
+    if (!name) { console.log('   ⏭️  No batches/sc_batches in source; skip (existing batches preserved).'); return; }
+    console.log('📦 Migrating batches (upsert — admin-created batches preserved)...');
     const rows = await src.query(`SELECT * FROM \`${name}\` ORDER BY id`, { type: QueryTypes.SELECT });
-    if (!rows.length) { console.log('   ✅ 0 batches'); return; }
+    if (!rows.length) { console.log('   ✅ 0 source batches (existing batches preserved)'); return; }
     const courseIds = await tgt.query('SELECT id FROM courses', { type: QueryTypes.SELECT });
     const validIds = new Set((courseIds || []).map(r => r.id));
     const filtered = rows.filter(r => validIds.has(r.course_id));
     for (let i = 0; i < filtered.length; i += BATCH) {
         const chunk = filtered.slice(i, i + BATCH);
         const values = chunk.map(b => `(${b.id}, ${b.course_id}, ${esc(b.name)}, ${escDate(b.start_date)}, ${escDate(b.end_date)}, ${esc(b.meet_link)})`).join(',');
-        await tgt.query(`INSERT INTO batches (id, course_id, name, start_date, end_date, meet_link) VALUES ${values}`, { raw: true });
+        await tgt.query(`INSERT INTO batches (id, course_id, name, start_date, end_date, meet_link) VALUES ${values} ON DUPLICATE KEY UPDATE course_id=VALUES(course_id), name=VALUES(name), start_date=VALUES(start_date), end_date=VALUES(end_date), meet_link=VALUES(meet_link)`, { raw: true });
     }
-    console.log(`   ✅ ${filtered.length} batches`);
+    console.log(`   ✅ ${filtered.length} source batches synced (admin-created batches preserved)`);
 }
 
-/** Migrate sessions (batch days). Source: sessions or sc_sessions if present. */
+/** Migrate sessions (batch days). Source: sessions or sc_sessions if present. Uses upsert to preserve admin-created sessions. */
 async function migrateSessions(src, tgt) {
     const tables = await src.query(
         "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('sessions', 'sc_sessions')",
         { type: QueryTypes.SELECT }
     );
     const name = tables.some(t => t.TABLE_NAME === 'sc_sessions') ? 'sc_sessions' : (tables.some(t => t.TABLE_NAME === 'sessions') ? 'sessions' : null);
-    if (!name) { console.log('   ⏭️  No sessions/sc_sessions in source; skip.'); return; }
-    console.log('📅 Migrating sessions...');
+    if (!name) { console.log('   ⏭️  No sessions/sc_sessions in source; skip (existing sessions preserved).'); return; }
+    console.log('📅 Migrating sessions (upsert — admin-created sessions preserved)...');
     const batchIds = await tgt.query('SELECT id FROM batches', { type: QueryTypes.SELECT });
     const validBatchIds = new Set((batchIds || []).map(r => r.id));
     const rows = await src.query(`SELECT * FROM \`${name}\` ORDER BY id`, { type: QueryTypes.SELECT });
     const filtered = rows.filter(r => validBatchIds.has(r.batch_id));
-    if (!filtered.length) { console.log('   ✅ 0 sessions'); return; }
+    if (!filtered.length) { console.log('   ✅ 0 source sessions (existing sessions preserved)'); return; }
     for (let i = 0; i < filtered.length; i += BATCH) {
         const chunk = filtered.slice(i, i + BATCH);
         const values = chunk.map(s => `(${s.id}, ${s.batch_id}, ${s.day_number ?? 1}, ${esc(s.title)}, ${escDate(s.scheduled_at)}, ${esc(s.meet_link)})`).join(',');
-        await tgt.query(`INSERT INTO sessions (id, batch_id, day_number, title, scheduled_at, meet_link) VALUES ${values}`, { raw: true });
+        await tgt.query(`INSERT INTO sessions (id, batch_id, day_number, title, scheduled_at, meet_link) VALUES ${values} ON DUPLICATE KEY UPDATE batch_id=VALUES(batch_id), day_number=VALUES(day_number), title=VALUES(title), scheduled_at=VALUES(scheduled_at), meet_link=VALUES(meet_link)`, { raw: true });
     }
-    console.log(`   ✅ ${filtered.length} sessions`);
+    console.log(`   ✅ ${filtered.length} source sessions synced (admin-created sessions preserved)`);
 }
 
-/** Migrate recordings (per-session recording links). Source: recordings or sc_recordings if present. */
+/** Migrate recordings (per-session recording links). Source: recordings or sc_recordings if present. Uses upsert to preserve admin-created recordings. */
 async function migrateRecordings(src, tgt) {
     const tables = await src.query(
         "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('recordings', 'sc_recordings')",
         { type: QueryTypes.SELECT }
     );
     const name = tables.some(t => t.TABLE_NAME === 'sc_recordings') ? 'sc_recordings' : (tables.some(t => t.TABLE_NAME === 'recordings') ? 'recordings' : null);
-    if (!name) { console.log('   ⏭️  No recordings/sc_recordings in source; skip.'); return; }
-    console.log('🎬 Migrating recordings...');
+    if (!name) { console.log('   ⏭️  No recordings/sc_recordings in source; skip (existing recordings preserved).'); return; }
+    console.log('🎬 Migrating recordings (upsert — admin-created recordings preserved)...');
     const sessionIds = await tgt.query('SELECT id FROM sessions', { type: QueryTypes.SELECT });
     const validSessionIds = new Set((sessionIds || []).map(r => r.id));
     const rows = await src.query(`SELECT * FROM \`${name}\` ORDER BY id`, { type: QueryTypes.SELECT });
     const filtered = rows.filter(r => validSessionIds.has(r.session_id));
-    if (!filtered.length) { console.log('   ✅ 0 recordings'); return; }
+    if (!filtered.length) { console.log('   ✅ 0 source recordings (existing recordings preserved)'); return; }
     for (let i = 0; i < filtered.length; i += BATCH) {
         const chunk = filtered.slice(i, i + BATCH);
         const values = chunk.map(r => `(${r.id}, ${r.session_id}, ${esc(r.url)}, ${esc(r.source)})`).join(',');
-        await tgt.query(`INSERT INTO recordings (id, session_id, url, source) VALUES ${values}`, { raw: true });
+        await tgt.query(`INSERT INTO recordings (id, session_id, url, source) VALUES ${values} ON DUPLICATE KEY UPDATE session_id=VALUES(session_id), url=VALUES(url), source=VALUES(source)`, { raw: true });
     }
-    console.log(`   ✅ ${filtered.length} recordings`);
+    console.log(`   ✅ ${filtered.length} source recordings synced (admin-created recordings preserved)`);
 }
 
 async function migrateCourseJunctions(src, tgt) {

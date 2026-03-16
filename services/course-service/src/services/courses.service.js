@@ -21,7 +21,7 @@ const coursesService = {
   async listCourseCats() {
     const rows = await CourseCat.findAll({
       order: [['name', 'ASC']],
-      attributes: ['id', 'name', 'slug'],
+      attributes: ['id', 'name', 'slug', 'is_featured'],
     });
     return rows.map((r) => r.get({ plain: true }));
   },
@@ -31,6 +31,22 @@ const coursesService = {
       where: { id, is_published: true },
     });
     return row ? row.get({ plain: true }) : null;
+  },
+
+  async getBySlug(slug) {
+    const row = await Course.findOne({
+      where: { slug, is_published: true },
+    });
+    return row ? row.get({ plain: true }) : null;
+  },
+
+  async getSessionsBySlug(slug) {
+    const course = await Course.findOne({
+      where: { slug, is_published: true },
+      attributes: ['id'],
+    });
+    if (!course) return null;
+    return this._getBatchesSessionsRecordings(course.id, { visibleOnly: true });
   },
 
   async getByIdInternal(id) {
@@ -405,6 +421,156 @@ const coursesService = {
     );
     return row.get({ plain: true });
   },
+
+  async createCourseCat(data) {
+    const row = await CourseCat.create({
+      name: data.name,
+      slug: data.slug || data.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
+      is_featured: data.is_featured ?? false,
+    });
+    return row.get({ plain: true });
+  },
+
+  async updateCourseCat(id, data) {
+    const row = await CourseCat.findByPk(id);
+    if (!row) return null;
+    const updates = {};
+    if (data.name !== undefined) updates.name = data.name;
+    if (data.slug !== undefined) updates.slug = data.slug;
+    if (data.is_featured !== undefined) updates.is_featured = !!data.is_featured;
+    await row.update(updates);
+    return row.get({ plain: true });
+  },
+
+  async deleteCourseCat(id) {
+    const deleted = await CourseCat.destroy({ where: { id } });
+    return deleted > 0;
+  },
+
+  async listCourseCatsPublic() {
+    const rows = await CourseCat.findAll({
+      where: { is_featured: true },
+      order: [['name', 'ASC']],
+      attributes: ['id', 'name', 'slug', 'is_featured'],
+    });
+    return rows.map((r) => r.get({ plain: true }));
+  },
+
+  async listPublishedByCategory(catSlug, { page = 1, limit = 9, search = '', sort = 'latest', price = 'all' } = {}) {
+    const { Op } = require('sequelize');
+    const { CourseCategory } = require('../models');
+
+    const courseAttrs = [
+      'id', 'title', 'slug', 'brief_description',
+      'price', 'sale_price', 'thumbnail_url',
+      'enrolled_count', 'ratings', 'language', 'is_published',
+    ];
+
+    const normalizeLanguage = (value) => {
+      if (!value) return [];
+      if (Array.isArray(value)) {
+        if (value.length === 1 && typeof value[0] === 'string') {
+          const v = value[0];
+          try { const p = JSON.parse(v); if (Array.isArray(p)) return p; } catch {}
+          if (v.includes(',')) return v.split(',').map((l) => l.trim()).filter(Boolean);
+          return [v];
+        }
+        return value;
+      }
+      if (typeof value === 'string') {
+        try { const p = JSON.parse(value); if (Array.isArray(p)) return p; } catch {}
+        if (value.includes(',')) return value.split(',').map((l) => l.trim()).filter(Boolean);
+        return [value];
+      }
+      return [];
+    };
+
+    // ── Build base WHERE clause ──
+    const where = { is_published: true };
+
+    // Search filter (title contains)
+    if (search && search.trim()) {
+      where.title = { [Op.like]: `%${search.trim()}%` };
+    }
+
+    // Price filter
+    if (price === 'free') {
+      where.price = 0;
+    } else if (price === '0-500') {
+      where[Op.and] = [
+        ...(where[Op.and] || []),
+        { [Op.or]: [
+          { sale_price: { [Op.gt]: 0, [Op.lte]: 500 } },
+          { [Op.and]: [{ sale_price: null }, { price: { [Op.gt]: 0, [Op.lte]: 500 } }] },
+        ]},
+      ];
+    } else if (price === '500-1000') {
+      where[Op.and] = [
+        ...(where[Op.and] || []),
+        { [Op.or]: [
+          { sale_price: { [Op.gt]: 500, [Op.lte]: 1000 } },
+          { [Op.and]: [{ sale_price: null }, { price: { [Op.gt]: 500, [Op.lte]: 1000 } }] },
+        ]},
+      ];
+    } else if (price === '1000+') {
+      where[Op.and] = [
+        ...(where[Op.and] || []),
+        { [Op.or]: [
+          { sale_price: { [Op.gt]: 1000 } },
+          { [Op.and]: [{ sale_price: null }, { price: { [Op.gt]: 1000 } }] },
+        ]},
+      ];
+    }
+
+    // ── Sort order ──
+    let order;
+    if (sort === 'oldest') {
+      order = [['id', 'ASC']];
+    } else if (sort === 'newest') {
+      order = [['id', 'DESC']];
+    } else {
+      // 'latest' (default) — most enrolled first, then newest
+      order = [['enrolled_count', 'DESC'], ['created_at', 'DESC']];
+    }
+
+    // ── Category filter ──
+    let courseIds = null; // null = no restriction
+    if (catSlug && catSlug !== 'all') {
+      const cat = await CourseCat.findOne({ where: { slug: catSlug }, attributes: ['id'] });
+      if (!cat) return { data: [], total: 0, page: 1, pageCount: 0 };
+      const mappings = await CourseCategory.findAll({
+        where: { course_cat_id: cat.id },
+        attributes: ['course_id'],
+      });
+      courseIds = mappings.map((m) => m.course_id);
+      if (!courseIds.length) return { data: [], total: 0, page: 1, pageCount: 0 };
+      where.id = courseIds;
+    }
+
+    // ── Paginated query ──
+    const safePage = Math.max(1, parseInt(page) || 1);
+    const safeLimit = Math.min(Math.max(1, parseInt(limit) || 9), 24);
+    const offset = (safePage - 1) * safeLimit;
+
+    const { count: total, rows } = await Course.findAndCountAll({
+      where,
+      order,
+      attributes: courseAttrs,
+      limit: safeLimit,
+      offset,
+      distinct: true,
+    });
+
+    const pageCount = Math.ceil(total / safeLimit);
+
+    const data = rows.map((r) => {
+      const d = r.get({ plain: true });
+      d.language = normalizeLanguage(d.language);
+      return d;
+    });
+
+    return { data, total, page: safePage, pageCount };
+  }
 };
 
 module.exports = coursesService;

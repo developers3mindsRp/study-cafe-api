@@ -168,6 +168,27 @@ const getCourseCats = asyncHandler(async (req, res) => {
   sendSuccess(res, Array.isArray(data) ? data : data || []);
 });
 
+const createCourseCat = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await courseClient.post('/internal/course-cats', req.body);
+  await adminLogsService.logAction(adminId, 'CREATE_COURSE_CAT', 'course_cat', data?.id, req.body, req.ip);
+  res.status(201).json(data);
+});
+
+const updateCourseCat = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await courseClient.put(`/internal/course-cats/${req.params.id}`, req.body);
+  await adminLogsService.logAction(adminId, 'UPDATE_COURSE_CAT', 'course_cat', req.params.id, req.body, req.ip);
+  sendSuccess(res, data);
+});
+
+const deleteCourseCat = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  await courseClient.delete(`/internal/course-cats/${req.params.id}`);
+  await adminLogsService.logAction(adminId, 'DELETE_COURSE_CAT', 'course_cat', req.params.id, {}, req.ip);
+  sendSuccess(res, { deleted: true });
+});
+
 const getCoursePageSettings = asyncHandler(async (req, res) => {
   const { data } = await courseClient.get('/internal/course-page-settings');
   sendSuccess(res, data);
@@ -208,7 +229,7 @@ function platformProxy(handler) {
 
 const platform = {
   getHome: platformProxy((c) => c.get('/internal/platform/home').then((r) => ({ data: r.data }))),
-  putHome: platformProxy((c, req) => c.put(`/internal/platform/home/${req.params.key}`, req.body).then((r) => ({ data: r.data }))),
+  putHome: platformProxy((c, req) => c.put('/internal/platform/home', req.body).then((r) => ({ data: r.data }))),
   getStates: platformProxy((c) => c.get('/internal/platform/states').then((r) => ({ data: r.data }))),
   postState: platformProxy((c, req) => c.post('/internal/platform/states', req.body).then((r) => ({ data: r.data, status: 201 }))),
   putState: platformProxy((c, req) => c.put(`/internal/platform/states/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
@@ -233,6 +254,7 @@ const platform = {
   getPlan: platformProxy((c, req) => c.get(`/internal/platform/plans/${req.params.id}`).then((r) => ({ data: r.data }))),
   postPlan: platformProxy((c, req) => c.post('/internal/platform/plans', req.body).then((r) => ({ data: r.data, status: 201 }))),
   putPlan: platformProxy((c, req) => c.put(`/internal/platform/plans/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
+  togglePlanPopular: platformProxy((c, req) => c.put(`/internal/platform/plans/${req.params.id}/popular`, req.body).then((r) => ({ data: r.data }))),
   deletePlan: platformProxy((c, req) => c.delete(`/internal/platform/plans/${req.params.id}`).then(() => ({ status: 204 }))),
   getArticles: platformProxy((c, req) => c.get('/internal/platform/articles', { params: req.query }).then((r) => ({ data: r.data }))),
   getArticle: platformProxy((c, req) => c.get(`/internal/platform/articles/${req.params.id}`).then((r) => ({ data: r.data }))),
@@ -246,6 +268,9 @@ const platform = {
   getCmsPages: platformProxy((c) => c.get('/internal/platform/cms-pages').then((r) => ({ data: r.data }))),
   getCmsPageBySlug: platformProxy((c, req) => c.get(`/internal/platform/cms-pages/${req.params.slug}`).then((r) => ({ data: r.data }))),
   putCmsPage: platformProxy((c, req) => c.put(`/internal/platform/cms-pages/${req.params.slug}`, req.body).then((r) => ({ data: r.data }))),
+  getMediaAssets: platformProxy((c, req) => c.get('/internal/platform/media-assets', { params: req.query }).then((r) => ({ data: r.data }))),
+  postMediaAsset: platformProxy((c, req) => c.post('/internal/platform/media-assets', req.body).then((r) => ({ data: r.data, status: 201 }))),
+  deleteMediaAsset: platformProxy((c, req) => c.delete(`/internal/platform/media-assets/${req.params.id}`).then(() => ({ status: 204 }))),
 };
 
 const uploadImage = asyncHandler(async (req, res) => {
@@ -286,6 +311,9 @@ module.exports = {
   getCourse,
   getCourseSessions,
   getCourseCats,
+  createCourseCat,
+  updateCourseCat,
+  deleteCourseCat,
   getCoursePageSettings,
   updateCoursePageSetting,
   getOrders,

@@ -15,6 +15,7 @@ module.exports = (sequelize) => {
       features: { type: DataTypes.JSON, allowNull: true },
       sort_order: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
       is_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+      is_popular: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     },
     {
       tableName: 'premium_plans',
