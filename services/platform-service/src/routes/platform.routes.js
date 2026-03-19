@@ -53,6 +53,10 @@ function register(router) {
   router.put('/internal/platform/articles/:id', internalAuth, validate(schemas.updateArticle), controller.updateArticle);
   router.delete('/internal/platform/articles/:id', internalAuth, validate(schemas.idParam), controller.deleteArticle);
   router.get('/internal/platform/article-categories', internalAuth, controller.getArticleCategoriesInternal);
+  router.get('/internal/platform/article-categories/:id', internalAuth, validate(schemas.idParam), controller.getArticleCategoryByIdInternal);
+  router.post('/internal/platform/article-categories', internalAuth, validate(schemas.createArticleCategory), controller.createArticleCategory);
+  router.put('/internal/platform/article-categories/:id', internalAuth, validate(schemas.updateArticleCategory), controller.updateArticleCategory);
+  router.delete('/internal/platform/article-categories/:id', internalAuth, validate(schemas.idParam), controller.deleteArticleCategory);
   router.get('/internal/platform/tags', internalAuth, controller.getTagsInternal);
   router.get('/internal/platform/article-types', internalAuth, controller.getArticleTypesInternal);
   router.get('/internal/platform/courts', internalAuth, controller.getCourtsInternal);

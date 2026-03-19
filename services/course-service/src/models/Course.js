@@ -29,6 +29,8 @@ module.exports = (sequelize) => {
       faqs: { type: DataTypes.TEXT('long'), allowNull: true },
       feedback: { type: DataTypes.TEXT('long'), allowNull: true },
       includes_info: { type: DataTypes.TEXT('long'), allowNull: true },
+      /** JSON [{ image, title }] — banner "This course includes" (not bonuses). */
+      course_includes: { type: DataTypes.TEXT('long'), allowNull: true },
       certifications: { type: DataTypes.TEXT, allowNull: true },
       gateway: { type: DataTypes.STRING(200), allowNull: true },
       is_published: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
