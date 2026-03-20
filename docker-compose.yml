@@ -49,9 +49,7 @@ services:
         condition: service_healthy
 
   auth-service:
-    build:
-      context: .
-      dockerfile: ./services/auth-service/Dockerfile
+    build: ./services/auth-service
     container_name: studycafe-auth-service
     ports:
       - "4001:4001"
@@ -71,14 +69,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - .:/app
-    working_dir: /app/services/auth-service
 
   course-service:
-    build:
-      context: .
-      dockerfile: ./services/course-service/Dockerfile
+    build: ./services/course-service
     container_name: studycafe-course-service
     ports:
       - "4002:4002"
@@ -95,9 +88,7 @@ services:
         condition: service_healthy
 
   order-service:
-    build:
-      context: .
-      dockerfile: ./services/order-service/Dockerfile
+    build: ./services/order-service
     container_name: studycafe-order-service
     ports:
       - "4003:4003"
@@ -121,9 +112,7 @@ services:
         condition: service_healthy
 
   admin-service:
-    build:
-      context: .
-      dockerfile: ./services/admin-service/Dockerfile
+    build: ./services/admin-service
     container_name: studycafe-admin-service
     ports:
       - "4004:4004"
@@ -145,9 +134,7 @@ services:
         condition: service_started
 
   platform-service:
-    build:
-      context: .
-      dockerfile: ./services/platform-service/Dockerfile
+    build: ./services/platform-service
     container_name: studycafe-platform-service
     ports:
       - "4005:4005"
@@ -165,4 +152,3 @@ services:
 
 volumes:
   mysql_data:
-
