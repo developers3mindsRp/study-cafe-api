@@ -49,7 +49,9 @@ services:
         condition: service_healthy
 
   auth-service:
-    build: ./services/auth-service
+    build:
+      context: .
+      dockerfile: ./services/auth-service/Dockerfile
     container_name: studycafe-auth-service
     ports:
       - "4001:4001"
@@ -71,7 +73,9 @@ services:
         condition: service_healthy
 
   course-service:
-    build: ./services/course-service
+    build:
+      context: .
+      dockerfile: ./services/course-service/Dockerfile
     container_name: studycafe-course-service
     ports:
       - "4002:4002"
@@ -88,7 +92,9 @@ services:
         condition: service_healthy
 
   order-service:
-    build: ./services/order-service
+    build:
+      context: .
+      dockerfile: ./services/order-service/Dockerfile
     container_name: studycafe-order-service
     ports:
       - "4003:4003"
@@ -112,7 +118,9 @@ services:
         condition: service_healthy
 
   admin-service:
-    build: ./services/admin-service
+    build:
+      context: .
+      dockerfile: ./services/admin-service/Dockerfile
     container_name: studycafe-admin-service
     ports:
       - "4004:4004"
@@ -134,7 +142,9 @@ services:
         condition: service_started
 
   platform-service:
-    build: ./services/platform-service
+    build:
+      context: .
+      dockerfile: ./services/platform-service/Dockerfile
     container_name: studycafe-platform-service
     ports:
       - "4005:4005"
@@ -152,3 +162,4 @@ services:
 
 volumes:
   mysql_data:
+
