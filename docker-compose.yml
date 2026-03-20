@@ -72,8 +72,8 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./services/auth-service:/app
-      - /app/node_modules
+      - .:/app
+    working_dir: /app/services/auth-service
 
   course-service:
     build:
