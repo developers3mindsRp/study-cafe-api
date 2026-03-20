@@ -28,7 +28,7 @@ const { Sequelize, QueryTypes } = require('sequelize');
 
 // ──── Source DB (migration / WP) — override with MIGRATION_SRC_* env ────
 const SRC_CONFIG = {
-    host: process.env.MIGRATION_SRC_HOST || '127.0.0.1',
+    host: process.env.MIGRATION_SRC_HOST || '168.144.1.14',
     port: parseInt(process.env.MIGRATION_SRC_PORT || '3306', 10),
     user: process.env.MIGRATION_SRC_USER || 'root',
     password: process.env.MIGRATION_SRC_PASSWORD ?? 'root',
@@ -37,7 +37,7 @@ const SRC_CONFIG = {
 
 // ──── Target DB (microservices) — override with MIGRATION_TGT_* env ────
 const TGT_CONFIG = {
-    host: process.env.MIGRATION_TGT_HOST || '127.0.0.1',
+    host: process.env.MIGRATION_TGT_HOST || '168.144.1.14',
     port: parseInt(process.env.MIGRATION_TGT_PORT || '3307', 10),
     user: process.env.MIGRATION_TGT_USER || 'studycafe_user',
     password: process.env.MIGRATION_TGT_PASSWORD || 'studycafe_pass',
