@@ -1,5 +1,5 @@
 const platformService = require('../services/platform.service');
-const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, sendPaginated } = require('../../../../shared');
+const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, sendPaginated, logger } = require('../../../../shared');
 
 // ── Home ───────────────────────────────────────────────────────────
 
@@ -272,6 +272,7 @@ const putCmsPageBySlug = asyncHandler(async (req, res) => {
 
 const uploadImage = asyncHandler(async (req, res) => {
   if (!req.file || !req.file.filename) throw new AppError('No file uploaded', 400);
+  logger.info(`[uploadImage] saved → path: ${req.file.path}, size: ${req.file.size} bytes`);
   const url = `/api/uploads/${req.file.filename}`;
   sendSuccess(res, { url });
 });

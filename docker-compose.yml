@@ -156,10 +156,17 @@ services:
       MYSQL_PASSWORD: studycafe_pass
       MYSQL_DATABASE: studycafe_db
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-studycafe-internal-key}
+      # Absolute path inside the container where multer saves files.
+      # Must match the volume mount target below.
+      UPLOADS_DIR: /app/uploads
+    volumes:
+      # Named volume keeps uploaded files across container restarts/rebuilds.
+      - platform_uploads:/app/uploads
     depends_on:
       mysql:
         condition: service_healthy
 
 volumes:
   mysql_data:
+  platform_uploads:
 
