@@ -7,3 +7,4 @@ WORKDIR /app/services/course-service
 RUN npm install --omit=dev
 EXPOSE 4002
 CMD ["npm", "start"]
+

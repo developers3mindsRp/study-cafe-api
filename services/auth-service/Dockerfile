@@ -7,3 +7,4 @@ WORKDIR /app/services/auth-service
 RUN npm install --omit=dev
 EXPOSE 4001
 CMD ["npm", "start"]
+

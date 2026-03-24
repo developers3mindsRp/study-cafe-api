@@ -71,9 +71,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./services/auth-service:/app
-      - /app/node_modules
 
   course-service:
     build:
@@ -165,3 +162,4 @@ services:
 
 volumes:
   mysql_data:
+

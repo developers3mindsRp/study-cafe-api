@@ -7,3 +7,4 @@ WORKDIR /app/services/admin-service
 RUN npm install --omit=dev
 EXPOSE 4004
 CMD ["npm", "start"]
+

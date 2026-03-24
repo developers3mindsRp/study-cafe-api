@@ -118,6 +118,25 @@ const updateFaq = {
     }),
 };
 
+// ── Article Categories ──────────────────────────────────────────────
+
+const createArticleCategory = {
+    body: Joi.object({
+        name: Joi.string().max(200).required(),
+        slug: Joi.string().max(200).allow('', null),
+        parent_id: Joi.number().integer().positive().allow(null),
+    }),
+};
+
+const updateArticleCategory = {
+    params: idParam.params,
+    body: Joi.object({
+        name: Joi.string().max(200),
+        slug: Joi.string().max(200).allow('', null),
+        parent_id: Joi.number().integer().positive().allow(null),
+    }),
+};
+
 // ── Footer ──────────────────────────────────────────────────────────
 
 const upsertFooter = {
@@ -281,6 +300,8 @@ module.exports = {
     articleListQuery,
     createArticle,
     updateArticle,
+    createArticleCategory,
+    updateArticleCategory,
     upsertCmsPage,
     createSeoMetadata,
     updateSeoMetadata,

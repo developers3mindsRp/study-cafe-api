@@ -72,6 +72,10 @@ function register(router) {
   router.put('/admin/platform/articles/:id', requireAdmin, p.putArticle);
   router.delete('/admin/platform/articles/:id', requireAdmin, p.deleteArticle);
   router.get('/admin/platform/article-categories', requireAdmin, p.getArticleCategories);
+  router.get('/admin/platform/article-categories/:id', requireAdmin, p.getArticleCategory);
+  router.post('/admin/platform/article-categories', requireAdmin, p.createArticleCategory);
+  router.put('/admin/platform/article-categories/:id', requireAdmin, p.updateArticleCategory);
+  router.delete('/admin/platform/article-categories/:id', requireAdmin, p.deleteArticleCategory);
   router.get('/admin/platform/tags', requireAdmin, p.getTags);
   router.get('/admin/platform/article-types', requireAdmin, p.getArticleTypes);
   router.get('/admin/platform/courts', requireAdmin, p.getCourts);

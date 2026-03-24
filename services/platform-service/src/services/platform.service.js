@@ -110,23 +110,23 @@ function buildHomeData(page) {
 
   const hero = (m.hero && typeof m.hero === 'object')
     ? {
-        title: m.hero.title ?? defaultHero.title,
-        subtitle: m.hero.subtitle ?? defaultHero.subtitle,
-        ctaText: m.hero.ctaText ?? defaultHero.ctaText,
-        ctaLink: m.hero.ctaLink ?? defaultHero.ctaLink,
-        imageUrl: m.hero.imageUrl ?? null,
-        badge: m.hero.badge ?? defaultHero.badge,
-      }
+      title: m.hero.title ?? defaultHero.title,
+      subtitle: m.hero.subtitle ?? defaultHero.subtitle,
+      ctaText: m.hero.ctaText ?? defaultHero.ctaText,
+      ctaLink: m.hero.ctaLink ?? defaultHero.ctaLink,
+      imageUrl: m.hero.imageUrl ?? null,
+      badge: m.hero.badge ?? defaultHero.badge,
+    }
     : { ...defaultHero };
 
   const features = Array.isArray(m.features)
     ? m.features.map((f, i) => ({
-        id: f.id || `f${i + 1}`,
-        title: f.title ?? '',
-        description: f.description ?? '',
-        icon: f.icon ?? null,
-        order: f.order ?? i,
-      }))
+      id: f.id || `f${i + 1}`,
+      title: f.title ?? '',
+      description: f.description ?? '',
+      icon: f.icon ?? null,
+      order: f.order ?? i,
+    }))
     : [];
 
   let stats = [];
@@ -139,10 +139,10 @@ function buildHomeData(page) {
   } else if (m.stats && typeof m.stats === 'object') {
     // Fixed display order matching the frontend layout
     const orderedKeys = [
-      { key: 'students',           label: 'Active Students' },
-      { key: 'courses',            label: 'Total Courses' },
+      { key: 'students', label: 'Active Students' },
+      { key: 'courses', label: 'Total Courses' },
       { key: 'certificatesIssued', label: 'Certificates Issued' },
-      { key: 'successRate',        label: 'Success Rate' },
+      { key: 'successRate', label: 'Success Rate' },
     ];
     stats = orderedKeys
       .filter(({ key }) => m.stats[key] !== undefined)
@@ -285,7 +285,7 @@ async function getTestimonialsPublic(featuredOnly) {
     ],
     attributes: ['id', 'name', 'role', 'quote', 'avatar_url', 'sort_order'],
   });
-  return rows.map(toApi) ;
+  return rows.map(toApi);
 }
 
 function toApi(r) {
@@ -512,22 +512,76 @@ async function deletePlan(id) {
   return deleted > 0;
 }
 
-async function getArticlesPublic(limit, offset) {
-  const rows = await Article.findAll({
-    where: { status: 'publish' },
-    order: [['published_at', 'DESC']],
+async function getArticlesPublic(options = {}) {
+  const { page = 1, limit = 20, search, category } = options;
+
+  const where = { status: 'publish' };
+  if (search && String(search).trim()) {
+    const term = `%${String(search).trim()}%`;
+    where[Op.or] = [
+      { title: { [Op.like]: term } },
+      { excerpt: { [Op.like]: term } },
+    ];
+  }
+
+  // If category slug provided, find the category id first and filter via subquery
+  if (category && String(category).trim()) {
+    const catRow = await Category.findOne({ where: { slug: String(category).trim() }, attributes: ['id'] });
+    if (!catRow) {
+      return { data: [], total: 0, page, limit, totalPages: 0 };
+    }
+    const mapRows = await ArticleCategoryMap.findAll({ where: { category_id: catRow.id }, attributes: ['article_id'] });
+    const articleIds = mapRows.map((r) => r.article_id);
+    if (!articleIds.length) {
+      return { data: [], total: 0, page, limit, totalPages: 0 };
+    }
+    where.id = { [Op.in]: articleIds };
+  }
+
+  const result = await paginate(Article, {
+    where,
+    page,
     limit,
-    offset,
+    sortBy: 'published_at',
+    sortOrder: 'DESC',
     attributes: ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'published_at', 'created_at'],
   });
-  const list = rows.map((r) => r.get({ plain: true }));
-  const authorIds = list.map((p) => p.author_id).filter(Boolean);
-  const authorNames = await getAuthorDisplayNamesBatch(authorIds);
-  return list.map((p) => ({
-    ...p,
-    cover_image_url: p.thumbnail_url,
-    author_name: authorNames.get(p.author_id) ?? p.author_id,
-  }));
+
+  // Flatten { data, meta } into { data, total, page, limit, totalPages }
+  const out = {
+    data: result.data || [],
+    total: result.meta?.total ?? 0,
+    page: result.meta?.page ?? page,
+    limit: result.meta?.limit ?? limit,
+    totalPages: result.meta?.totalPages ?? 0,
+  };
+
+  if (out.data.length > 0) {
+    const authorIds = out.data.map((p) => p.author_id).filter(Boolean);
+    const authorNames = await getAuthorDisplayNamesBatch(authorIds);
+
+    // Batch-fetch categories for each article
+    const articleIds = out.data.map((p) => p.id);
+    const catMaps = await ArticleCategoryMap.findAll({ where: { article_id: { [Op.in]: articleIds } }, attributes: ['article_id', 'category_id'] });
+    const catIds = [...new Set(catMaps.map((r) => r.category_id))];
+    const catRows = catIds.length ? await Category.findAll({ where: { id: { [Op.in]: catIds } }, attributes: ['id', 'name', 'slug'] }) : [];
+    const catById = new Map(catRows.map((r) => [Number(r.id), r.get({ plain: true })]));
+    const articleCats = new Map();
+    for (const m of catMaps) {
+      if (!articleCats.has(Number(m.article_id))) articleCats.set(Number(m.article_id), []);
+      const cat = catById.get(Number(m.category_id));
+      if (cat) articleCats.get(Number(m.article_id)).push(cat);
+    }
+
+    out.data = out.data.map((p) => ({
+      ...p,
+      cover_image_url: p.thumbnail_url,
+      author_name: authorNames.get(p.author_id) ?? p.author_id,
+      categories: articleCats.get(Number(p.id)) || [],
+    }));
+  }
+
+  return out;
 }
 
 function extractRelatedIds(content) {
@@ -800,6 +854,39 @@ async function getArticleCategories() {
   return rows.map((r) => r.get({ plain: true }));
 }
 
+async function getArticleCategoryById(id) {
+  const row = await Category.findByPk(id);
+  return row ? row.get({ plain: true }) : null;
+}
+
+async function createArticleCategory(data) {
+  const slugVal = data.slug || slugify(data.name);
+  const row = await Category.create({
+    name: data.name || '',
+    slug: slugVal,
+    parent_id: data.parent_id || null,
+  });
+  return row.get({ plain: true });
+}
+
+async function updateArticleCategory(id, data) {
+  const row = await Category.findByPk(id);
+  if (!row) return null;
+  await row.update({
+    ...(data.name !== undefined && { name: data.name }),
+    ...(data.slug !== undefined && { slug: data.slug }),
+    ...(data.parent_id !== undefined && { parent_id: data.parent_id }),
+  });
+  return row.get({ plain: true });
+}
+
+async function deleteArticleCategory(id) {
+  // Remove junction entries first
+  await ArticleCategoryMap.destroy({ where: { category_id: id } });
+  const deleted = await Category.destroy({ where: { id } });
+  return deleted > 0;
+}
+
 async function getTagsInternal() {
   const rows = await Tag.findAll({
     order: [['name', 'ASC']],
@@ -989,6 +1076,10 @@ module.exports = {
   },
   articleCategories: {
     getArticleCategories,
+    getArticleCategoryById,
+    createArticleCategory,
+    updateArticleCategory,
+    deleteArticleCategory,
   },
   tags: { getTagsInternal },
   articleTypes: { getArticleTypesInternal },

@@ -138,9 +138,11 @@ const deletePlan = asyncHandler(async (req, res) => {
 // ── Articles ───────────────────────────────────────────────────────
 
 const getArticles = asyncHandler(async (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit || '20', 10), 100);
-  const offset = parseInt(req.query.offset || '0', 10);
-  const data = await platformService.articles.getArticlesPublic(limit, offset);
+  const page = Math.max(1, parseInt(req.query.page || '1', 10));
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '20', 10)));
+  const search = req.query.search ? String(req.query.search).trim() : undefined;
+  const category = req.query.category ? String(req.query.category).trim() : undefined;
+  const data = await platformService.articles.getArticlesPublic({ page, limit, search, category });
   sendSuccess(res, data);
 });
 
@@ -204,6 +206,29 @@ const getArticleCategories = asyncHandler(async (req, res) => {
 const getArticleCategoriesInternal = asyncHandler(async (req, res) => {
   const data = await platformService.articleCategories.getArticleCategories();
   sendSuccess(res, data);
+});
+
+const getArticleCategoryByIdInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.articleCategories.getArticleCategoryById(req.params.id);
+  if (!data) throw new AppError('Category not found', 404);
+  sendSuccess(res, data);
+});
+
+const createArticleCategory = asyncHandler(async (req, res) => {
+  const data = await platformService.articleCategories.createArticleCategory(req.body);
+  sendCreated(res, data);
+});
+
+const updateArticleCategory = asyncHandler(async (req, res) => {
+  const data = await platformService.articleCategories.updateArticleCategory(req.params.id, req.body);
+  if (!data) throw new AppError('Category not found', 404);
+  sendSuccess(res, data);
+});
+
+const deleteArticleCategory = asyncHandler(async (req, res) => {
+  const ok = await platformService.articleCategories.deleteArticleCategory(req.params.id);
+  if (!ok) throw new AppError('Category not found', 404);
+  sendNoContent(res);
 });
 
 const getTagsInternal = asyncHandler(async (req, res) => {
@@ -388,6 +413,10 @@ module.exports = {
   deleteArticle,
   getArticleCategories,
   getArticleCategoriesInternal,
+  getArticleCategoryByIdInternal,
+  createArticleCategory,
+  updateArticleCategory,
+  deleteArticleCategory,
   getTagsInternal,
   getArticleTypesInternal,
   getCourtsInternal,
