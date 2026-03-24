@@ -1,6 +1,8 @@
 const crypto = require('crypto');
+const axios = require('axios');
 const { sequelize, Order, Payment, OutboxEvent } = require('../models');
 const { getRedis } = require('../config/redis');
+const config = require('../config');
 const { getRazorpayInstance, getRazorpayConfig } = require('./payment.service');
 const { AppError } = require('../../../../shared');
 
@@ -133,6 +135,106 @@ async function listOrders(userId) {
   return rows.map((r) => r.get({ plain: true }));
 }
 
+/**
+ * Purchase rows for the learner dashboard — matches cafestudy-fe UserCourse / Payment shapes.
+ */
+async function listMyPurchases(userId) {
+  const courseCache = new Map();
+  async function fetchCourseForOrder(entityId) {
+    if (!entityId) return null;
+    const key = String(entityId);
+    if (courseCache.has(key)) return courseCache.get(key);
+    try {
+      const { data } = await axios.get(`${config.courseServiceUrl}/courses/${key}`, {
+        timeout: 8000,
+        validateStatus: (s) => s === 200,
+      });
+      const payload = data.data !== undefined ? data.data : data;
+      courseCache.set(key, payload);
+      return payload;
+    } catch {
+      courseCache.set(key, null);
+      return null;
+    }
+  }
+
+  const rows = await Order.findAll({
+    where: { user_id: userId },
+    order: [['created_at', 'DESC']],
+  });
+  const out = [];
+  for (const row of rows) {
+    const o = row.get({ plain: true });
+    const payment = await Payment.findOne({
+      where: { order_id: o.id },
+      order: [['id', 'DESC']],
+    });
+    let course = null;
+    if (o.type === 'course' && o.entity_id) {
+      const meta = await fetchCourseForOrder(o.entity_id);
+      const cid = String(o.entity_id);
+      course = {
+        id: cid,
+        title: meta?.title || `Course ${cid}`,
+        description: meta?.brief_description || meta?.description || '',
+        thumbnail: meta?.thumbnail_url || '',
+        thumbnail_url: meta?.thumbnail_url || null,
+        price: meta?.price != null ? Number(meta.price) : Number(o.amount) || 0,
+        category: meta?.category || '',
+        level: meta?.level || 'beginner',
+        duration: meta?.duration || 0,
+        instructorId: meta?.instructorId || '',
+        instructor: meta?.instructor || { id: '', name: '' },
+        totalStudents: meta?.enrolled_count || 0,
+        featured: !!meta?.featured,
+        status: meta?.status || 'published',
+        createdAt: meta?.created_at || o.created_at,
+        updatedAt: meta?.updated_at || o.created_at,
+      };
+    } else {
+      const label = o.type === 'membership' ? 'Membership' : 'Purchase';
+      course = {
+        id: o.entity_id ? String(o.entity_id) : String(o.id),
+        title: label,
+        description: '',
+        thumbnail: '',
+        thumbnail_url: null,
+        price: Number(o.amount) || 0,
+        category: o.type || '',
+        level: 'beginner',
+        duration: 0,
+        instructorId: '',
+        instructor: { id: '', name: '' },
+        totalStudents: 0,
+        featured: false,
+        status: 'published',
+        createdAt: o.created_at,
+        updatedAt: o.created_at,
+      };
+    }
+
+    const purchaseStatus =
+      o.status === 'paid' ? 'completed' : o.status === 'pending' ? 'pending' : 'failed';
+
+    out.push({
+      id: String(o.id),
+      userId: String(o.user_id),
+      courseId: o.entity_id ? String(o.entity_id) : String(o.id),
+      course,
+      purchaseDate: o.created_at,
+      price: Number(o.amount) || 0,
+      paymentMethod: payment ? 'Razorpay' : o.gateway || 'Razorpay',
+      transactionId: o.order_id || String(o.id),
+      status: purchaseStatus,
+      progress: 0,
+      completedLessons: [],
+      completedAt: undefined,
+      lastAccessedAt: undefined,
+    });
+  }
+  return out;
+}
+
 async function listAllOrders(limit = 100, offset = 0) {
   const rows = await Order.findAll({
     order: [['created_at', 'DESC']],
@@ -185,6 +287,7 @@ module.exports = {
   createOrder,
   verifyOrder,
   listOrders,
+  listMyPurchases,
   getInvoice,
   listAllOrders,
   getOrderByOrderId,

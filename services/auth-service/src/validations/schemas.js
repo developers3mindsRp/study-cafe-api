@@ -23,6 +23,14 @@ const refreshToken = {
     }),
 };
 
+const changePassword = {
+    body: Joi.object({
+        currentPassword: Joi.string().required(),
+        newPassword: Joi.string().min(6).max(128).required(),
+        confirmPassword: Joi.string().max(128).allow('', null),
+    }),
+};
+
 // ── Access ──────────────────────────────────────────────────────────
 
 const checkAccess = {
@@ -84,6 +92,7 @@ module.exports = {
     register,
     login,
     refreshToken,
+    changePassword,
     checkAccess,
     grantCourse,
     grantMembership,

@@ -16,6 +16,11 @@ const list = asyncHandler(async (req, res) => {
   sendSuccess(res, rows);
 });
 
+const listMyPurchases = asyncHandler(async (req, res) => {
+  const rows = await ordersService.listMyPurchases(req.userId);
+  sendSuccess(res, rows);
+});
+
 const getInvoice = asyncHandler(async (req, res) => {
   const invoice = await ordersService.getInvoice(req.userId, req.params.orderId);
   if (!invoice) throw new AppError('Order not found', 404);
@@ -39,6 +44,7 @@ module.exports = {
   create,
   verify,
   list,
+  listMyPurchases,
   getInvoice,
   listAllInternal,
   getByOrderIdInternal,

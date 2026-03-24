@@ -22,4 +22,6 @@ module.exports = {
   },
   cacheTtl: parseInt(process.env.CACHE_TTL || '300', 10),
   internalApiKey: process.env.INTERNAL_API_KEY || '',
+  /** Used to hydrate course titles for /user/courses */
+  courseServiceUrl: process.env.COURSE_SERVICE_URL || 'http://localhost:4002',
 };

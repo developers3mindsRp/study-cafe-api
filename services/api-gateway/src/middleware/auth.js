@@ -8,11 +8,15 @@ async function validateJWT(req, res, next) {
   }
   const token = auth.slice(7);
   try {
-    const { data } = await axios.get(`${config.authServiceUrl}/auth/validate`, {
+    const { data: body } = await axios.get(`${config.authServiceUrl}/auth/validate`, {
       headers: { Authorization: `Bearer ${token}` },
       timeout: 5000,
     });
-    const finalData = data.data || data;
+    // sendSuccess → { success, data: { userId, id, ... } }
+    const finalData =
+      body && typeof body === 'object' && body.data != null && typeof body.data === 'object'
+        ? body.data
+        : body;
     req.user = finalData;
     next();
   } catch (err) {
@@ -31,8 +35,11 @@ function optionalJWT(req, res, next) {
       headers: { Authorization: `Bearer ${token}` },
       timeout: 5000,
     })
-    .then(({ data }) => {
-      const finalData = data.data || data;
+    .then(({ data: body }) => {
+      const finalData =
+        body && typeof body === 'object' && body.data != null && typeof body.data === 'object'
+          ? body.data
+          : body;
       req.user = finalData;
       next();
     })

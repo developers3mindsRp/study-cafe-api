@@ -4,6 +4,7 @@ const { User, Role } = require('../models');
 const { getRedis } = require('../config/redis');
 const config = require('../config');
 const { getEffectivePermissions } = require('../config/permissions');
+const { AppError } = require('../../../../shared');
 
 function signAccess(payload) {
   return jwt.sign(payload, config.jwt.secret, { expiresIn: config.jwt.expiry });
@@ -89,6 +90,16 @@ async function validateToken(token) {
   };
 }
 
+async function changePassword(userId, { currentPassword, newPassword }) {
+  const user = await User.scope('withPassword').findByPk(userId);
+  if (!user) throw new AppError('User not found', 404);
+  if (!(await bcrypt.compare(currentPassword, user.password_hash))) {
+    throw new AppError('Current password is incorrect', 400);
+  }
+  const password_hash = await bcrypt.hash(newPassword, 10);
+  await user.update({ password_hash });
+}
+
 async function refreshTokens(refreshToken) {
   const decoded = verifyRefresh(refreshToken);
   const user = await User.findByPk(decoded.userId, {
@@ -111,4 +122,5 @@ module.exports = {
   login,
   validateToken,
   refreshTokens,
+  changePassword,
 };

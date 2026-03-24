@@ -22,7 +22,11 @@ function register(app) {
     pathRewrite: { '^/api/orders': '/orders' },
     on: {
       proxyReq: (proxyReq, req) => {
-        if (req.user?.userId) proxyReq.setHeader('X-User-Id', String(req.user.userId));
+        // Order-service only trusts X-User-Id (validateToken returns userId and id)
+        const uid = req.user?.userId ?? req.user?.id;
+        if (uid != null && uid !== '') {
+          proxyReq.setHeader('X-User-Id', String(uid));
+        }
       },
     },
   });
@@ -32,7 +36,8 @@ function register(app) {
     pathRewrite: { '^/api/admin': '/admin' },
     on: {
       proxyReq: (proxyReq, req) => {
-        if (req.user?.userId) proxyReq.setHeader('X-User-Id', String(req.user.userId));
+        const uid = req.user?.userId ?? req.user?.id;
+        if (uid != null && uid !== '') proxyReq.setHeader('X-User-Id', String(uid));
         if (req.user?.role) proxyReq.setHeader('X-User-Role', req.user.role);
       },
     },
@@ -54,9 +59,25 @@ function register(app) {
     pathRewrite: { '^/api/users': '/users' },
   });
 
+  /** Profile, dashboard stats, avatar, my courses (auth-service) */
+  const userAccountProxy = createProxyMiddleware({
+    target: config.authServiceUrl,
+    changeOrigin: true,
+    pathRewrite: { '^/api/user': '/user' },
+  });
+
+  /** Static avatar files saved by auth-service */
+  const userUploadsProxy = createProxyMiddleware({
+    target: config.authServiceUrl,
+    changeOrigin: true,
+    pathRewrite: { '^/api/user-uploads': '/user-uploads' },
+  });
+
   app.use('/api/auth', authProxy);
   app.use('/api/access', validateJWT, authProxy);
   app.use('/api/users', validateJWT, usersProxy);
+  app.use('/api/user', validateJWT, userAccountProxy);
+  app.use('/api/user-uploads', userUploadsProxy);
   app.get('/api/course-cats', courseProxy);
   app.get('/api/courses/by-category', courseProxy);
   app.get('/api/courses/slug/:slug', optionalJWT, courseProxy);

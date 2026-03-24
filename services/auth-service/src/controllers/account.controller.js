@@ -1,0 +1,44 @@
+const accountService = require('../services/account.service');
+const { asyncHandler, sendSuccess, sendNoContent, AppError } = require('../../../../shared');
+
+const getProfile = asyncHandler(async (req, res) => {
+  const data = await accountService.getProfile(req.user.userId);
+  sendSuccess(res, data);
+});
+
+const updateProfile = asyncHandler(async (req, res) => {
+  const data = await accountService.updateProfile(req.user.userId, req.body);
+  sendSuccess(res, data);
+});
+
+const deleteAccount = asyncHandler(async (req, res) => {
+  await accountService.deleteAccount(req.user.userId);
+  sendNoContent(res);
+});
+
+const dashboardStats = asyncHandler(async (req, res) => {
+  const data = await accountService.dashboardStats(req.user.userId);
+  sendSuccess(res, data);
+});
+
+const myCourses = asyncHandler(async (req, res) => {
+  const data = await accountService.myCourses(req.user.userId);
+  sendSuccess(res, data);
+});
+
+/** After multer — req.file */
+const uploadAvatar = asyncHandler(async (req, res) => {
+  if (!req.file) throw new AppError('No file uploaded', 400);
+  const url = `/api/user-uploads/${req.file.filename}`;
+  await accountService.updateAvatarUrl(req.user.userId, url);
+  sendSuccess(res, { url });
+});
+
+module.exports = {
+  getProfile,
+  updateProfile,
+  deleteAccount,
+  dashboardStats,
+  myCourses,
+  uploadAvatar,
+};

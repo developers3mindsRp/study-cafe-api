@@ -8,6 +8,7 @@ function register(router) {
   router.get('/auth/validate', authController.validate);
   router.get('/auth/me', authController.me);
   router.post('/auth/refresh', validate(schemas.refreshToken), authController.refresh);
+  router.post('/auth/change-password', validate(schemas.changePassword), authController.changePassword);
 }
 
 module.exports = { register };

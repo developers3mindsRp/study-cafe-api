@@ -1,5 +1,5 @@
 const authService = require('../services/auth.service');
-const { asyncHandler, AppError, sendSuccess, sendCreated } = require('../../../../shared');
+const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent } = require('../../../../shared');
 
 const register = asyncHandler(async (req, res) => {
   const { email, password, name } = req.body;
@@ -57,4 +57,21 @@ const refresh = asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 });
 
-module.exports = { register, login, validate, me, refresh };
+const changePassword = asyncHandler(async (req, res) => {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) {
+    throw new AppError('Missing or invalid authorization', 401);
+  }
+  const token = auth.slice(7);
+  const user = await authService.validateToken(token);
+  if (!user) throw new AppError('User not found or inactive', 401);
+  const { currentPassword, newPassword, confirmPassword } = req.body;
+  if (!currentPassword || !newPassword) throw new AppError('currentPassword and newPassword required', 400);
+  if (confirmPassword && confirmPassword !== newPassword) {
+    throw new AppError('Passwords do not match', 400);
+  }
+  await authService.changePassword(user.userId, { currentPassword, newPassword });
+  sendNoContent(res);
+});
+
+module.exports = { register, login, validate, me, refresh, changePassword };
