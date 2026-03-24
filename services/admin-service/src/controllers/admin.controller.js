@@ -286,7 +286,9 @@ const uploadImage = asyncHandler(async (req, res) => {
     maxBodyLength: Infinity,
     maxContentLength: Infinity,
   });
-  sendSuccess(res, data);
+  // platform-service wraps its response in { success, data }; unwrap before re-wrapping
+  const payload = data?.success === true && data?.data !== undefined ? data.data : data;
+  sendSuccess(res, payload);
 });
 
 module.exports = {
