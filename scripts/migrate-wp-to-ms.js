@@ -28,7 +28,7 @@ const { Sequelize, QueryTypes } = require('sequelize');
 
 // ──── Source DB (migration / WP) — override with MIGRATION_SRC_* env ────
 const SRC_CONFIG = {
-    host: process.env.MIGRATION_SRC_HOST || '168.144.1.14',
+    host: process.env.MIGRATION_SRC_HOST || '127.0.0.1',
     port: parseInt(process.env.MIGRATION_SRC_PORT || '3306', 10),
     user: process.env.MIGRATION_SRC_USER || 'root',
     password: process.env.MIGRATION_SRC_PASSWORD ?? 'root',
@@ -37,7 +37,7 @@ const SRC_CONFIG = {
 
 // ──── Target DB (microservices) — override with MIGRATION_TGT_* env ────
 const TGT_CONFIG = {
-    host: process.env.MIGRATION_TGT_HOST || '168.144.1.14',
+    host: process.env.MIGRATION_TGT_HOST || '127.0.0.1',
     port: parseInt(process.env.MIGRATION_TGT_PORT || '3307', 10),
     user: process.env.MIGRATION_TGT_USER || 'studycafe_user',
     password: process.env.MIGRATION_TGT_PASSWORD || 'studycafe_pass',
@@ -109,7 +109,9 @@ async function main() {
     await migrateFileCategories(src, tgt);
     await migratePages(src, tgt);
     await seedCmsPagesFromSource(src, tgt);
+    await seedAffiliatePage(src, tgt);
     await migrateRedirections(src, tgt);
+    await migrateWpLinks(src, tgt);
     await migrateMedia(src, tgt);
     await migrateForumTopics(src, tgt);
     await migrateEnrollments(src, tgt);
@@ -175,6 +177,8 @@ async function createAllTables(tgt) {
       linkedin VARCHAR(500),
       instagram VARCHAR(500),
       youtube VARCHAR(500),
+      gst VARCHAR(100),
+      account_status VARCHAR(50),
       created_at DATETIME,
       updated_at DATETIME,
       UNIQUE KEY idx_email (email)
@@ -702,6 +706,9 @@ async function ensurePremiumPlansColumns(tgt) {
         "ALTER TABLE premium_plans ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
         "ALTER TABLE premium_plans ADD COLUMN is_lifetime TINYINT(1) NOT NULL DEFAULT 0 AFTER duration_days",
         "ALTER TABLE premium_plans ADD COLUMN is_popular TINYINT(1) NOT NULL DEFAULT 0 AFTER is_active",
+        "ALTER TABLE courses ADD COLUMN course_includes LONGTEXT NULL AFTER includes_info",
+        "ALTER TABLE users ADD COLUMN gst VARCHAR(100) NULL AFTER youtube",
+        "ALTER TABLE users ADD COLUMN account_status VARCHAR(50) NULL AFTER gst",
     ];
     for (const sql of alters) {
         try {
@@ -715,10 +722,10 @@ async function ensurePremiumPlansColumns(tgt) {
 // Tables managed via admin panel / other scripts — NEVER truncated by migration.
 // Data you add through the admin panel or other scripts is preserved across runs.
 const ADMIN_MANAGED_TABLES = new Set([
-    'home_sections', 'faqs', 'testimonials', 'footer_data', 'states',
-    'cms_pages', 'payment_config', 'admin_logs', 'batch_enrollments',
-    'materials', 'outbox_events', 'payments', 'roles',
-    'batches', 'sessions', 'recordings',
+    // 'home_sections', 'faqs', 'testimonials', 'footer_data', 'states',
+    // 'cms_pages', 'payment_config', 'admin_logs', 'batch_enrollments',
+    // 'materials', 'outbox_events', 'payments', 'roles',
+    // 'batches', 'sessions', 'recordings',
 ]);
 
 /** Truncate only source-synced tables on target (3307). Admin-managed tables are preserved. */
@@ -771,9 +778,9 @@ async function migrateUsers(src, tgt) {
         const values = chunk.map(u => {
             const passHash = passwords[u.wp_user_id] || null;
             const email = u.email || `wp_${u.wp_user_id || u.id}@placeholder.studycafe.in`;
-            return `(${u.id}, ${esc(u.wp_user_id)}, ${esc(email)}, ${esc(passHash)}, ${esc(u.display_name)}, ${esc(u.display_name)}, ${esc(u.login)}, ${esc(u.first_name)}, ${esc(u.last_name)}, ${esc(u.user_nicename)}, ${esc(u.user_url)}, ${esc(u.phone)}, ${esc(u.profession)}, ${esc(u.designation)}, ${esc(u.company)}, ${esc(u.city)}, ${esc(u.state)}, ${esc(u.country)}, ${esc(u.profile_pic_url)}, ${esc(u.membership)}, ${esc(u.plan)}, ${esc(u.role)}, 1, ${esc(u.status)}, ${esc(u.facebook)}, ${esc(u.twitter)}, ${esc(u.linkedin)}, ${esc(u.instagram)}, ${esc(u.youtube)}, ${escDate(u.created_at)}, ${escDate(u.created_at)})`;
+            return `(${u.id}, ${esc(u.wp_user_id)}, ${esc(email)}, ${esc(passHash)}, ${esc(u.display_name)}, ${esc(u.display_name)}, ${esc(u.login)}, ${esc(u.first_name)}, ${esc(u.last_name)}, ${esc(u.user_nicename)}, ${esc(u.user_url)}, ${esc(u.phone)}, ${esc(u.profession)}, ${esc(u.designation)}, ${esc(u.company)}, ${esc(u.city)}, ${esc(u.state)}, ${esc(u.country)}, ${esc(u.profile_pic_url)}, ${esc(u.membership)}, ${esc(u.plan)}, ${esc(u.role)}, 1, ${esc(u.status)}, ${esc(u.facebook)}, ${esc(u.twitter)}, ${esc(u.linkedin)}, ${esc(u.instagram)}, ${esc(u.youtube)}, ${esc(u.gst)}, ${esc(u.account_status)}, ${escDate(u.created_at)}, ${escDate(u.created_at)})`;
         }).join(',');
-        await tgt.query(`INSERT IGNORE INTO users (id, wp_user_id, email, password_hash, name, display_name, login, first_name, last_name, user_nicename, user_url, phone, profession, designation, company, city, state, country, profile_pic_url, membership, plan, role, is_active, status, facebook, twitter, linkedin, instagram, youtube, created_at, updated_at) VALUES ${values}`, { raw: true });
+        await tgt.query(`INSERT IGNORE INTO users (id, wp_user_id, email, password_hash, name, display_name, login, first_name, last_name, user_nicename, user_url, phone, profession, designation, company, city, state, country, profile_pic_url, membership, plan, role, is_active, status, facebook, twitter, linkedin, instagram, youtube, gst, account_status, created_at, updated_at) VALUES ${values}`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allUsers.length)}/${allUsers.length}\r`);
     }
     console.log(`   ✅ ${allUsers.length} users migrated (with password hashes)`);
@@ -845,16 +852,17 @@ async function migrateUserMemberships(src, tgt) {
 
 /**
  * Migrate premium_plans (membership plan definitions) from source.
- * Priority: 1) sc_courses with "Join Studycafe Lifetime Ultimate/Premium" (real dump data, correct prices + features);
- *          2) merge in source premium_plans for slugs not yet present (e.g. advanced, basic for user_memberships);
- *          3) else source premium_plans only; 4) else sc_payments.
+ * Priority: 1) WordPress postmeta on Membership Plans page (post 103370) — all 3 plans;
+ *          2) sc_courses with "Join Studycafe Lifetime Ultimate/Premium" (fallback);
+ *          3) source premium_plans table; 4) sc_payments.
  */
 async function migratePremiumPlans(src, tgt) {
     console.log('📋 Migrating premium plans...');
     const tables = await src.query(
-        "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('premium_plans', 'sc_courses', 'sc_payments')",
+        "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('premium_plans', 'sc_courses', 'sc_payments', 'deepak_postmeta')",
         { type: QueryTypes.SELECT }
     );
+    const hasDeepakPostmeta = tables.some(t => t.TABLE_NAME === 'deepak_postmeta');
     const hasPremiumPlans = tables.some(t => t.TABLE_NAME === 'premium_plans');
     const hasScCourses = tables.some(t => t.TABLE_NAME === 'sc_courses');
     const hasScPayments = tables.some(t => t.TABLE_NAME === 'sc_payments');
@@ -863,8 +871,64 @@ async function migratePremiumPlans(src, tgt) {
     const insertedSlugs = new Set();
     let sortOrder = 0;
 
-    // 1) Prefer sc_courses: real membership products are "Join Studycafe Lifetime Ultimate/Premium Membership Plan" (not exact "Ultimate"/"Premium")
-    if (hasScCourses) {
+    /** Strip HTML tags for clean feature strings */
+    function stripHtml(html) {
+        if (!html) return '';
+        return html.replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&#8211;/g, '–').replace(/&#8217;/g, "'").trim();
+    }
+
+    /** Parse newline-separated features from WP postmeta into JSON array */
+    function parseFeatures(raw) {
+        if (!raw) return [];
+        return raw.split('\n').map(l => stripHtml(l).trim()).filter(Boolean);
+    }
+
+    // ─── 1) PRIMARY: Read all 3 plans from WP Membership Plans page (post 103370) ───
+    if (hasDeepakPostmeta) {
+        const PLANS_PAGE_ID = 103370;
+        const metaRows = await src.query(
+            `SELECT meta_key, meta_value FROM deepak_postmeta WHERE post_id = ? AND meta_key IN (
+                'premium_mrp','premium_price','premium_features',
+                'advanced_mrp','advanced_price','advanced_features','advanced_features_not',
+                'basic_mrp','basic_price','basic_features','basic_features_not'
+            )`,
+            { replacements: [PLANS_PAGE_ID], type: QueryTypes.SELECT }
+        );
+        if (metaRows.length > 0) {
+            const meta = {};
+            metaRows.forEach(r => { meta[r.meta_key] = r.meta_value; });
+
+            // Plan definitions: [slug, displayName, metaPrefix, duration, isLifetime, isPopular, includedFeatures, excludedFeatures]
+            const planDefs = [
+                { slug: 'ultimate', name: 'Ultimate', prefix: 'premium', durationDays: 3650, isLifetime: 1, isPopular: 1 },
+                { slug: 'premium',  name: 'Premium',  prefix: 'advanced', durationDays: 3650, isLifetime: 1, isPopular: 0 },
+                { slug: 'basic',    name: 'Basic',     prefix: 'basic',    durationDays: 365,  isLifetime: 0, isPopular: 0 },
+            ];
+
+            for (const plan of planDefs) {
+                const price = parseFloat(meta[`${plan.prefix}_price`]) || 0;
+                const mrp = parseFloat(meta[`${plan.prefix}_mrp`]) || 0;
+                const features = parseFeatures(meta[`${plan.prefix}_features`]);
+                const excludedFeatures = parseFeatures(meta[`${plan.prefix}_features_not`]);
+                const featuresJson = JSON.stringify({ included: features, excluded: excludedFeatures, mrp });
+
+                if (price > 0 || features.length > 0) {
+                    await tgt.query(
+                        `INSERT INTO premium_plans (name, slug, description, price, currency, duration_days, is_lifetime, features, sort_order, is_active, is_popular)
+                         VALUES (?, ?, NULL, ?, 'INR', ?, ?, ?, ?, 1, ?)`,
+                        { replacements: [plan.name, plan.slug, price, plan.durationDays, plan.isLifetime, featuresJson, sortOrder++, plan.isPopular], raw: true }
+                    );
+                    insertedSlugs.add(plan.slug);
+                }
+            }
+            if (insertedSlugs.size > 0) {
+                console.log(`   ✅ ${insertedSlugs.size} plans from WP Membership Plans page (post ${PLANS_PAGE_ID})`);
+            }
+        }
+    }
+
+    // ─── 2) Fallback: sc_courses with Lifetime Ultimate/Premium ───
+    if (insertedSlugs.size === 0 && hasScCourses) {
         const rows = await src.query(
             `SELECT id, wp_post_id, title, slug, brief_description, description, price, sale_price, includes_info
              FROM sc_courses
@@ -873,7 +937,7 @@ async function migratePremiumPlans(src, tgt) {
              ORDER BY sale_price DESC`,
             { type: QueryTypes.SELECT }
         );
-        const byTier = {}; // ultimate -> best row, premium -> best row (by sale_price)
+        const byTier = {};
         for (const r of rows || []) {
             const lower = (r.title && String(r.title).toLowerCase()) || '';
             const isUltimate = lower.includes('ultimate');
@@ -886,10 +950,8 @@ async function migratePremiumPlans(src, tgt) {
             const r = byTier[tier];
             if (!r) continue;
             const name = tier === 'ultimate' ? 'Ultimate' : 'Premium';
-            const slugVal = tier;
             const desc = (r.brief_description && String(r.brief_description).trim()) ? r.brief_description : (r.description ? String(r.description).substring(0, 2000) : null);
             const priceVal = r.sale_price != null ? Number(r.sale_price) : (r.price != null ? Number(r.price) : 0);
-            const durationDays = 3650;
             let featuresJson = '[]';
             if (r.includes_info) {
                 try {
@@ -902,16 +964,16 @@ async function migratePremiumPlans(src, tgt) {
             await tgt.query(
                 `INSERT INTO premium_plans (name, slug, description, price, currency, duration_days, is_lifetime, features, sort_order, is_active)
                  VALUES (?, ?, ?, ?, 'INR', ?, ?, ?, ?, 1)`,
-                { replacements: [name, slugVal, desc, priceVal, durationDays, durationDays >= 3650 ? 1 : 0, featuresJson, sortOrder++], raw: true }
+                { replacements: [name, tier, desc, priceVal, 3650, 1, featuresJson, sortOrder++], raw: true }
             );
-            insertedSlugs.add(slugVal);
+            insertedSlugs.add(tier);
         }
         if (insertedSlugs.size > 0) {
             console.log(`   ✅ ${insertedSlugs.size} plans from sc_courses (Lifetime Ultimate/Premium)`);
         }
     }
 
-    // 2) Add plans from source premium_plans for slugs we don't have yet (advanced, basic so user_memberships still resolve)
+    // ─── 3) Merge from source premium_plans for any missing slugs ───
     if (hasPremiumPlans) {
         const rows = await src.query('SELECT id, name, slug, description, price, currency, duration_days, features, sort_order, is_active FROM premium_plans ORDER BY sort_order, id', { type: QueryTypes.SELECT });
         let merged = 0;
@@ -924,16 +986,10 @@ async function migratePremiumPlans(src, tgt) {
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 {
                     replacements: [
-                        r.name || 'Plan',
-                        slug,
-                        r.description || null,
-                        r.price ?? 0,
-                        r.currency || 'INR',
-                        r.duration_days ?? 365,
+                        r.name || 'Plan', slug, r.description || null, r.price ?? 0,
+                        r.currency || 'INR', r.duration_days ?? 365,
                         (r.duration_days != null && Number(r.duration_days) >= 3650) ? 1 : 0,
-                        features,
-                        sortOrder++,
-                        r.is_active != null ? (r.is_active ? 1 : 0) : 1,
+                        features, sortOrder++, r.is_active != null ? (r.is_active ? 1 : 0) : 1,
                     ],
                     raw: true,
                 }
@@ -941,7 +997,7 @@ async function migratePremiumPlans(src, tgt) {
             insertedSlugs.add(slug);
             merged++;
         }
-        if (merged > 0) console.log(`   ✅ Merged ${merged} from source premium_plans (e.g. advanced, basic)`);
+        if (merged > 0) console.log(`   ✅ Merged ${merged} from source premium_plans`);
     }
 
     if (insertedSlugs.size > 0) {
@@ -949,43 +1005,10 @@ async function migratePremiumPlans(src, tgt) {
         return;
     }
 
-    // 3) Fallback: source premium_plans only (when no sc_courses membership courses)
-    if (hasPremiumPlans) {
-        const rows = await src.query('SELECT id, name, slug, description, price, currency, duration_days, features, sort_order, is_active FROM premium_plans ORDER BY sort_order, id', { type: QueryTypes.SELECT });
-        if (rows && rows.length > 0) {
-            for (const r of rows) {
-                const slug = (r.slug != null && String(r.slug).trim() !== '') ? String(r.slug).trim().substring(0, 128) : (r.name ? slugify(r.name) : `plan-${r.id}`);
-                const features = (r.features != null && typeof r.features === 'string') ? r.features : (r.features != null ? JSON.stringify(r.features) : '[]');
-                await tgt.query(
-                    `INSERT INTO premium_plans (name, slug, description, price, currency, duration_days, is_lifetime, features, sort_order, is_active)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    {
-                        replacements: [
-                            r.name || 'Plan',
-                            slug,
-                            r.description || null,
-                            r.price ?? 0,
-                            r.currency || 'INR',
-                            r.duration_days ?? 365,
-                            (r.duration_days != null && Number(r.duration_days) >= 3650) ? 1 : 0,
-                            features,
-                            sortOrder++,
-                            r.is_active != null ? (r.is_active ? 1 : 0) : 1,
-                        ],
-                        raw: true,
-                    }
-                );
-            }
-            console.log(`   ✅ ${rows.length} premium plans from source premium_plans`);
-            return;
-        }
-    }
-
+    // ─── 4) Last fallback: sc_payments ───
     if (hasScPayments) {
         const rows = await src.query('SELECT id, wp_post_id, title, amount, price, total_seats, seats_booked, expiry, status, created_at FROM sc_payments ORDER BY id', { type: QueryTypes.SELECT });
         if (rows.length > 0) {
-            await tgt.query('DELETE FROM premium_plans', { raw: true });
-            let sortOrder = 0;
             for (const r of rows) {
                 const name = (r.title && String(r.title).trim()) ? String(r.title).trim().substring(0, 255) : `Plan ${r.id}`;
                 const slug = slugify(name) || `plan-${r.id}`;
@@ -998,14 +1021,10 @@ async function migratePremiumPlans(src, tgt) {
                         durationDays = Math.max(1, Math.round((expiry - created) / (24 * 60 * 60 * 1000)));
                     }
                 }
-                const isActive = (r.status && String(r.status).toLowerCase() === 'publish') ? 1 : 1;
                 await tgt.query(
                     `INSERT INTO premium_plans (name, slug, description, price, currency, duration_days, is_lifetime, features, sort_order, is_active)
-                     VALUES (?, ?, NULL, ?, 'INR', ?, ?, '[]', ?, ?)`,
-                    {
-                        replacements: [name, slug.substring(0, 128), priceVal, durationDays, durationDays >= 3650 ? 1 : 0, sortOrder++, isActive],
-                        raw: true,
-                    }
+                     VALUES (?, ?, NULL, ?, 'INR', ?, ?, '[]', ?, 1)`,
+                    { replacements: [name, slug.substring(0, 128), priceVal, durationDays, durationDays >= 3650 ? 1 : 0, sortOrder++], raw: true }
                 );
             }
             console.log(`   ✅ ${rows.length} premium plans from source sc_payments`);
@@ -1013,7 +1032,7 @@ async function migratePremiumPlans(src, tgt) {
         }
     }
 
-    console.log('   ⏭️ No source premium_plans, sc_courses (Ultimate/Premium/Basic), or sc_payments; skip.');
+    console.log('   ⏭️ No source premium_plans, WP postmeta, sc_courses, or sc_payments; skip.');
 }
 
 function slugify(text) {
@@ -1461,6 +1480,129 @@ async function seedCmsPagesFromSource(src, tgt) {
         console.log(`   ✅ cms_pages: ${inserted} seeded (existing rows preserved)`);
     } catch (e) {
         if (e.message && e.message.includes("doesn't exist")) { console.log('   ⏭️  sc_pages or cms_pages not present, skip'); return; }
+        throw e;
+    }
+}
+
+/** Seed affiliate page ACF data (FAQs, top earners, services) from WP postmeta into cms_pages. */
+async function seedAffiliatePage(src, tgt) {
+    console.log('📄 Seeding affiliate page ACF data...');
+    try {
+        const AFFILIATE_POST_ID = 264389;
+        const hasPostmeta = await src.query(
+            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'deepak_postmeta'",
+            { type: QueryTypes.SELECT }
+        );
+        if (!hasPostmeta.length) { console.log('   ⏭️  deepak_postmeta not in source, skip'); return; }
+
+        const metaRows = await src.query(
+            `SELECT meta_key, meta_value FROM deepak_postmeta WHERE post_id = ? AND meta_key NOT LIKE '\\_%'`,
+            { replacements: [AFFILIATE_POST_ID], type: QueryTypes.SELECT }
+        );
+        if (!metaRows.length) { console.log('   ⏭️  No affiliate page meta found'); return; }
+
+        const meta = {};
+        metaRows.forEach(r => { meta[r.meta_key] = r.meta_value; });
+
+        // Parse FAQs
+        const faqCount = parseInt(meta.faqs) || 0;
+        const faqs = [];
+        for (let i = 0; i < faqCount; i++) {
+            const q = meta[`faqs_${i}_question`];
+            const a = meta[`faqs_${i}_answer`];
+            if (q || a) faqs.push({ question: q || '', answer: a || '' });
+        }
+
+        // Parse top earners
+        const earnerCount = parseInt(meta.top_earners) || 0;
+        const topEarners = [];
+        for (let i = 0; i < earnerCount; i++) {
+            topEarners.push({
+                name: meta[`top_earners_${i}_name`] || '',
+                designation: meta[`top_earners_${i}_designation`] || '',
+                comment: meta[`top_earners_${i}_comment`] || '',
+                picture_url: meta[`top_earners_${i}_picture_url`] || '',
+            });
+        }
+
+        // Parse services
+        const serviceCount = parseInt(meta.services) || 0;
+        const services = [];
+        for (let i = 0; i < serviceCount; i++) {
+            services.push({
+                name: meta[`services_${i}_name`] || '',
+                link: meta[`services_${i}_link`] || '',
+            });
+        }
+
+        const acfData = JSON.stringify({
+            description: meta.description || '',
+            second_paragraph: meta['2nd_paragraph'] || '',
+            keywords: meta.keywords || '',
+            faqs,
+            top_earners: topEarners,
+            services,
+            founders: meta.founders || '',
+            top_selling_courses: meta.top_selling_courses || '',
+        });
+
+        // Upsert into cms_pages
+        const existing = await tgt.query("SELECT id FROM cms_pages WHERE slug = 'affiliate'", { type: QueryTypes.SELECT });
+        const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        if (existing.length > 0) {
+            await tgt.query(
+                'UPDATE cms_pages SET meta = ?, updated_at = ? WHERE slug = ?',
+                { replacements: [acfData, now, 'affiliate'], raw: true }
+            );
+        } else {
+            await tgt.query(
+                'INSERT INTO cms_pages (slug, title, content, meta, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?)',
+                { replacements: ['affiliate', meta.title || 'Studycafe Affiliate Program', acfData, now, now], raw: true }
+            );
+        }
+        console.log(`   ✅ Affiliate page: ${faqs.length} FAQs, ${topEarners.length} earners, ${services.length} services`);
+    } catch (e) {
+        if (e.message && e.message.includes("doesn't exist")) { console.log('   ⏭️  cms_pages not present, skip'); return; }
+        throw e;
+    }
+}
+
+/** Migrate WP 'links' post type (source→target URL pairs) into redirections table. */
+async function migrateWpLinks(src, tgt) {
+    console.log('🔗 Migrating WP links as redirections...');
+    try {
+        const hasPostmeta = await src.query(
+            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'deepak_postmeta'",
+            { type: QueryTypes.SELECT }
+        );
+        if (!hasPostmeta.length) { console.log('   ⏭️  deepak_postmeta not in source, skip'); return; }
+
+        const rows = await src.query(
+            `SELECT p.ID,
+                MAX(CASE WHEN pm.meta_key='source' THEN pm.meta_value END) as source_url,
+                MAX(CASE WHEN pm.meta_key='target' THEN pm.meta_value END) as target_url
+             FROM deepak_posts p
+             JOIN deepak_postmeta pm ON pm.post_id = p.ID AND pm.meta_key IN ('source','target')
+             WHERE p.post_type='links' AND p.post_status='publish'
+             GROUP BY p.ID`,
+            { type: QueryTypes.SELECT }
+        );
+        if (!rows.length) { console.log('   ✅ 0 WP links'); return; }
+
+        let inserted = 0;
+        for (const r of rows) {
+            if (!r.source_url || !r.target_url) continue;
+            try {
+                await tgt.query(
+                    `INSERT IGNORE INTO redirections (source_url, target_url, match_type, status) VALUES (?, ?, 'exact', 'enabled')`,
+                    { replacements: [r.source_url.substring(0, 500), r.target_url.substring(0, 500)], raw: true }
+                );
+                inserted++;
+            } catch (_) { }
+        }
+        console.log(`   ✅ ${inserted} WP links migrated as redirections`);
+    } catch (e) {
+        if (e.message && e.message.includes("doesn't exist")) { console.log('   ⏭️  deepak_posts not in source, skip'); return; }
         throw e;
     }
 }

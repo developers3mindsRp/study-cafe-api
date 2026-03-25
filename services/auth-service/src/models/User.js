@@ -35,6 +35,8 @@ module.exports = (sequelize) => {
       linkedin: { type: DataTypes.STRING(500), allowNull: true },
       instagram: { type: DataTypes.STRING(500), allowNull: true },
       youtube: { type: DataTypes.STRING(500), allowNull: true },
+      gst: { type: DataTypes.STRING(100), allowNull: true },
+      account_status: { type: DataTypes.STRING(50), allowNull: true },
     },
     {
       tableName: 'users',
