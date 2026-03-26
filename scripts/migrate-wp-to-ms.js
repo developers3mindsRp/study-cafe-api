@@ -84,6 +84,9 @@ async function main() {
     await clearTargetDatabase(tgt);
     console.log('✅ Target DB cleared.\n');
 
+    // ──────────── Ensure auth roles exist ────────────
+    await ensureDefaultRoles(tgt);
+
     // ──────────── Migrate data ────────────
     await migrateUsers(src, tgt);
     await migrateUserMemberships(src, tgt);
@@ -754,6 +757,20 @@ async function clearTargetDatabase(tgt) {
     console.log(`   ⏩ Preserved admin-managed tables: ${[...ADMIN_MANAGED_TABLES].join(', ')}`);
 }
 
+async function ensureDefaultRoles(tgt) {
+    console.log('🛡️ Ensuring default roles...');
+    const orderedRoles = ['super_admin', 'admin', 'user'];
+
+    for (const roleName of orderedRoles) {
+        await tgt.query(
+            'INSERT INTO roles (name) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM roles WHERE name = ?)',
+            { replacements: [roleName, roleName], raw: true }
+        );
+    }
+
+    console.log(`   ✅ roles ensured: ${orderedRoles.join(', ')}`);
+}
+
 // ──────────── Migration functions ────────────
 
 async function migrateUsers(src, tgt) {
@@ -767,6 +784,11 @@ async function migrateUsers(src, tgt) {
     wpPasswords.forEach(u => { passwords[u.ID] = u.user_pass; });
 
     const allUsers = await src.query(`SELECT * FROM \`${_srcUsersTable}\` ORDER BY id`, { type: QueryTypes.SELECT });
+    const userRole = await tgt.query("SELECT id FROM roles WHERE name = 'user' LIMIT 1", { type: QueryTypes.SELECT });
+    if (!userRole.length) {
+        throw new Error("Role 'user' not found in target roles table");
+    }
+    const defaultUserRoleId = userRole[0].id;
 
     // Truncate target
     await tgt.query('DELETE FROM user_courses', { raw: true });
@@ -778,12 +800,12 @@ async function migrateUsers(src, tgt) {
         const values = chunk.map(u => {
             const passHash = passwords[u.wp_user_id] || null;
             const email = u.email || `wp_${u.wp_user_id || u.id}@placeholder.studycafe.in`;
-            return `(${u.id}, ${esc(u.wp_user_id)}, ${esc(email)}, ${esc(passHash)}, ${esc(u.display_name)}, ${esc(u.display_name)}, ${esc(u.login)}, ${esc(u.first_name)}, ${esc(u.last_name)}, ${esc(u.user_nicename)}, ${esc(u.user_url)}, ${esc(u.phone)}, ${esc(u.profession)}, ${esc(u.designation)}, ${esc(u.company)}, ${esc(u.city)}, ${esc(u.state)}, ${esc(u.country)}, ${esc(u.profile_pic_url)}, ${esc(u.membership)}, ${esc(u.plan)}, ${esc(u.role)}, 1, ${esc(u.status)}, ${esc(u.facebook)}, ${esc(u.twitter)}, ${esc(u.linkedin)}, ${esc(u.instagram)}, ${esc(u.youtube)}, ${esc(u.gst)}, ${esc(u.account_status)}, ${escDate(u.created_at)}, ${escDate(u.created_at)})`;
+            return `(${u.id}, ${esc(u.wp_user_id)}, ${esc(email)}, ${esc(passHash)}, ${esc(u.display_name)}, ${esc(u.display_name)}, ${esc(u.login)}, ${esc(u.first_name)}, ${esc(u.last_name)}, ${esc(u.user_nicename)}, ${esc(u.user_url)}, ${esc(u.phone)}, ${esc(u.profession)}, ${esc(u.designation)}, ${esc(u.company)}, ${esc(u.city)}, ${esc(u.state)}, ${esc(u.country)}, ${esc(u.profile_pic_url)}, ${esc(u.membership)}, ${esc(u.plan)}, ${defaultUserRoleId}, 'user', 1, ${esc(u.status)}, ${esc(u.facebook)}, ${esc(u.twitter)}, ${esc(u.linkedin)}, ${esc(u.instagram)}, ${esc(u.youtube)}, ${esc(u.gst)}, ${esc(u.account_status)}, ${escDate(u.created_at)}, ${escDate(u.created_at)})`;
         }).join(',');
-        await tgt.query(`INSERT IGNORE INTO users (id, wp_user_id, email, password_hash, name, display_name, login, first_name, last_name, user_nicename, user_url, phone, profession, designation, company, city, state, country, profile_pic_url, membership, plan, role, is_active, status, facebook, twitter, linkedin, instagram, youtube, gst, account_status, created_at, updated_at) VALUES ${values}`, { raw: true });
+        await tgt.query(`INSERT IGNORE INTO users (id, wp_user_id, email, password_hash, name, display_name, login, first_name, last_name, user_nicename, user_url, phone, profession, designation, company, city, state, country, profile_pic_url, membership, plan, role_id, role, is_active, status, facebook, twitter, linkedin, instagram, youtube, gst, account_status, created_at, updated_at) VALUES ${values}`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allUsers.length)}/${allUsers.length}\r`);
     }
-    console.log(`   ✅ ${allUsers.length} users migrated (with password hashes)`);
+    console.log(`   ✅ ${allUsers.length} users migrated (default role: user)`);
 }
 
 /**

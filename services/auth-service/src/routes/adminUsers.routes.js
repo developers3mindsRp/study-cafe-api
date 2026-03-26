@@ -5,6 +5,7 @@ const { validate } = require('../../../../shared');
 
 function register(router) {
   router.get('/auth/admin/roles', requireAdmin, requirePermission('admin_users:list', 'admin_users:view', 'admin_users:create', 'admin_users:edit'), adminUsersController.listRoles);
+  router.post('/auth/admin/role', requireAdmin, requirePermission('admin_users:list', 'admin_users:view', 'admin_users:create', 'admin_users:edit'), adminUsersController.createRole);
   router.get('/auth/admin/users', requireAdmin, requirePermission('admin_users:list'), adminUsersController.list);
   router.get('/auth/admin/users/:id', requireAdmin, requirePermission('admin_users:view', 'admin_users:edit'), validate(schemas.idParam), adminUsersController.getOne);
   router.post('/auth/admin/users', requireAdmin, requirePermission('admin_users:create'), validate(schemas.createAdminUser), adminUsersController.create);

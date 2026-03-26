@@ -12,6 +12,12 @@ const listRoles = asyncHandler(async (req, res) => {
   const roles = await adminUsersService.listRoles();
   sendSuccess(res, roles);
 });
+const createRole = asyncHandler(async (req, res) => {
+  const { name } = req.body;
+  const role = await adminUsersService.createRole({ name });
+  if (!role) throw new AppError('Failed to create role', 500);
+  sendCreated(res, role);
+});
 
 const list = asyncHandler(async (req, res) => {
   const users = await adminUsersService.listAdminUsers();
@@ -34,6 +40,7 @@ const create = asyncHandler(async (req, res) => {
     name: name ? String(name).trim() : null,
     role_id: parseInt(role_id, 10),
     permission_overrides: sanitizePermissionOverrides(permission_overrides),
+    actorRole: req.adminUser?.role,
   });
   sendCreated(res, user);
 });
@@ -48,6 +55,7 @@ const update = asyncHandler(async (req, res) => {
     is_active,
     password: password !== undefined ? password : undefined,
     permission_overrides: permission_overrides !== undefined ? sanitizePermissionOverrides(permission_overrides) : undefined,
+    actorRole: req.adminUser?.role,
   });
   if (!user) throw new AppError('User not found', 404);
   sendSuccess(res, user);
@@ -64,4 +72,4 @@ const remove = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
-module.exports = { listRoles, list, getOne, create, update, remove };
+module.exports = { listRoles, list, getOne, create, update, remove, createRole };

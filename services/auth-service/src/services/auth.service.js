@@ -23,12 +23,20 @@ function verifyRefresh(token) {
 }
 
 async function register({ email, password, name }) {
+  const userRole = await Role.findOne({
+    where: { name: 'user' },
+    attributes: ['id'],
+  });
+  if (!userRole) {
+    throw new AppError('Default user role is not configured', 500);
+  }
+
   const password_hash = await bcrypt.hash(password, 10);
   const user = await User.scope('withPassword').create({
     email,
     password_hash,
     name: name || null,
-    role_id: 1,
+    role_id: userRole.id,
   });
   const withRole = await User.findByPk(user.id, {
     include: [{ model: Role, as: 'Role', attributes: ['name'] }],

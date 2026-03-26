@@ -13,6 +13,11 @@ async function listRoles() {
   return roles.map((r) => ({ id: r.id, name: r.name }));
 }
 
+async function createRole({ name }) {
+  const role = await Role.create({ name });
+  return { id: role.id, name: role.name };
+}
+
 async function listAdminUsers() {
   const roles = await Role.findAll({
     where: { name: { [Op.in]: ADMIN_PANEL_ROLES } },
@@ -61,11 +66,14 @@ async function getAdminUser(id) {
   };
 }
 
-async function createAdminUser({ email, password, name, role_id, permission_overrides }) {
+async function createAdminUser({ email, password, name, role_id, permission_overrides, actorRole }) {
   const role = await Role.findByPk(role_id);
   if (!role) throw new Error('Invalid role_id');
   if (!ADMIN_PANEL_ROLES.includes(role.name)) {
     throw new Error('Role must be one of: ' + ADMIN_PANEL_ROLES.join(', '));
+  }
+  if (['admin', 'super_admin'].includes(role.name) && actorRole !== 'super_admin') {
+    throw new Error('Only super_admin can create admin or super_admin users');
   }
   const overrides = Array.isArray(permission_overrides) ? permission_overrides : [];
   if (role.name !== 'super_admin' && overrides.length === 0) {
@@ -87,7 +95,7 @@ async function createAdminUser({ email, password, name, role_id, permission_over
   return getAdminUser(user.id);
 }
 
-async function updateAdminUser(id, { name, role_id, is_active, password, permission_overrides }) {
+async function updateAdminUser(id, { name, role_id, is_active, password, permission_overrides, actorRole }) {
   const user = await User.findByPk(id);
   if (!user) return null;
   const updates = {};
@@ -97,6 +105,9 @@ async function updateAdminUser(id, { name, role_id, is_active, password, permiss
     if (!role) throw new Error('Invalid role_id');
     if (!ADMIN_PANEL_ROLES.includes(role.name)) {
       throw new Error('Role must be one of: ' + ADMIN_PANEL_ROLES.join(', '));
+    }
+    if (['admin', 'super_admin'].includes(role.name) && actorRole !== 'super_admin') {
+      throw new Error('Only super_admin can assign admin or super_admin role');
     }
     updates.role_id = role_id;
   }
@@ -126,4 +137,5 @@ module.exports = {
   createAdminUser,
   updateAdminUser,
   deleteAdminUser,
+  createRole,
 };

@@ -12,31 +12,50 @@ const { QueryTypes } = require('sequelize');
 function normalizeFeatures(raw) {
   if (!raw) return [];
 
-  // Flatten: if it's a single-element array wrapping a big HTML string, unwrap it
+  // Flatten HTML string case
   const value = Array.isArray(raw)
     ? (raw.length === 1 && typeof raw[0] === 'string' && raw[0].includes('<') ? raw[0] : null)
-    : typeof raw === 'string' ? raw : null;
+    : typeof raw === 'string'
+    ? raw
+    : null;
 
   if (value !== null) {
-    // value is an HTML or plain string — parse it
     const withNewlines = value
       .replace(/<\/p>/gi, '\n')
       .replace(/<\/li>/gi, '\n')
       .replace(/<br\s*\/?>/gi, '\n');
+
     const plain = withNewlines.replace(/<[^>]+>/g, '');
+
     const decoded = plain
-      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-      .replace(/&nbsp;/g, ' ').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
-    return decoded.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&#39;/g, "'")
+      .replace(/&quot;/g, '"');
+
+    return decoded
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
   }
 
-  // It's a proper string[] — strip HTML from each item just in case
+  // ✅ 🔥 CRITICAL FIX: Ensure raw is array
+  if (!Array.isArray(raw)) {
+    console.warn('normalizeFeatures received non-array:', raw);
+    return [];
+  }
+
   return raw
     .map((item) => {
       if (typeof item !== 'string') return String(item);
       if (!item.includes('<')) return item.trim();
-      const plain = item.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
-      return plain;
+
+      return item
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .trim();
     })
     .filter((l) => l.length > 0);
 }
@@ -385,7 +404,7 @@ async function getPlansPublic() {
   });
   return rows.map((r) => {
     const p = r.get({ plain: true });
-    return { ...p, features: normalizeFeatures(p.features) };
+    return { ...p, features: normalizeFeatures(p.features.included) };
   });
 }
 
