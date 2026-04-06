@@ -4,6 +4,7 @@ const orderClient = require('../clients/orderClient');
 const platformClient = require('../clients/platformClient');
 const adminLogsService = require('../services/adminLogs.service');
 const paymentConfigService = require('../services/paymentConfig.service');
+const { PromoCode } = require('../models');
 const { getAdminId, getAdminRole } = require('../middleware');
 const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, sendPaginated } = require('../../../../shared');
 
@@ -227,6 +228,40 @@ function platformProxy(handler) {
   });
 }
 
+const getPromoCodes = asyncHandler(async (req, res) => {
+  const where = {};
+  if (req.query.active !== undefined) {
+    where.active = req.query.active === '1' || req.query.active === 'true';
+  }
+  const rows = await PromoCode.findAll({ where, order: [['created_at', 'DESC']] });
+  sendSuccess(res, rows.map((row) => row.get({ plain: true })));
+});
+
+const getPromoCode = asyncHandler(async (req, res) => {
+  const promo = await PromoCode.findByPk(req.params.id);
+  if (!promo) throw new AppError('Promo code not found', 404);
+  sendSuccess(res, promo.get({ plain: true }));
+});
+
+const postPromoCode = asyncHandler(async (req, res) => {
+  const promo = await PromoCode.create(req.body);
+  sendCreated(res, promo.get({ plain: true }));
+});
+
+const putPromoCode = asyncHandler(async (req, res) => {
+  const promo = await PromoCode.findByPk(req.params.id);
+  if (!promo) throw new AppError('Promo code not found', 404);
+  await promo.update(req.body);
+  sendSuccess(res, promo.get({ plain: true }));
+});
+
+const deletePromoCode = asyncHandler(async (req, res) => {
+  const promo = await PromoCode.findByPk(req.params.id);
+  if (!promo) throw new AppError('Promo code not found', 404);
+  await promo.destroy();
+  sendNoContent(res);
+});
+
 const platform = {
   getHome: platformProxy((c) => c.get('/internal/platform/home').then((r) => ({ data: r.data }))),
   putHome: platformProxy((c, req) => c.put('/internal/platform/home', req.body).then((r) => ({ data: r.data }))),
@@ -256,6 +291,12 @@ const platform = {
   putPlan: platformProxy((c, req) => c.put(`/internal/platform/plans/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
   togglePlanPopular: platformProxy((c, req) => c.put(`/internal/platform/plans/${req.params.id}/popular`, req.body).then((r) => ({ data: r.data }))),
   deletePlan: platformProxy((c, req) => c.delete(`/internal/platform/plans/${req.params.id}`).then(() => ({ status: 204 }))),
+
+  getPromoCodes,
+  getPromoCode,
+  postPromoCode,
+  putPromoCode,
+  deletePromoCode,
   getArticles: platformProxy((c, req) => c.get('/internal/platform/articles', { params: req.query }).then((r) => ({ data: r.data }))),
   getArticle: platformProxy((c, req) => c.get(`/internal/platform/articles/${req.params.id}`).then((r) => ({ data: r.data }))),
   postArticle: platformProxy((c, req) => c.post('/internal/platform/articles', req.body).then((r) => ({ data: r.data, status: 201 }))),

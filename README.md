@@ -52,6 +52,125 @@ If you added this feature to an existing DB, run once from auth-service: `node s
 Start All Services
 npm run dev
 
+## API Endpoints
+
+Use the following service base URLs for Postman testing:
+
+- `http://localhost:3000` - api-gateway
+- `http://localhost:4001` - auth-service
+- `http://localhost:4002` - course-service
+- `http://localhost:4003` - order-service
+- `http://localhost:4004` - admin-service
+
+For admin routes, use the admin-service base URL and pass a valid admin JWT in `Authorization: Bearer <token>`.
+
+### Admin service API collection (localhost:4004)
+
+#### Admin / system
+
+- `GET /admin/me`
+- `GET /internal/payment-config`
+- `GET /admin/stats`
+- `PUT /admin/payment-config`
+- `GET /admin/logs`
+
+#### Courses / catalog
+
+- `GET /admin/courses`
+- `GET /admin/courses/:id`
+- `GET /admin/courses/:id/sessions`
+- `POST /admin/courses`
+- `PUT /admin/courses/:id`
+
+#### Course batches / sessions / materials
+
+- `POST /admin/courses/:id/batches`
+- `PUT /admin/batches/:id`
+- `POST /admin/batches/:id/sessions`
+- `PUT /admin/sessions/:id`
+- `POST /admin/sessions/:id/recordings`
+- `PUT /admin/recordings/:id`
+- `PUT /admin/recordings/:id/visibility`
+- `DELETE /admin/recordings/:id`
+- `DELETE /admin/sessions/:id`
+- `DELETE /admin/batches/:id`
+- `GET /admin/batches/:id/enrollments`
+- `POST /admin/batches/:id/enrollments`
+- `DELETE /admin/batch-enrollments/:id`
+- `POST /admin/courses/:id/materials`
+
+#### Course categories
+
+- `GET /admin/course-cats`
+- `POST /admin/course-cats`
+- `PUT /admin/course-cats/:id`
+- `DELETE /admin/course-cats/:id`
+
+#### Course page settings
+
+- `GET /admin/course-page-settings`
+- `PUT /admin/course-page-settings/:key`
+
+#### Orders
+
+- `GET /admin/orders`
+- `GET /admin/orders/:orderId`
+
+#### Platform / CMS proxy
+
+- `GET /admin/platform/home`
+- `PUT /admin/platform/home`
+- `GET /admin/platform/states`
+- `POST /admin/platform/states`
+- `PUT /admin/platform/states/:id`
+- `GET /admin/platform/testimonials`
+- `POST /admin/platform/testimonials`
+- `PUT /admin/platform/testimonials/:id`
+- `DELETE /admin/platform/testimonials/:id`
+- `GET /admin/platform/faqs`
+- `GET /admin/platform/faqs/:id`
+- `POST /admin/platform/faqs`
+- `PUT /admin/platform/faqs/:id`
+- `DELETE /admin/platform/faqs/:id`
+- `GET /admin/platform/seo-metadata`
+- `GET /admin/platform/seo-metadata/:id`
+- `GET /admin/platform/seo-metadata/slug/:slug`
+- `POST /admin/platform/seo-metadata`
+- `PUT /admin/platform/seo-metadata/:id`
+- `DELETE /admin/platform/seo-metadata/:id`
+- `GET /admin/platform/footer`
+- `PUT /admin/platform/footer/:key`
+- `GET /admin/platform/plans`
+- `GET /admin/platform/plans/:id`
+- `POST /admin/platform/plans`
+- `PUT /admin/platform/plans/:id`
+- `PUT /admin/platform/plans/:id/popular`
+- `DELETE /admin/platform/plans/:id`
+- `GET /admin/platform/articles`
+- `GET /admin/platform/articles/:id`
+- `POST /admin/platform/articles`
+- `PUT /admin/platform/articles/:id`
+- `DELETE /admin/platform/articles/:id`
+- `GET /admin/platform/article-categories`
+- `GET /admin/platform/article-categories/:id`
+- `POST /admin/platform/article-categories`
+- `PUT /admin/platform/article-categories/:id`
+- `DELETE /admin/platform/article-categories/:id`
+- `GET /admin/platform/tags`
+- `GET /admin/platform/article-types`
+- `GET /admin/platform/courts`
+- `GET /admin/platform/cms-pages`
+- `GET /admin/platform/cms-pages/:slug`
+- `PUT /admin/platform/cms-pages/:slug`
+- `POST /admin/upload`
+- `GET /admin/platform/media-assets`
+- `POST /admin/platform/media-assets`
+- `DELETE /admin/platform/media-assets/:id`
+- `GET /admin/platform/promo-codes`
+- `GET /admin/platform/promo-codes/:id`
+- `POST /admin/platform/promo-codes`
+- `PUT /admin/platform/promo-codes/:id`
+- `DELETE /admin/platform/promo-codes/:id`
 
 Runs all services on ports 3000, 4001–4004.
 

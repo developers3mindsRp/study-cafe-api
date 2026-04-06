@@ -22,6 +22,7 @@ const sequelize = new Sequelize(
 
 const AdminLog = require('./AdminLog')(sequelize);
 const PaymentConfig = require('./PaymentConfig')(sequelize);
+const PromoCode = require('./PromoCode')(sequelize);
 
 async function connect() {
   await sequelize.authenticate();
@@ -31,5 +32,6 @@ module.exports = {
   sequelize,
   AdminLog,
   PaymentConfig,
+  PromoCode,
   connect,
 };
