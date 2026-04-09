@@ -19,7 +19,10 @@ function register(app) {
   const orderProxy = createProxyMiddleware({
     target: config.orderServiceUrl,
     changeOrigin: true,
-    pathRewrite: { '^/api/orders': '/orders' },
+    pathRewrite: {
+      '^/api/orders': '/orders',
+      '^/api/order': '/order',
+    },
     on: {
       proxyReq: (proxyReq, req) => {
         // Order-service only trusts X-User-Id (validateToken returns userId and id)
@@ -87,6 +90,7 @@ function register(app) {
   app.get('/api/courses/:id/sessions', validateJWT, requireCourseAccess, courseProxy);
   app.get('/api/courses/:id/materials', validateJWT, requireCourseAccess, courseProxy);
   app.use('/api/orders', validateJWT, orderProxy);
+  app.use('/api/order', validateJWT, orderProxy);
   app.use('/api/admin', validateJWT, adminProxy);
   app.use('/api/platform', platformProxy);
   app.use('/api/uploads', uploadsProxy);

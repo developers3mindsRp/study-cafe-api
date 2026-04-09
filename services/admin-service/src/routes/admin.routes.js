@@ -66,11 +66,12 @@ function register(router) {
   router.put('/admin/platform/plans/:id', requireAdmin, p.putPlan);
   router.put('/admin/platform/plans/:id/popular', requireAdmin, p.togglePlanPopular);
   router.delete('/admin/platform/plans/:id', requireAdmin, p.deletePlan);
-  router.get('/admin/platform/promo-codes', requireAdmin, p.getPromoCodes);
-  router.get('/admin/platform/promo-codes/:id', requireAdmin, p.getPromoCode);
-  router.post('/admin/platform/promo-codes', requireAdmin, p.postPromoCode);
-  router.put('/admin/platform/promo-codes/:id', requireAdmin, p.putPromoCode);
-  router.delete('/admin/platform/promo-codes/:id', requireAdmin, p.deletePromoCode);
+  router.get('/admin/platform/coupons', requireAdmin, p.getCoupons);
+  router.get('/admin/platform/coupons/check-code', requireAdmin, p.checkCouponCodeExists);
+  router.get('/admin/platform/coupons/:id', requireAdmin, p.getCoupon);
+  router.post('/admin/platform/coupons', requireAdmin, p.postCoupon);
+  router.put('/admin/platform/coupons/:id', requireAdmin, p.putCoupon);
+  router.delete('/admin/platform/coupons/:id', requireAdmin, p.deleteCoupon);
   router.get('/admin/platform/articles', requireAdmin, p.getArticles);
   router.get('/admin/platform/articles/:id', requireAdmin, p.getArticle);
   router.post('/admin/platform/articles', requireAdmin, p.postArticle);

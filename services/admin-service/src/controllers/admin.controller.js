@@ -4,7 +4,8 @@ const orderClient = require('../clients/orderClient');
 const platformClient = require('../clients/platformClient');
 const adminLogsService = require('../services/adminLogs.service');
 const paymentConfigService = require('../services/paymentConfig.service');
-const { PromoCode } = require('../models');
+const { Coupon } = require('../models');
+const { Op } = require('sequelize');
 const { getAdminId, getAdminRole } = require('../middleware');
 const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, sendPaginated } = require('../../../../shared');
 
@@ -228,38 +229,53 @@ function platformProxy(handler) {
   });
 }
 
-const getPromoCodes = asyncHandler(async (req, res) => {
+const getCoupons = asyncHandler(async (req, res) => {
   const where = {};
-  if (req.query.active !== undefined) {
-    where.active = req.query.active === '1' || req.query.active === 'true';
+  if (req.query.status !== undefined) {
+    where.status = req.query.status;
   }
-  const rows = await PromoCode.findAll({ where, order: [['created_at', 'DESC']] });
+  const rows = await Coupon.findAll({ where, order: [['created_at', 'DESC']] });
   sendSuccess(res, rows.map((row) => row.get({ plain: true })));
 });
 
-const getPromoCode = asyncHandler(async (req, res) => {
-  const promo = await PromoCode.findByPk(req.params.id);
-  if (!promo) throw new AppError('Promo code not found', 404);
-  sendSuccess(res, promo.get({ plain: true }));
+const getCoupon = asyncHandler(async (req, res) => {
+  const coupon = await Coupon.findByPk(req.params.id);
+  if (!coupon) throw new AppError('Coupon not found', 404);
+  sendSuccess(res, coupon.get({ plain: true }));
 });
 
-const postPromoCode = asyncHandler(async (req, res) => {
-  const promo = await PromoCode.create(req.body);
-  sendCreated(res, promo.get({ plain: true }));
+const postCoupon = asyncHandler(async (req, res) => {
+  const coupon = await Coupon.create(req.body);
+  sendCreated(res, coupon.get({ plain: true }));
 });
 
-const putPromoCode = asyncHandler(async (req, res) => {
-  const promo = await PromoCode.findByPk(req.params.id);
-  if (!promo) throw new AppError('Promo code not found', 404);
-  await promo.update(req.body);
-  sendSuccess(res, promo.get({ plain: true }));
+const putCoupon = asyncHandler(async (req, res) => {
+  const coupon = await Coupon.findByPk(req.params.id);
+  if (!coupon) throw new AppError('Coupon not found', 404);
+  await coupon.update(req.body);
+  sendSuccess(res, coupon.get({ plain: true }));
 });
 
-const deletePromoCode = asyncHandler(async (req, res) => {
-  const promo = await PromoCode.findByPk(req.params.id);
-  if (!promo) throw new AppError('Promo code not found', 404);
-  await promo.destroy();
+const deleteCoupon = asyncHandler(async (req, res) => {
+  const coupon = await Coupon.findByPk(req.params.id);
+  if (!coupon) throw new AppError('Coupon not found', 404);
+  await coupon.destroy();
   sendNoContent(res);
+});
+
+const checkCouponCodeExists = asyncHandler(async (req, res) => {
+  const { code, excludeId } = req.query;
+  if (!code) {
+    return sendSuccess(res, { exists: false });
+  }
+
+  const where = { code };
+  if (excludeId) {
+    where.id = { [Op.ne]: excludeId };
+  }
+
+  const existingCoupon = await Coupon.findOne({ where });
+  sendSuccess(res, { exists: !!existingCoupon });
 });
 
 const platform = {
@@ -292,11 +308,12 @@ const platform = {
   togglePlanPopular: platformProxy((c, req) => c.put(`/internal/platform/plans/${req.params.id}/popular`, req.body).then((r) => ({ data: r.data }))),
   deletePlan: platformProxy((c, req) => c.delete(`/internal/platform/plans/${req.params.id}`).then(() => ({ status: 204 }))),
 
-  getPromoCodes,
-  getPromoCode,
-  postPromoCode,
-  putPromoCode,
-  deletePromoCode,
+  getCoupons,
+  getCoupon,
+  postCoupon,
+  putCoupon,
+  deleteCoupon,
+  checkCouponCodeExists,
   getArticles: platformProxy((c, req) => c.get('/internal/platform/articles', { params: req.query }).then((r) => ({ data: r.data }))),
   getArticle: platformProxy((c, req) => c.get(`/internal/platform/articles/${req.params.id}`).then((r) => ({ data: r.data }))),
   postArticle: platformProxy((c, req) => c.post('/internal/platform/articles', req.body).then((r) => ({ data: r.data, status: 201 }))),
