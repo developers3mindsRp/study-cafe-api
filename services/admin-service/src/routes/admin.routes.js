@@ -66,6 +66,11 @@ function register(router) {
   router.put('/admin/platform/plans/:id', requireAdmin, p.putPlan);
   router.put('/admin/platform/plans/:id/popular', requireAdmin, p.togglePlanPopular);
   router.delete('/admin/platform/plans/:id', requireAdmin, p.deletePlan);
+  router.get('/admin/platform/comparison-features', requireAdmin, p.getComparisonFeatures);
+  router.post('/admin/platform/comparison-features', requireAdmin, p.postComparisonFeature);
+  router.put('/admin/platform/comparison-features/:id', requireAdmin, p.putComparisonFeature);
+  router.delete('/admin/platform/comparison-features/:id', requireAdmin, p.deleteComparisonFeature);
+  router.put('/admin/platform/comparison-features/:featureId/availability/:planId', requireAdmin, p.setFeatureAvailability);
   router.get('/admin/platform/promo-codes', requireAdmin, p.getPromoCodes);
   router.get('/admin/platform/promo-codes/:id', requireAdmin, p.getPromoCode);
   router.post('/admin/platform/promo-codes', requireAdmin, p.postPromoCode);

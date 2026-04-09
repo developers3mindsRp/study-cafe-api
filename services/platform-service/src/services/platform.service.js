@@ -59,6 +59,32 @@ function normalizeFeatures(raw) {
     })
     .filter((l) => l.length > 0);
 }
+/**
+ * Normalize a plan's `features` value into a structured { mrp, included[], excluded[] } object.
+ * Handles every legacy format:
+ *   - { mrp, included[], excluded[] }   → returned as-is (cleaned)
+ *   - string[]                          → all treated as included, excluded = []
+ *   - string (HTML or plain)            → parsed as included lines
+ *   - null / undefined                  → { mrp: 0, included: [], excluded: [] }
+ */
+function normalizeStructuredFeatures(raw) {
+  const empty = { mrp: 0, included: [], excluded: [] };
+  if (!raw) return empty;
+
+  // Already structured object
+  if (!Array.isArray(raw) && typeof raw === 'object') {
+    return {
+      mrp: Number(raw.mrp) || 0,
+      included: Array.isArray(raw.included) ? raw.included.map(String).filter(Boolean) : [],
+      excluded: Array.isArray(raw.excluded) ? raw.excluded.map(String).filter(Boolean) : [],
+    };
+  }
+
+  // Legacy: plain string[] or HTML string → treat all as included
+  const lines = normalizeFeatures(raw);
+  return { mrp: 0, included: lines, excluded: [] };
+}
+
 const { paginate } = require('../../../../shared');
 const {
   sequelize,
@@ -69,6 +95,8 @@ const {
   PremiumPlan,
   PlanCourse,
   PlanCourseCategory,
+  PlanComparisonFeature,
+  PlanFeatureAvailability,
   Faq,
   Article,
   ArticleCategoryMap,
@@ -402,9 +430,38 @@ async function getPlansPublic() {
     ],
     attributes: ['id', 'name', 'slug', 'description', 'price', 'currency', 'duration_days', 'is_lifetime', 'features', 'is_popular', 'sort_order'],
   });
+
+  // Fetch all comparison features ordered by sort_order
+  const allCompFeatures = await PlanComparisonFeature.findAll({
+    order: [['sort_order', 'ASC'], ['id', 'ASC']],
+    attributes: ['id', 'name', 'sort_order'],
+  });
+
+  // Fetch all availability rows for the active plan ids
+  const planIds = rows.map((r) => r.id);
+  const availRows = planIds.length
+    ? await PlanFeatureAvailability.findAll({
+        where: { plan_id: planIds },
+        attributes: ['plan_id', 'feature_id', 'available'],
+      })
+    : [];
+
+  // Build a map: plan_id -> feature_id -> available (boolean)
+  const availMap = new Map();
+  for (const a of availRows) {
+    const av = a.get({ plain: true });
+    if (!availMap.has(av.plan_id)) availMap.set(av.plan_id, new Map());
+    availMap.get(av.plan_id).set(av.feature_id, !!av.available);
+  }
+
   return rows.map((r) => {
     const p = r.get({ plain: true });
-    return { ...p, features: normalizeFeatures(p.features.included) };
+    const planAvail = availMap.get(p.id) || new Map();
+    const comparison_features = allCompFeatures.map((f) => {
+      const feat = f.get({ plain: true });
+      return { id: feat.id, name: feat.name, available: planAvail.get(feat.id) ?? false };
+    });
+    return { ...p, features: normalizeStructuredFeatures(p.features), comparison_features };
   });
 }
 
@@ -440,7 +497,7 @@ async function getPlanByIdInternal(id) {
   const course_cat_ids = catRows.map((r) => Number(r.course_cat_id));
   return {
     ...p,
-    features: normalizeFeatures(p.features),
+    features: normalizeStructuredFeatures(p.features),
     course_ids,
     course_cat_ids,
   };
@@ -1034,6 +1091,38 @@ async function deleteSeoMetadata(id) {
   return deleted > 0;
 }
 
+// ── Comparison Features ─────────────────────────────────────────────
+
+async function listComparisonFeatures() {
+  const rows = await PlanComparisonFeature.findAll({
+    order: [['sort_order', 'ASC'], ['id', 'ASC']],
+  });
+  return rows.map((r) => r.get({ plain: true }));
+}
+
+async function createComparisonFeature({ name, sort_order }) {
+  const row = await PlanComparisonFeature.create({ name, sort_order: sort_order ?? 0 });
+  return row.get({ plain: true });
+}
+
+async function updateComparisonFeature(id, { name, sort_order }) {
+  const row = await PlanComparisonFeature.findByPk(id);
+  if (!row) return null;
+  await row.update({ name, sort_order });
+  return row.get({ plain: true });
+}
+
+async function deleteComparisonFeature(id) {
+  await PlanFeatureAvailability.destroy({ where: { feature_id: id } });
+  const deleted = await PlanComparisonFeature.destroy({ where: { id } });
+  return deleted > 0;
+}
+
+async function setFeatureAvailability(planId, featureId, available) {
+  const [row] = await PlanFeatureAvailability.upsert({ plan_id: planId, feature_id: featureId, available: available ? 1 : 0 });
+  return row ? row.get({ plain: true }) : { plan_id: planId, feature_id: featureId, available };
+}
+
 module.exports = {
   home: {
     getHomePublic,
@@ -1083,6 +1172,13 @@ module.exports = {
     updatePlan,
     togglePopular,
     deletePlan,
+  },
+  comparisonFeatures: {
+    listComparisonFeatures,
+    createComparisonFeature,
+    updateComparisonFeature,
+    deleteComparisonFeature,
+    setFeatureAvailability,
   },
   articles: {
     getArticlesPublic,

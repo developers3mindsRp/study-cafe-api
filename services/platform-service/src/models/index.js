@@ -40,6 +40,8 @@ const FooterData = require("./FooterData")(sequelize);
 const PremiumPlan = require("./PremiumPlan")(sequelize);
 const PlanCourse = require("./PlanCourse")(sequelize);
 const PlanCourseCategory = require("./PlanCourseCategory")(sequelize);
+const PlanComparisonFeature = require("./PlanComparisonFeature")(sequelize);
+const PlanFeatureAvailability = require("./PlanFeatureAvailability")(sequelize);
 const Faq = require("./Faq")(sequelize);
 const SeoMetadata = require("./SeoMetadata")(sequelize);
 const MediaAsset = require("./MediaAsset")(sequelize);
@@ -74,6 +76,8 @@ const models = {
   PremiumPlan,
   PlanCourse,
   PlanCourseCategory,
+  PlanComparisonFeature,
+  PlanFeatureAvailability,
   Faq,
   SeoMetadata,
   MediaAsset,

@@ -135,6 +135,41 @@ const deletePlan = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+// ── Comparison Features ────────────────────────────────────────────
+
+const getComparisonFeatures = asyncHandler(async (req, res) => {
+  const data = await platformService.comparisonFeatures.listComparisonFeatures();
+  sendSuccess(res, data);
+});
+
+const createComparisonFeature = asyncHandler(async (req, res) => {
+  const data = await platformService.comparisonFeatures.createComparisonFeature(req.body);
+  sendCreated(res, data);
+});
+
+const updateComparisonFeature = asyncHandler(async (req, res) => {
+  const data = await platformService.comparisonFeatures.updateComparisonFeature(req.params.id, req.body);
+  if (!data) throw new AppError('Feature not found', 404);
+  sendSuccess(res, data);
+});
+
+const deleteComparisonFeature = asyncHandler(async (req, res) => {
+  const ok = await platformService.comparisonFeatures.deleteComparisonFeature(req.params.id);
+  if (!ok) throw new AppError('Feature not found', 404);
+  sendNoContent(res);
+});
+
+const setFeatureAvailability = asyncHandler(async (req, res) => {
+  const { featureId, planId } = req.params;
+  const { available } = req.body;
+  const data = await platformService.comparisonFeatures.setFeatureAvailability(
+    parseInt(planId, 10),
+    parseInt(featureId, 10),
+    !!available,
+  );
+  sendSuccess(res, data);
+});
+
 // ── Articles ───────────────────────────────────────────────────────
 
 const getArticles = asyncHandler(async (req, res) => {
@@ -405,6 +440,11 @@ module.exports = {
   updatePlan,
   togglePlanPopular,
   deletePlan,
+  getComparisonFeatures,
+  createComparisonFeature,
+  updateComparisonFeature,
+  deleteComparisonFeature,
+  setFeatureAvailability,
   getArticles,
   getArticleBySlug,
   getArticlesInternal,

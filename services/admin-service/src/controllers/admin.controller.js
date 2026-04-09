@@ -291,6 +291,11 @@ const platform = {
   putPlan: platformProxy((c, req) => c.put(`/internal/platform/plans/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
   togglePlanPopular: platformProxy((c, req) => c.put(`/internal/platform/plans/${req.params.id}/popular`, req.body).then((r) => ({ data: r.data }))),
   deletePlan: platformProxy((c, req) => c.delete(`/internal/platform/plans/${req.params.id}`).then(() => ({ status: 204 }))),
+  getComparisonFeatures: platformProxy((c) => c.get('/internal/platform/comparison-features').then((r) => ({ data: r.data }))),
+  postComparisonFeature: platformProxy((c, req) => c.post('/internal/platform/comparison-features', req.body).then((r) => ({ data: r.data, status: 201 }))),
+  putComparisonFeature: platformProxy((c, req) => c.put(`/internal/platform/comparison-features/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
+  deleteComparisonFeature: platformProxy((c, req) => c.delete(`/internal/platform/comparison-features/${req.params.id}`).then(() => ({ status: 204 }))),
+  setFeatureAvailability: platformProxy((c, req) => c.put(`/internal/platform/comparison-features/${req.params.featureId}/availability/${req.params.planId}`, req.body).then((r) => ({ data: r.data }))),
 
   getPromoCodes,
   getPromoCode,

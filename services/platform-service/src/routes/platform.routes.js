@@ -47,6 +47,14 @@ function register(router) {
   router.put('/internal/platform/plans/:id', internalAuth, validate(schemas.updatePlan), controller.updatePlan);
   router.put('/internal/platform/plans/:id/popular', internalAuth, validate(schemas.idParam), controller.togglePlanPopular);
   router.delete('/internal/platform/plans/:id', internalAuth, validate(schemas.idParam), controller.deletePlan);
+
+  // ── Comparison Features ──────────────────────────────────────────
+  router.get('/internal/platform/comparison-features', internalAuth, controller.getComparisonFeatures);
+  router.post('/internal/platform/comparison-features', internalAuth, controller.createComparisonFeature);
+  router.put('/internal/platform/comparison-features/:id', internalAuth, validate(schemas.idParam), controller.updateComparisonFeature);
+  router.delete('/internal/platform/comparison-features/:id', internalAuth, validate(schemas.idParam), controller.deleteComparisonFeature);
+  router.put('/internal/platform/comparison-features/:featureId/availability/:planId', internalAuth, controller.setFeatureAvailability);
+
   router.get('/internal/platform/articles', internalAuth, validate(schemas.articleListQuery), controller.getArticlesInternal);
   router.get('/internal/platform/articles/:id', internalAuth, validate(schemas.idParam), controller.getArticleByIdInternal);
   router.post('/internal/platform/articles', internalAuth, validate(schemas.createArticle), controller.createArticle);

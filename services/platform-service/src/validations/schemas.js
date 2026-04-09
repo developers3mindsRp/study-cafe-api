@@ -148,6 +148,17 @@ const upsertFooter = {
 
 // ── Plans ───────────────────────────────────────────────────────────
 
+/** Legacy: string[] or HTML/plain string. Current admin: { mrp, included[], excluded[] } */
+const planFeaturesBody = Joi.alternatives().try(
+    Joi.array().items(Joi.string().allow('')),
+    Joi.string().allow('', null),
+    Joi.object({
+        mrp: Joi.number().min(0),
+        included: Joi.array().items(Joi.string().allow('')),
+        excluded: Joi.array().items(Joi.string().allow('')),
+    }),
+).allow(null);
+
 const createPlan = {
     body: Joi.object({
         name: Joi.string().max(255).required(),
@@ -158,7 +169,7 @@ const createPlan = {
         sale_price: Joi.number().min(0).allow(null),
         duration_days: Joi.number().integer().min(1).allow(null),
         is_lifetime: Joi.boolean().default(false),
-        features: Joi.alternatives().try(Joi.array(), Joi.string()).allow(null),
+        features: planFeaturesBody,
         is_active: Joi.boolean().default(true),
         is_popular: Joi.boolean().default(false),
         sort_order: Joi.number().integer().min(0),
@@ -180,7 +191,7 @@ const updatePlan = {
         sale_price: Joi.number().min(0).allow(null),
         duration_days: Joi.number().integer().min(1).allow(null),
         is_lifetime: Joi.boolean(),
-        features: Joi.alternatives().try(Joi.array(), Joi.string()).allow(null),
+        features: planFeaturesBody,
         is_active: Joi.boolean(),
         is_popular: Joi.boolean(),
         sort_order: Joi.number().integer().min(0),

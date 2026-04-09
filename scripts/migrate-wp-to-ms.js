@@ -658,6 +658,23 @@ async function createAllTables(tgt) {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+    -- Plan Comparison Features (platform-service): master list of rows shown in comparison table
+    CREATE TABLE IF NOT EXISTS plan_comparison_features (
+      id         INT AUTO_INCREMENT PRIMARY KEY,
+      name       VARCHAR(255) NOT NULL,
+      sort_order INT NOT NULL DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    -- Plan Feature Availability: which plans include each comparison feature
+    CREATE TABLE IF NOT EXISTS plan_feature_availability (
+      plan_id    INT NOT NULL,
+      feature_id INT NOT NULL,
+      available  TINYINT(1) NOT NULL DEFAULT 0,
+      PRIMARY KEY (plan_id, feature_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
     -- Premium Plans (platform-service)
     CREATE TABLE IF NOT EXISTS premium_plans (
       id INT AUTO_INCREMENT PRIMARY KEY,
