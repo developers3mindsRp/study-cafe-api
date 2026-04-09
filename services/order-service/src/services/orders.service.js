@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const axios = require('axios');
-const { sequelize, Order, Payment, OutboxEvent } = require('../models');
+const { sequelize, Order, Payment, OutboxEvent, Coupon } = require('../models');
+const { Op } = require('sequelize');
 const { getRedis } = require('../config/redis');
 const config = require('../config');
 const { getRazorpayInstance, getRazorpayConfig } = require('./payment.service');
@@ -283,6 +284,261 @@ async function getInvoice(userId, orderId) {
   };
 }
 
+function normalizeOrderType(type) {
+  if (!type || typeof type !== 'string') return '';
+  return type.trim().toUpperCase();
+}
+
+function parseAmount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function parseApiResponse(response) {
+  return response?.data !== undefined ? response.data : response;
+}
+
+async function fetchCourseAmount(entityId) {
+  if (!config.internalApiKey) {
+    throw new AppError('Internal API key not configured', 500);
+  }
+
+  const { data } = await axios.get(`${config.courseServiceUrl}/internal/courses/${entityId}`, {
+    timeout: 8000,
+    headers: {
+      'x-internal-api-key': config.internalApiKey,
+    },
+    validateStatus: (status) => status === 200,
+  });
+  const payload = parseApiResponse(data);
+  const price = parseAmount(payload?.price);
+  if (!price) throw new AppError('Course price unavailable', 400);
+  return price;
+}
+
+async function fetchMembershipAmount(entityId) {
+  if (!config.internalApiKey) {
+    throw new AppError('Internal API key not configured', 500);
+  }
+
+  const { data } = await axios.get(`${config.platformServiceUrl}/internal/platform/plans/${entityId}`, {
+    timeout: 8000,
+    headers: {
+      'x-internal-api-key': config.internalApiKey,
+    },
+    validateStatus: (status) => status === 200,
+  });
+  const payload = parseApiResponse(data);
+  const price = parseAmount(payload?.price);
+  if (!price) throw new AppError('Membership price unavailable', 400);
+  return price;
+}
+
+async function resolveAmountForEntity(type, entityId) {
+  const typeUpper = normalizeOrderType(type);
+  if (typeUpper === 'COURSE') {
+    return fetchCourseAmount(entityId);
+  }
+  if (typeUpper === 'MEMBERSHIP') {
+    return fetchMembershipAmount(entityId);
+  }
+  throw new AppError('Invalid type, expected COURSE or MEMBERSHIP', 400);
+}
+
+function isCouponTypeValid(coupon, typeUpper) {
+  const discountOn = String(coupon.discount_on || '').trim().toLowerCase();
+  if (typeUpper === 'COURSE') {
+    return discountOn === 'all courses' || discountOn === 'everything';
+  }
+  if (typeUpper === 'MEMBERSHIP') {
+    return discountOn === 'membership only' || discountOn === 'everything';
+  }
+  return false;
+}
+
+function getAllowedDiscountOnValues(typeUpper) {
+  if (typeUpper === 'COURSE') {
+    return ['all courses', 'everything'];
+  }
+  if (typeUpper === 'MEMBERSHIP') {
+    return ['membership only', 'everything'];
+  }
+  return [];
+}
+
+function calculateDiscount(coupon, amount) {
+  const value = parseAmount(coupon.value);
+  const maxDiscount = parseAmount(coupon.max_discount);
+  let discount = 0;
+  if (String(coupon.type || '').trim().toLowerCase() === 'percentage') {
+    discount = (amount * value) / 100;
+  } else {
+    discount = value;
+  }
+  if (maxDiscount > 0) discount = Math.min(discount, maxDiscount);
+  return Math.max(0, Math.min(discount, amount));
+}
+
+function buildCouponResult(coupon, amount, typeUpper) {
+  const now = new Date();
+  const startDate = coupon.start_date ? new Date(coupon.start_date) : null;
+  const expireDate = coupon.expire_date ? new Date(coupon.expire_date) : null;
+  const published = coupon.status === 'publish';
+  const validType = isCouponTypeValid(coupon, typeUpper);
+  const meetsMinOrder = amount >= parseAmount(coupon.min_order);
+  const dateValid = (!startDate || now >= startDate) && (!expireDate || now <= expireDate);
+  const discountAmount = calculateDiscount(coupon, amount);
+  const finalAmount = Number((amount - discountAmount).toFixed(2));
+  let canApply = published && validType && dateValid && meetsMinOrder;
+  let inactiveReason = null;
+
+  if (!validType) {
+    inactiveReason = 'Coupon not applicable for selected type';
+  } else if (!published) {
+    inactiveReason = 'Coupon is not published';
+  } else if (!dateValid) {
+    inactiveReason = startDate && now < startDate ? 'Coupon not active yet' : 'Coupon has expired';
+  } else if (!meetsMinOrder) {
+    inactiveReason = `Minimum order value ₹${parseAmount(coupon.min_order)} required`;
+  }
+
+  return {
+    id: coupon.id,
+    code: coupon.code,
+    description: coupon.description,
+    type: coupon.type,
+    value: parseAmount(coupon.value),
+    min_order: parseAmount(coupon.min_order),
+    max_discount: parseAmount(coupon.max_discount),
+    discount_on: coupon.discount_on,
+    start_date: coupon.start_date,
+    expire_date: coupon.expire_date,
+    status: coupon.status,
+    created_at: coupon.created_at,
+    amount,
+    discountAmount,
+    finalAmount,
+    canApply,
+    inactiveReason,
+  };
+}
+
+// function buildActiveCouponResult(coupon) {
+//   return {
+//     id: coupon.id,
+//     code: coupon.code,
+//     description: coupon.description,
+//     type: coupon.type,
+//     value: parseAmount(coupon.value),
+//     min_order: parseAmount(coupon.min_order),
+//     max_discount: parseAmount(coupon.max_discount),
+//     discount_on: coupon.discount_on,
+//     start_date: coupon.start_date,
+//     expire_date: coupon.expire_date,
+//     status: coupon.status,
+//     created_at: coupon.created_at,
+//     isActive: true,
+//   };
+// }
+
+async function listActiveCoupons() {
+  const now = new Date();
+  const coupons = await Coupon.findAll({
+    where: {
+      status: 'publish',
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { start_date: null },
+            { start_date: { [Op.lte]: now } },
+          ],
+        },
+        {
+          [Op.or]: [
+            { expire_date: null },
+            { expire_date: { [Op.gte]: now } },
+          ],
+        },
+      ],
+    },
+    order: [['created_at', 'DESC']],
+  });
+  return coupons.map((coupon) => coupon.get({ plain: true }));
+}
+
+async function getCouponsForEntity(userId, type, entityId) {
+  const typeUpper = normalizeOrderType(type);
+  if (!typeUpper && !entityId) {
+    return {
+      type: null,
+      entityId: null,
+      amount: null,
+      coupons: await listActiveCoupons(),
+    };
+  }
+
+  const amount = await resolveAmountForEntity(typeUpper, entityId);
+  const allowedDiscountOnValues = getAllowedDiscountOnValues(typeUpper);
+  const coupons = await Coupon.findAll({ order: [['created_at', 'DESC']] });
+  const results = coupons
+    .filter((coupon) =>
+      allowedDiscountOnValues.includes(String(coupon.discount_on || '').trim().toLowerCase())
+    )
+    .map((coupon) => buildCouponResult(coupon.get({ plain: true }), amount, typeUpper))
+    .sort((a, b) => {
+      if (a.canApply !== b.canApply) return a.canApply ? -1 : 1;
+      if (b.discountAmount !== a.discountAmount) return b.discountAmount - a.discountAmount;
+      return a.min_order - b.min_order;
+    });
+
+  return {
+    type: typeUpper,
+    entityId,
+    amount,
+    coupons: results,
+  };
+}
+
+async function applyCoupon(userId, { couponCode, type, id }) {
+  const typeUpper = normalizeOrderType(type);
+  const amount = await resolveAmountForEntity(typeUpper, id);
+  const normalizedCode = String(couponCode || '').trim().toLowerCase();
+  if (!normalizedCode) throw new AppError('Coupon code is required', 400);
+
+  const coupon = await Coupon.findOne({
+    where: sequelize.where(
+      sequelize.fn('lower', sequelize.col('code')),
+      normalizedCode,
+    ),
+  });
+  if (!coupon) throw new AppError('Coupon not found', 404);
+
+  const result = buildCouponResult(coupon.get({ plain: true }), amount, typeUpper);
+  if (!result.canApply) {
+    throw new AppError(`Coupon cannot be applied: ${result.inactiveReason}`, 400);
+  }
+
+  return {
+    applied: true,
+    coupon: {
+      id: result.id,
+      code: result.code,
+      description: result.description,
+      type: result.type,
+      value: result.value,
+      min_order: result.min_order,
+      max_discount: result.max_discount,
+      discount_on: result.discount_on,
+      start_date: result.start_date,
+      expire_date: result.expire_date,
+      status: result.status,
+    },
+    amount,
+    discount: result.discountAmount,
+    payableAmount: result.finalAmount,
+  };
+}
+
 module.exports = {
   createOrder,
   verifyOrder,
@@ -291,4 +547,6 @@ module.exports = {
   getInvoice,
   listAllOrders,
   getOrderByOrderId,
+  getCouponsForEntity,
+  applyCoupon,
 };

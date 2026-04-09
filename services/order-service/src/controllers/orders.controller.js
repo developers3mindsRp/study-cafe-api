@@ -16,6 +16,16 @@ const list = asyncHandler(async (req, res) => {
   sendSuccess(res, rows);
 });
 
+const getCoupons = asyncHandler(async (req, res) => {
+  const coupons = await ordersService.getCouponsForEntity(req.userId, req.query.type, req.query.id);
+  sendSuccess(res, coupons);
+});
+
+const applyCoupon = asyncHandler(async (req, res) => {
+  const result = await ordersService.applyCoupon(req.userId, req.body);
+  sendSuccess(res, result);
+});
+
 const listMyPurchases = asyncHandler(async (req, res) => {
   const rows = await ordersService.listMyPurchases(req.userId);
   sendSuccess(res, rows);
@@ -45,6 +55,8 @@ module.exports = {
   verify,
   list,
   listMyPurchases,
+  getCoupons,
+  applyCoupon,
   getInvoice,
   listAllInternal,
   getByOrderIdInternal,

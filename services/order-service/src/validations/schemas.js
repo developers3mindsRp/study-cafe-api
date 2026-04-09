@@ -18,6 +18,21 @@ const verifyOrder = {
     }),
 };
 
+const getCoupon = {
+    query: Joi.object({
+        type: Joi.string().uppercase().valid('COURSE', 'MEMBERSHIP'),
+        id: Joi.alternatives().try(Joi.number().integer().positive(), Joi.string().min(1)),
+    }).with('type', 'id').with('id', 'type'),
+};
+
+const applyCoupon = {
+    body: Joi.object({
+        couponCode: Joi.string().trim().required(),
+        type: Joi.string().uppercase().valid('COURSE', 'MEMBERSHIP').required(),
+        id: Joi.alternatives().try(Joi.number().integer().positive(), Joi.string().min(1)).required(),
+    }),
+};
+
 const invoiceParam = {
     params: Joi.object({
         orderId: Joi.string().required(),
@@ -27,5 +42,7 @@ const invoiceParam = {
 module.exports = {
     createOrder,
     verifyOrder,
+    getCoupon,
+    applyCoupon,
     invoiceParam,
 };
