@@ -444,6 +444,15 @@ async function createAllTables(tgt) {
       created_at DATETIME
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+    -- Media assets library (platform-service admin icons / uploads registry)
+    CREATE TABLE IF NOT EXISTS media_assets (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      url VARCHAR(512) NOT NULL,
+      label VARCHAR(128) NULL,
+      category VARCHAR(64) DEFAULT 'icon',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
     -- Forum Topics (platform-service)
     CREATE TABLE IF NOT EXISTS forum_topics (
       id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

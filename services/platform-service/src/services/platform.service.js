@@ -161,7 +161,8 @@ function buildHomeData(page) {
       subtitle: m.hero.subtitle ?? defaultHero.subtitle,
       ctaText: m.hero.ctaText ?? defaultHero.ctaText,
       ctaLink: m.hero.ctaLink ?? defaultHero.ctaLink,
-      imageUrl: m.hero.imageUrl ?? null,
+      imageUrl:  m.hero.backgroundImageUrl ?? null,
+      backgroundImageUrl: m.hero.imageUrl ?? null,
       badge: m.hero.badge ?? defaultHero.badge,
     }
     : { ...defaultHero };
