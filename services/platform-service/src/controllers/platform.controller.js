@@ -182,8 +182,24 @@ const getArticles = asyncHandler(async (req, res) => {
 });
 
 const getArticleBySlug = asyncHandler(async (req, res) => {
-  const data = await platformService.articles.getArticleBySlugPublic(req.params.slug);
+  const data = await platformService.articles.getArticleBySlugPublic(req.params.slug, req.viewer || null);
   if (!data) throw new AppError('Article not found', 404);
+  sendSuccess(res, data);
+});
+
+const getBlogSpotlightFeed = asyncHandler(async (req, res) => {
+  const recentLimit = parseInt(req.query.recent_limit ?? '3', 10);
+  const allLimit = parseInt(req.query.all_limit ?? '6', 10);
+  const authorRecentLimit = parseInt(req.query.author_recent_limit ?? '5', 10);
+  const tagLimit = parseInt(req.query.tag_limit ?? '12', 10);
+  const current_slug = req.query.current_slug ? String(req.query.current_slug).trim() : undefined;
+  const data = await platformService.articles.getBlogSpotlightFeed(req.viewer || null, {
+    recentLimit,
+    allLimit,
+    authorRecentLimit,
+    tagLimit,
+    currentSlug: current_slug || undefined,
+  });
   sendSuccess(res, data);
 });
 
@@ -446,6 +462,7 @@ module.exports = {
   deleteComparisonFeature,
   setFeatureAvailability,
   getArticles,
+  getBlogSpotlightFeed,
   getArticleBySlug,
   getArticlesInternal,
   getArticleByIdInternal,

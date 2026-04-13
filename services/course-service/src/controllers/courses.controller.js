@@ -6,6 +6,12 @@ const list = asyncHandler(async (req, res) => {
   sendSuccess(res, rows);
 });
 
+const listFeatured = asyncHandler(async (req, res) => {
+  const limit = Math.min(24, Math.max(1, parseInt(req.query.limit, 10) || 6));
+  const rows = await coursesService.listFeaturedPublished(limit);
+  sendSuccess(res, rows);
+});
+
 const getById = asyncHandler(async (req, res) => {
   const course = await coursesService.getById(req.params.id);
   if (!course) throw new AppError('Course not found', 404);
@@ -203,6 +209,7 @@ const removeBatchEnrollment = asyncHandler(async (req, res) => {
 
 module.exports = {
   list,
+  listFeatured,
   listByCategory,
   listCourseCatsPublic,
   getById,

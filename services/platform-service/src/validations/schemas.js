@@ -208,48 +208,57 @@ const articleListQuery = {
     query: Joi.object({
         page: Joi.number().integer().min(1).default(1),
         limit: Joi.number().integer().min(1).max(100).default(10),
-        status: Joi.string().valid('draft', 'publish').allow('', null),
+        status: Joi.string().valid('draft', 'publish', 'archived').allow('', null),
         search: Joi.string().max(255).allow('', null),
         sortBy: Joi.string().max(64).allow('', null),
         sortOrder: Joi.string().valid('ASC', 'DESC', 'asc', 'desc').default('DESC'),
     }),
 };
 
+const articleWriteBody = {
+    title: Joi.string().max(500),
+    slug: Joi.string().max(500).allow('', null),
+    content: Joi.string().allow('', null),
+    body: Joi.string().allow('', null),
+    excerpt: Joi.string().allow('', null),
+    sub_heading: Joi.string().allow('', null),
+    thumbnail: Joi.string().max(500).allow('', null),
+    thumbnail_url: Joi.string().max(500).allow('', null),
+    status: Joi.string().valid('draft', 'publish', 'archived'),
+    seo_title: Joi.string().max(255).allow('', null),
+    seo_description: Joi.string().allow('', null),
+    seo_keywords: Joi.string().allow('', null),
+    meta_title: Joi.string().max(500).allow('', null),
+    meta_description: Joi.string().allow('', null),
+    meta_keywords: Joi.string().max(500).allow('', null),
+    categories: Joi.array().items(Joi.number().integer().positive()),
+    tags: Joi.array().items(Joi.number().integer().positive()),
+    types: Joi.array().items(Joi.number().integer().positive()),
+    courts: Joi.array().items(Joi.number().integer().positive()),
+    category_ids: Joi.array().items(Joi.number().integer().positive()),
+    tag_ids: Joi.array().items(Joi.number().integer().positive()),
+    article_type_ids: Joi.array().items(Joi.number().integer().positive()),
+    court_ids: Joi.array().items(Joi.number().integer().positive()),
+    author_id: Joi.number().integer().positive().allow(null),
+    published_at: Joi.alternatives().try(Joi.date(), Joi.string().allow('', null)),
+    /** Public blog: full HTML for everyone vs members-only full body. */
+    blog_access_tier: Joi.string().valid('free', 'premium'),
+    /** Downloadable asset URL (PDF / judgment). */
+    rel_download_url: Joi.string().max(1000).allow('', null),
+};
+
 const createArticle = {
     body: Joi.object({
+        ...articleWriteBody,
         title: Joi.string().max(500).required(),
-        slug: Joi.string().max(500),
-        content: Joi.string().allow('', null),
-        excerpt: Joi.string().allow('', null),
-        thumbnail: Joi.string().uri().allow('', null),
-        status: Joi.string().valid('draft', 'publish').default('draft'),
-        seo_title: Joi.string().max(255).allow('', null),
-        seo_description: Joi.string().allow('', null),
-        seo_keywords: Joi.string().allow('', null),
-        categories: Joi.array().items(Joi.number().integer().positive()),
-        tags: Joi.array().items(Joi.number().integer().positive()),
-        types: Joi.array().items(Joi.number().integer().positive()),
-        courts: Joi.array().items(Joi.number().integer().positive()),
+        status: Joi.string().valid('draft', 'publish', 'archived').default('draft'),
+        blog_access_tier: Joi.string().valid('free', 'premium').default('free'),
     }),
 };
 
 const updateArticle = {
     params: idParam.params,
-    body: Joi.object({
-        title: Joi.string().max(500),
-        slug: Joi.string().max(500),
-        content: Joi.string().allow('', null),
-        excerpt: Joi.string().allow('', null),
-        thumbnail: Joi.string().uri().allow('', null),
-        status: Joi.string().valid('draft', 'publish'),
-        seo_title: Joi.string().max(255).allow('', null),
-        seo_description: Joi.string().allow('', null),
-        seo_keywords: Joi.string().allow('', null),
-        categories: Joi.array().items(Joi.number().integer().positive()),
-        tags: Joi.array().items(Joi.number().integer().positive()),
-        types: Joi.array().items(Joi.number().integer().positive()),
-        courts: Joi.array().items(Joi.number().integer().positive()),
-    }),
+    body: Joi.object(articleWriteBody),
 };
 
 // ── CMS pages ────────────────────────────────────────────────────────

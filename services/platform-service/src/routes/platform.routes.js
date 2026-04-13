@@ -1,5 +1,6 @@
 const controller = require('../controllers/platform.controller');
 const { internalAuth } = require('../middleware');
+const { optionalWebUser } = require('../middleware/optionalWebUser');
 const { uploadImage: uploadImageMw } = require('../middleware/upload');
 const schemas = require('../validations/schemas');
 const { validate } = require('../../../../shared');
@@ -14,7 +15,8 @@ function register(router) {
   router.get('/platform/plans/:slug', validate(schemas.slugParam), controller.getPlanBySlug);
   router.get('/platform/memberships', controller.getPlans);
   router.get('/platform/articles', controller.getArticles);
-  router.get('/platform/articles/:slug', validate(schemas.slugParam), controller.getArticleBySlug);
+  router.get('/platform/articles/blog-spotlight', optionalWebUser, controller.getBlogSpotlightFeed);
+  router.get('/platform/articles/:slug', optionalWebUser, validate(schemas.slugParam), controller.getArticleBySlug);
   router.get('/platform/article-categories', controller.getArticleCategories);
   router.get('/platform/cms-pages/:slug', validate(schemas.slugParam), controller.getCmsPageBySlug);
 

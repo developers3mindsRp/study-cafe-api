@@ -202,6 +202,33 @@ const coursesService = {
     });
   },
 
+  /** Homepage / marketing: latest published courses (must match GET /courses/featured). */
+  async listFeaturedPublished(limit = 6) {
+    const lim = Math.min(24, Math.max(1, parseInt(String(limit), 10) || 6));
+    const rows = await Course.findAll({
+      where: { is_published: true },
+      order: [["created_at", "DESC"]],
+      limit: lim,
+      attributes: [
+        "id",
+        "title",
+        "slug",
+        "brief_description",
+        "price",
+        "sale_price",
+        "thumbnail_url",
+        "is_published",
+        "created_at",
+        "language",
+      ],
+    });
+    return rows.map((r) => {
+      const d = r.get({ plain: true });
+      d.language = normalizeLanguage(d.language);
+      return d;
+    });
+  },
+
   async listAll() {
     const rows = await Course.findAll({
       order: [

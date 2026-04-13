@@ -8,6 +8,8 @@ function register(router) {
   router.get('/courses', coursesController.list);
   router.get('/course-cats', coursesController.listCourseCatsPublic);
   router.get('/courses/by-category', coursesController.listByCategory);
+  // Static path before /:id — "featured" is not a numeric id
+  router.get('/courses/featured', coursesController.listFeatured);
   // Slug-based lookup (must be before /:id to avoid being caught as a numeric id)
   router.get('/courses/slug/:slug', coursesController.getBySlug);
   router.get('/courses/slug/:slug/sessions', coursesController.getSessionsBySlug);

@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { User, Role } = require('../models');
+const { Op } = require('sequelize');
+const { User, Role, UserMembership } = require('../models');
 const { getRedis } = require('../config/redis');
 const config = require('../config');
 const { getEffectivePermissions } = require('../config/permissions');
@@ -20,6 +21,23 @@ function verifyAccess(token) {
 
 function verifyRefresh(token) {
   return jwt.verify(token, config.jwt.refreshSecret);
+}
+
+async function hasActiveMembershipForUserId(userId) {
+  if (userId == null) return false;
+  const uid = Number(userId);
+  if (!Number.isFinite(uid)) return false;
+  const now = new Date();
+  const row = await UserMembership.findOne({
+    where: {
+      user_id: uid,
+      starts_at: { [Op.lte]: now },
+      expires_at: { [Op.gte]: now },
+    },
+    order: [['expires_at', 'DESC']],
+    attributes: ['id'],
+  });
+  return !!row;
 }
 
 async function register({ email, password, name }) {
@@ -43,7 +61,13 @@ async function register({ email, password, name }) {
     attributes: ['id', 'email', 'name'],
   });
   const r = withRole.get({ plain: true });
-  return { id: r.id, email: r.email, name: r.name, role: r.Role?.name || 'user' };
+  return {
+    id: r.id,
+    email: r.email,
+    name: r.name,
+    role: r.Role?.name || 'user',
+    has_active_membership: false,
+  };
 }
 
 async function login({ email, password }) {
@@ -62,6 +86,7 @@ async function login({ email, password }) {
     await redis.setEx(`token:${plain.id}`, config.cacheTtl, accessToken);
   } catch (_) {}
   const permissions = getEffectivePermissions(role, plain.permission_overrides);
+  const has_active_membership = await hasActiveMembershipForUserId(plain.id);
   return {
     token: accessToken,
     accessToken,
@@ -72,6 +97,7 @@ async function login({ email, password }) {
       name: plain.name || '',
       role,
       permissions,
+      has_active_membership,
     },
     expiresIn: 3600,
   };
@@ -88,6 +114,7 @@ async function validateToken(token) {
   const r = user.get({ plain: true });
   const role = r.Role?.name || 'user';
   const permissions = getEffectivePermissions(role, r.permission_overrides);
+  const has_active_membership = await hasActiveMembershipForUserId(r.id);
   return {
     userId: r.id,
     id: String(r.id),
@@ -95,6 +122,7 @@ async function validateToken(token) {
     name: r.name || '',
     role,
     permissions,
+    has_active_membership,
   };
 }
 
@@ -131,4 +159,5 @@ module.exports = {
   validateToken,
   refreshTokens,
   changePassword,
+  hasActiveMembershipForUserId,
 };

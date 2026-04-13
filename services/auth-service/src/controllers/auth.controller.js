@@ -7,7 +7,13 @@ const register = asyncHandler(async (req, res) => {
   const accessToken = authService.signAccess({ userId: user.id, email: user.email, role: user.role });
   const refreshToken = authService.signRefresh({ userId: user.id });
   sendCreated(res, {
-    user: { id: user.id, email: user.email, name: user.name, role: user.role },
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      has_active_membership: !!user.has_active_membership,
+    },
     accessToken,
     refreshToken,
     expiresIn: 3600,
@@ -46,6 +52,7 @@ const me = asyncHandler(async (req, res) => {
     name: user.name || '',
     role: user.role,
     permissions: user.permissions || [],
+    has_active_membership: !!user.has_active_membership,
   });
 });
 
