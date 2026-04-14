@@ -349,6 +349,37 @@ const uploadImage = asyncHandler(async (req, res) => {
   sendSuccess(res, payload);
 });
 
+// ── Affiliate proxy handlers ───────────────────────────────────────
+
+const getAffiliateHistory = asyncHandler(async (req, res) => {
+  const { data } = await courseClient.get('/internal/affiliate/history');
+  sendSuccess(res, data);
+});
+
+const getWithdrawalRequests = asyncHandler(async (req, res) => {
+  const { data } = await courseClient.get('/internal/affiliate/withdrawals');
+  sendSuccess(res, data);
+});
+
+const getAffiliateBalance = asyncHandler(async (req, res) => {
+  const { data } = await courseClient.get(`/internal/affiliate/balance/${req.params.userId}`);
+  sendSuccess(res, data);
+});
+
+const createWithdrawalRequest = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await courseClient.post('/internal/affiliate/withdrawals', req.body);
+  await adminLogsService.logAction(adminId, 'CREATE_WITHDRAWAL_REQUEST', 'withdrawal_request', String(data.id), req.body, req.ip);
+  sendCreated(res, data);
+});
+
+const updateWithdrawalStatus = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await courseClient.patch(`/internal/affiliate/withdrawals/${req.params.id}`, req.body);
+  await adminLogsService.logAction(adminId, 'UPDATE_WITHDRAWAL_STATUS', 'withdrawal_request', req.params.id, req.body, req.ip);
+  sendSuccess(res, data);
+});
+
 module.exports = {
   me,
   getPaymentConfigInternal,
@@ -384,4 +415,9 @@ module.exports = {
   getOrderByOrderId,
   platform,
   uploadImage,
+  getAffiliateHistory,
+  getWithdrawalRequests,
+  getAffiliateBalance,
+  createWithdrawalRequest,
+  updateWithdrawalStatus,
 };

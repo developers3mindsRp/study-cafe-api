@@ -34,6 +34,9 @@ const CourseAuthor = require('./CourseAuthor')(sequelize);
 const Enrollment = require('./Enrollment')(sequelize);
 const CoursePageSetting = require('./CoursePageSetting')(sequelize);
 const BatchEnrollment = require('./BatchEnrollment')(sequelize);
+const AffiliateHistory = require('./AffiliateHistory')(sequelize);
+const WithdrawalRequest = require('./WithdrawalRequest')(sequelize);
+const AffiliateBalance = require('./AffiliateBalance')(sequelize);
 
 Course.associate({ Batch, Material, CourseCat, CourseCategory, CourseAuthor, Enrollment });
 Batch.associate({ Course, Session });
@@ -43,7 +46,22 @@ Material.associate({ Course });
 BatchEnrollment.associate({ Batch });
 Batch.hasMany(BatchEnrollment, { foreignKey: 'batch_id', as: 'enrollments' });
 
-const models = { Course, Batch, Session, Recording, Material, CourseCat, CourseCategory, CourseAuthor, Enrollment, CoursePageSetting, BatchEnrollment };
+const models = { 
+  Course, 
+  Batch, 
+  Session, 
+  Recording, 
+  Material, 
+  CourseCat, 
+  CourseCategory, 
+  CourseAuthor, 
+  Enrollment, 
+  CoursePageSetting, 
+  BatchEnrollment,
+  AffiliateHistory,
+  WithdrawalRequest,
+  AffiliateBalance
+};
 
 async function connect() {
   try {

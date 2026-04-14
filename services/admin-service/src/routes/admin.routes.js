@@ -94,6 +94,13 @@ function register(router) {
   router.get('/admin/platform/media-assets', requireAdmin, p.getMediaAssets);
   router.post('/admin/platform/media-assets', requireAdmin, p.postMediaAsset);
   router.delete('/admin/platform/media-assets/:id', requireAdmin, p.deleteMediaAsset);
+
+  // ── Affiliate routes ───────────────────────────────────────────────
+  router.get('/admin/affiliate/history', requireAdmin, controller.getAffiliateHistory);
+  router.get('/admin/affiliate/withdrawals', requireAdmin, controller.getWithdrawalRequests);
+  router.get('/admin/affiliate/balance/:userId', requireAdmin, controller.getAffiliateBalance);
+  router.post('/admin/affiliate/withdrawals', requireAdmin, controller.createWithdrawalRequest);
+  router.patch('/admin/affiliate/withdrawals/:id', requireAdmin, controller.updateWithdrawalStatus);
 }
 
 module.exports = { register };
