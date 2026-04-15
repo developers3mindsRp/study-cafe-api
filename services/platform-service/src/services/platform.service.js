@@ -108,6 +108,7 @@ const {
   ArticleType,
   Court,
   MediaAsset,
+  ContactInquiry,
 } = require('../models');
 
 /** Get display_name for one author from users table (same DB). */
@@ -1036,6 +1037,26 @@ async function deleteFaq(id) {
   return deleted > 0;
 }
 
+async function createContactInquiry(data) {
+  const row = await ContactInquiry.create({
+    first_name: data.first_name,
+    last_name: data.last_name,
+    email: data.email,
+    mobile_number: data.mobile_number,
+    country_code: data.country_code || 'IN',
+    subject: data.subject || null,
+    message: data.message,
+    status: 'new',
+  });
+  return row.get({ plain: true });
+}
+
+async function getContactInquiry() {
+  const rows = await ContactInquiry.findAll({
+    order: [['id', 'DESC']],
+  });
+  return rows.map((r) => r.get({ plain: true }));
+}
 // ── SEO Metadata ───────────────────────────────────────────────────
 
 async function getSeoMetadataInternal() {
@@ -1150,6 +1171,10 @@ module.exports = {
     createFaq,
     updateFaq,
     deleteFaq,
+  },
+  contactInquiries: {
+    createContactInquiry,
+    getContactInquiry,
   },
   seo: {
     getSeoMetadataInternal,

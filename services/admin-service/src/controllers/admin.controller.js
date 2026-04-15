@@ -312,6 +312,7 @@ const platform = {
   putComparisonFeature: platformProxy((c, req) => c.put(`/internal/platform/comparison-features/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
   deleteComparisonFeature: platformProxy((c, req) => c.delete(`/internal/platform/comparison-features/${req.params.id}`).then(() => ({ status: 204 }))),
   setFeatureAvailability: platformProxy((c, req) => c.put(`/internal/platform/comparison-features/${req.params.featureId}/availability/${req.params.planId}`, req.body).then((r) => ({ data: r.data }))),
+  contactInquiries: platformProxy((c) => c.get('/internal/platform/contact-inquiries').then((r) => ({ data: r.data }))),
 
   getCoupons,
   getCoupon,

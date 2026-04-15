@@ -45,6 +45,7 @@ const PlanFeatureAvailability = require("./PlanFeatureAvailability")(sequelize);
 const Faq = require("./Faq")(sequelize);
 const SeoMetadata = require("./SeoMetadata")(sequelize);
 const MediaAsset = require("./MediaAsset")(sequelize);
+const ContactInquiry = require("./ContactInquiry")(sequelize);
 
 Article.associate({
   Comment,
@@ -81,6 +82,7 @@ const models = {
   Faq,
   SeoMetadata,
   MediaAsset,
+  ContactInquiry,
 };
 
 async function connect() {

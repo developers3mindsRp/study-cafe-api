@@ -118,6 +118,20 @@ const updateFaq = {
     }),
 };
 
+// ── Contact Us ───────────────────────────────────────────────────────
+
+const createContactInquiry = {
+    body: Joi.object({
+        first_name: Joi.string().max(100).required(),
+        last_name: Joi.string().max(100).required(),
+        email: Joi.string().email().max(255).required(),
+        mobile_number: Joi.string().max(30).required(),
+        country_code: Joi.string().max(8).allow('', null).default('IN'),
+        subject: Joi.string().max(255).allow('', null),
+        message: Joi.string().max(5000).required(),
+    }),
+};
+
 // ── Article Categories ──────────────────────────────────────────────
 
 const createArticleCategory = {
@@ -305,6 +319,7 @@ module.exports = {
     updateTestimonial,
     createFaq,
     updateFaq,
+    createContactInquiry,
     upsertFooter,
     createPlan,
     updatePlan,
