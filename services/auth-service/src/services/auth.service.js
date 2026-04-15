@@ -74,7 +74,7 @@ async function login({ email, password }) {
   const user = await User.scope('withPassword').findOne({
     where: { email, is_active: true },
     include: [{ model: Role, as: 'Role', attributes: ['name'] }],
-    attributes: ['id', 'email', 'name', 'role_id', 'password_hash', 'permission_overrides'],
+    attributes: ['id', 'email', 'name', 'bio', 'role_id', 'password_hash', 'permission_overrides'],
   });
   if (!user || !(await bcrypt.compare(password, user.password_hash))) return null;
   const plain = user.get({ plain: true });
@@ -95,6 +95,7 @@ async function login({ email, password }) {
       id: String(plain.id),
       email: plain.email,
       name: plain.name || '',
+      bio: plain.bio != null && String(plain.bio).trim() !== '' ? String(plain.bio) : null,
       role,
       permissions,
       has_active_membership,
@@ -108,7 +109,7 @@ async function validateToken(token) {
   const user = await User.findByPk(decoded.userId, {
     where: { is_active: true },
     include: [{ model: Role, as: 'Role', attributes: ['name'] }],
-    attributes: ['id', 'email', 'name', 'permission_overrides'],
+    attributes: ['id', 'email', 'name', 'bio', 'permission_overrides'],
   });
   if (!user) return null;
   const r = user.get({ plain: true });
@@ -120,6 +121,7 @@ async function validateToken(token) {
     id: String(r.id),
     email: r.email,
     name: r.name || '',
+    bio: r.bio != null && String(r.bio).trim() !== '' ? String(r.bio) : null,
     role,
     permissions,
     has_active_membership,

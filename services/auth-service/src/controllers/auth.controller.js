@@ -50,6 +50,7 @@ const me = asyncHandler(async (req, res) => {
     id: user.id || String(user.userId),
     email: user.email,
     name: user.name || '',
+    bio: user.bio != null ? String(user.bio) : null,
     role: user.role,
     permissions: user.permissions || [],
     has_active_membership: !!user.has_active_membership,

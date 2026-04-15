@@ -55,4 +55,36 @@ async function requireUserId(req, res, next) {
   }
 }
 
-module.exports = { getUserId, requireUserId };
+/**
+ * Like requireUserId but does NOT 401 — sets req.userId to null if anonymous.
+ * Use for routes that work for everyone but may personalise for logged-in users.
+ */
+async function optionalUserId(req, _res, next) {
+  try {
+    let userId = getUserId(req);
+
+    if (!userId && req.headers.authorization) {
+      try {
+        const { data: body } = await axios.get(`${config.authServiceUrl}/auth/validate`, {
+          headers: { Authorization: req.headers.authorization },
+          timeout: 5000,
+        });
+        const u =
+          body && typeof body === 'object' && body.data != null && typeof body.data === 'object'
+            ? body.data
+            : body;
+        const raw = u?.userId ?? u?.id;
+        userId = raw != null ? parseUserId(raw) : null;
+      } catch {
+        // token invalid / expired — treat as anonymous
+      }
+    }
+
+    req.userId = userId ?? null;
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getUserId, requireUserId, optionalUserId };
