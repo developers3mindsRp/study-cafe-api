@@ -376,7 +376,7 @@ const createContactInquiry = asyncHandler(async (req, res) => {
 });
 
 const getContactInquiryInternal = asyncHandler(async (req, res) => {
-  const data = await platformService.contactInquiries.getContactsInternal(req.body);
+  const data = await platformService.contactInquiries.getContactInquiry();
   sendSuccess(res, data);
 });
 

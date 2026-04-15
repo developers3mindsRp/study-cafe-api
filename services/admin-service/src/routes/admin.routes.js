@@ -96,6 +96,7 @@ function register(router) {
   router.post('/admin/upload', requireAdmin, uploadImageMw, controller.uploadImage);
 
   // ── Media assets (icons library) ────────────────────────────────────
+  router.get('/admin/platform/contact-inquiries', requireAdmin, p.contactInquiries);
   router.get('/admin/platform/media-assets', requireAdmin, p.getMediaAssets);
   router.post('/admin/platform/media-assets', requireAdmin, p.postMediaAsset);
   router.delete('/admin/platform/media-assets/:id', requireAdmin, p.deleteMediaAsset);

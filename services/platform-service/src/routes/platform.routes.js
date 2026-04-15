@@ -49,7 +49,7 @@ function register(router) {
   router.put('/internal/platform/plans/:id', internalAuth, validate(schemas.updatePlan), controller.updatePlan);
   router.put('/internal/platform/plans/:id/popular', internalAuth, validate(schemas.idParam), controller.togglePlanPopular);
   router.delete('/internal/platform/plans/:id', internalAuth, validate(schemas.idParam), controller.deletePlan);
-  router.get('/internal/plaform/contact-inquiries', internalAuth, controller.getContactInquiryInternal);
+  router.get('/internal/platform/contact-inquiries', internalAuth, controller.getContactInquiryInternal);
 
   // ── Comparison Features ──────────────────────────────────────────
   router.get('/internal/platform/comparison-features', internalAuth, controller.getComparisonFeatures);
