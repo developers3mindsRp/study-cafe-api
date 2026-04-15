@@ -20,6 +20,7 @@ function mapUserToProfile(userRow) {
     city: u.city || undefined,
     state: u.state || undefined,
     country: u.country || undefined,
+    bio: u.bio != null && String(u.bio).trim() !== '' ? String(u.bio) : undefined,
     createdAt: u.created_at,
     updatedAt: u.updated_at,
   };
@@ -49,12 +50,17 @@ async function updateProfile(userId, body) {
     'state',
     'country',
     'profile_pic_url',
+    'bio',
   ];
   const patch = {};
   for (const k of allowed) {
     if (body[k] !== undefined) patch[k] = body[k];
   }
   if (body.avatar !== undefined) patch.profile_pic_url = body.avatar;
+  if (patch.bio !== undefined) {
+    patch.bio =
+      patch.bio == null || String(patch.bio).trim() === '' ? null : String(patch.bio);
+  }
 
   await user.update(patch);
   return getProfile(userId);

@@ -182,6 +182,7 @@ async function createAllTables(tgt) {
       youtube VARCHAR(500),
       gst VARCHAR(100),
       account_status VARCHAR(50),
+      bio TEXT NULL,
       created_at DATETIME,
       updated_at DATETIME,
       UNIQUE KEY idx_email (email)
@@ -351,6 +352,7 @@ async function createAllTables(tgt) {
       status VARCHAR(20) DEFAULT 'draft',
       start_date DATETIME,
       end_date DATETIME,
+      affiliate_commission DECIMAL(10,2) NOT NULL DEFAULT 0,
       created_at DATETIME,
       updated_at DATETIME
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -826,9 +828,9 @@ async function migrateUsers(src, tgt) {
         const values = chunk.map(u => {
             const passHash = passwords[u.wp_user_id] || null;
             const email = u.email || `wp_${u.wp_user_id || u.id}@placeholder.studycafe.in`;
-            return `(${u.id}, ${esc(u.wp_user_id)}, ${esc(email)}, ${esc(passHash)}, ${esc(u.display_name)}, ${esc(u.display_name)}, ${esc(u.login)}, ${esc(u.first_name)}, ${esc(u.last_name)}, ${esc(u.user_nicename)}, ${esc(u.user_url)}, ${esc(u.phone)}, ${esc(u.profession)}, ${esc(u.designation)}, ${esc(u.company)}, ${esc(u.city)}, ${esc(u.state)}, ${esc(u.country)}, ${esc(u.profile_pic_url)}, ${esc(u.membership)}, ${esc(u.plan)}, ${defaultUserRoleId}, 'user', 1, ${esc(u.status)}, ${esc(u.facebook)}, ${esc(u.twitter)}, ${esc(u.linkedin)}, ${esc(u.instagram)}, ${esc(u.youtube)}, ${esc(u.gst)}, ${esc(u.account_status)}, ${escDate(u.created_at)}, ${escDate(u.created_at)})`;
+            return `(${u.id}, ${esc(u.wp_user_id)}, ${esc(email)}, ${esc(passHash)}, ${esc(u.display_name)}, ${esc(u.display_name)}, ${esc(u.login)}, ${esc(u.first_name)}, ${esc(u.last_name)}, ${esc(u.user_nicename)}, ${esc(u.user_url)}, ${esc(u.phone)}, ${esc(u.profession)}, ${esc(u.designation)}, ${esc(u.company)}, ${esc(u.city)}, ${esc(u.state)}, ${esc(u.country)}, ${esc(u.profile_pic_url)}, ${esc(u.membership)}, ${esc(u.plan)}, ${defaultUserRoleId}, 'user', 1, ${esc(u.status)}, ${esc(u.facebook)}, ${esc(u.twitter)}, ${esc(u.linkedin)}, ${esc(u.instagram)}, ${esc(u.youtube)}, ${esc(u.gst)}, ${esc(u.account_status)}, ${esc(u.bio)}, ${escDate(u.created_at)}, ${escDate(u.created_at)})`;
         }).join(',');
-        await tgt.query(`INSERT IGNORE INTO users (id, wp_user_id, email, password_hash, name, display_name, login, first_name, last_name, user_nicename, user_url, phone, profession, designation, company, city, state, country, profile_pic_url, membership, plan, role_id, role, is_active, status, facebook, twitter, linkedin, instagram, youtube, gst, account_status, created_at, updated_at) VALUES ${values}`, { raw: true });
+        await tgt.query(`INSERT IGNORE INTO users (id, wp_user_id, email, password_hash, name, display_name, login, first_name, last_name, user_nicename, user_url, phone, profession, designation, company, city, state, country, profile_pic_url, membership, plan, role_id, role, is_active, status, facebook, twitter, linkedin, instagram, youtube, gst, account_status, bio, created_at, updated_at) VALUES ${values}`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allUsers.length)}/${allUsers.length}\r`);
     }
     console.log(`   ✅ ${allUsers.length} users migrated (default role: user)`);

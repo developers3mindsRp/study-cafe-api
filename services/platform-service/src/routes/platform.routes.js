@@ -16,6 +16,12 @@ function register(router) {
   router.get('/platform/memberships', controller.getPlans);
   router.get('/platform/articles', controller.getArticles);
   router.get('/platform/articles/blog-spotlight', optionalWebUser, controller.getBlogSpotlightFeed);
+  router.get(
+    '/platform/articles/:slug/up-next',
+    optionalWebUser,
+    validate(schemas.slugParam),
+    controller.getArticleUpNext,
+  );
   router.get('/platform/articles/:slug', optionalWebUser, validate(schemas.slugParam), controller.getArticleBySlug);
   router.get('/platform/article-categories', controller.getArticleCategories);
   router.get('/platform/cms-pages/:slug', validate(schemas.slugParam), controller.getCmsPageBySlug);

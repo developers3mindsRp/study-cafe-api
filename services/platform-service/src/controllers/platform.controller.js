@@ -187,6 +187,20 @@ const getArticleBySlug = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+const getArticleUpNext = asyncHandler(async (req, res) => {
+  const raw = req.query.limit;
+  const parsed = raw !== undefined && raw !== '' ? parseInt(String(raw), 10) : NaN;
+  const requested = Number.isFinite(parsed) && parsed > 0 ? parsed : 6;
+  /** At least 3, at most 10; default 6 when `limit` omitted. */
+  const lim = Math.min(10, Math.max(3, requested));
+  const data = await platformService.articles.getUpNextArticlesBySlugPublic(
+    req.params.slug,
+    req.viewer || null,
+    lim,
+  );
+  sendSuccess(res, data);
+});
+
 const getBlogSpotlightFeed = asyncHandler(async (req, res) => {
   const recentLimit = parseInt(req.query.recent_limit ?? '3', 10);
   const allLimit = parseInt(req.query.all_limit ?? '6', 10);
@@ -464,6 +478,7 @@ module.exports = {
   getArticles,
   getBlogSpotlightFeed,
   getArticleBySlug,
+  getArticleUpNext,
   getArticlesInternal,
   getArticleByIdInternal,
   createArticle,

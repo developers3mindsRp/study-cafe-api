@@ -473,7 +473,26 @@ async function getPlanBySlugPublic(slug) {
   });
   if (!row) return null;
   const p = row.get({ plain: true });
-  return { ...p, features: normalizeFeatures(p.features) };
+
+  const allCompFeatures = await PlanComparisonFeature.findAll({
+    order: [['sort_order', 'ASC'], ['id', 'ASC']],
+    attributes: ['id', 'name', 'sort_order'],
+  });
+  const availRows = await PlanFeatureAvailability.findAll({
+    where: { plan_id: p.id },
+    attributes: ['plan_id', 'feature_id', 'available'],
+  });
+  const availMap = new Map();
+  for (const a of availRows) {
+    const av = a.get({ plain: true });
+    availMap.set(av.feature_id, !!av.available);
+  }
+  const comparison_features = allCompFeatures.map((f) => {
+    const feat = f.get({ plain: true });
+    return { id: feat.id, name: feat.name, available: availMap.get(feat.id) ?? false };
+  });
+
+  return { ...p, features: normalizeStructuredFeatures(p.features), comparison_features };
 }
 
 async function getPlansInternal() {
@@ -743,6 +762,7 @@ function attachAccessAndAuthorsToArticles(plainRows, authorNameMap, articleCats,
       slug: p.slug || '',
       excerpt: p.excerpt || null,
       sub_heading: p.sub_heading || null,
+      meta_description: p.meta_description ?? null,
       thumbnail_url: p.thumbnail_url || null,
       cover_image_url: p.thumbnail_url || null,
       author_id: p.author_id,
@@ -757,6 +777,7 @@ function attachAccessAndAuthorsToArticles(plainRows, authorNameMap, articleCats,
         show_read_more_cta: !access.can_read_full && blog_access_tier === 'premium',
       },
       categories: articleCats.get(Number(p.id)) || [],
+      description_preview: p.description_preview ?? null,
     };
   });
 }
@@ -780,7 +801,7 @@ async function getBlogSpotlightFeed(viewer, options = {}) {
     const focusRow = await Article.findOne({
       where: { slug: currentSlug, status: 'publish' },
       attributes: [
-        'id', 'title', 'slug', 'excerpt', 'content', 'sub_heading', 'thumbnail_url', 'author_id',
+        'id', 'title', 'slug', 'excerpt', 'content', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
         'published_at', 'created_at', 'updated_at', 'blog_access_tier',
       ],
     });
@@ -800,7 +821,7 @@ async function getBlogSpotlightFeed(viewer, options = {}) {
     const moreRows = await Article.findAll({
       where: { status: 'publish', id: { [Op.ne]: focusId } },
       attributes: [
-        'id', 'title', 'slug', 'excerpt', 'sub_heading', 'thumbnail_url', 'author_id',
+        'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
         'published_at', 'created_at', 'updated_at', 'blog_access_tier',
       ],
       order: [['published_at', 'DESC'], ['id', 'DESC']],
@@ -819,7 +840,7 @@ async function getBlogSpotlightFeed(viewer, options = {}) {
           id: { [Op.ne]: focusId },
         },
         attributes: [
-          'id', 'title', 'slug', 'excerpt', 'sub_heading', 'thumbnail_url', 'author_id',
+          'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
           'published_at', 'created_at', 'updated_at', 'blog_access_tier',
         ],
         order: [['published_at', 'DESC'], ['id', 'DESC']],
@@ -858,7 +879,7 @@ async function getBlogSpotlightFeed(viewer, options = {}) {
   const heroRow = await Article.findOne({
     where: { status: 'publish' },
     attributes: [
-      'id', 'title', 'slug', 'excerpt', 'content', 'sub_heading', 'thumbnail_url', 'author_id',
+      'id', 'title', 'slug', 'excerpt', 'content', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
       'published_at', 'created_at', 'updated_at', 'blog_access_tier',
     ],
     order: [
@@ -884,7 +905,7 @@ async function getBlogSpotlightFeed(viewer, options = {}) {
   const moreRows = await Article.findAll({
     where: { status: 'publish', id: { [Op.ne]: heroId } },
     attributes: [
-      'id', 'title', 'slug', 'excerpt', 'sub_heading', 'thumbnail_url', 'author_id',
+      'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
       'published_at', 'created_at', 'updated_at', 'blog_access_tier',
     ],
     order: [
@@ -907,7 +928,7 @@ async function getBlogSpotlightFeed(viewer, options = {}) {
         id: { [Op.ne]: heroId },
       },
       attributes: [
-        'id', 'title', 'slug', 'excerpt', 'sub_heading', 'thumbnail_url', 'author_id',
+        'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
         'published_at', 'created_at', 'updated_at', 'blog_access_tier',
       ],
       order: [['published_at', 'DESC'], ['id', 'DESC']],
@@ -928,9 +949,7 @@ async function getBlogSpotlightFeed(viewer, options = {}) {
   ]);
 
   const heroCard = attachAccessAndAuthorsToArticles([hero], authorNameMap, articleCats, viewer)[0];
-  const excerptPlain = stripTags(hero.excerpt || '');
-  const contentPlain = stripTags(hero.content || '');
-  heroCard.description_preview = (excerptPlain || contentPlain).slice(0, 560);
+  heroCard.description_preview = buildDescriptionPreviewFromArticleRow(hero, 560);
 
   return {
     hero: heroCard,
@@ -972,6 +991,60 @@ function stripTags(html) {
     .trim();
 }
 
+function stripRelatedShortcodesAndMarkers(html) {
+  let s = String(html || '');
+  s = s.replace(/\[related\s+id=['"]\d+['"]\]/gi, ' ');
+  s = s.replace(/<div[^>]*related-article-inline[^>]*>[\s\S]*?<\/div>/gi, ' ');
+  return s;
+}
+
+function sanitizePreviewPlain(text) {
+  if (!text) return '';
+  let s = String(text).replace(/\[related\s+id=['"]\d+['"]\]/gi, ' ');
+  s = s.replace(/\bAlso\s+Read\b[:\s]*/gi, ' ');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+const MIN_PROPER_DESC_LEN = 60;
+const BODY_SNIPPET_LEN = 150;
+
+function buildBodySnippetPlain(contentHtml, maxLen = BODY_SNIPPET_LEN) {
+  const body = stripTags(stripRelatedShortcodesAndMarkers(contentHtml || '')).trim();
+  const cleaned = sanitizePreviewPlain(body);
+  if (!cleaned) return '';
+  return cleaned.length > maxLen ? `${cleaned.slice(0, maxLen - 1)}…` : cleaned;
+}
+
+function teaserFromExcerptSubMetaOnly(p) {
+  const title = stripTags(p.title || '').toLowerCase();
+  const pick = (s) => {
+    const t = stripTags(s || '').trim();
+    if (!t || t.toLowerCase() === title) return '';
+    return t;
+  };
+  let ex = pick(p.excerpt);
+  const sub = pick(p.sub_heading);
+  const meta = pick(p.meta_description);
+  let text = ex;
+  if (ex.length < 80) {
+    text = [ex, sub, meta].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  }
+  return text ? sanitizePreviewPlain(text) : '';
+}
+
+/**
+ * Hero / list preview: excerpt + sub + meta when substantive; else a short body snippet (no related / Also read).
+ */
+function buildDescriptionPreviewFromArticleRow(p, maxLen = 560) {
+  const fromFields = teaserFromExcerptSubMetaOnly(p);
+  if (fromFields && fromFields.length >= MIN_PROPER_DESC_LEN) {
+    return fromFields.length > maxLen ? `${fromFields.slice(0, maxLen - 1)}…` : fromFields;
+  }
+  const snippet = buildBodySnippetPlain(p.content || '', BODY_SNIPPET_LEN);
+  if (snippet) return snippet;
+  return fromFields || null;
+}
+
 function escapeHtmlText(s) {
   return String(s)
     .replace(/&/g, '&amp;')
@@ -982,7 +1055,7 @@ function escapeHtmlText(s) {
 
 function buildPremiumPreviewHtml(excerpt, fullContent) {
   if (excerpt && String(excerpt).trim()) return String(excerpt);
-  const plain = stripTags(fullContent);
+  const plain = stripTags(stripRelatedShortcodesAndMarkers(fullContent));
   const cut = plain.length > 560 ? `${plain.slice(0, 560)}…` : plain;
   return `<p>${escapeHtmlText(cut)}</p>`;
 }
@@ -1037,8 +1110,6 @@ async function getRelatedArticlesForArticle(articleId, limit = 4) {
 
   return rows.map((r) => {
     const x = r.get({ plain: true });
-    const excerptPlain = stripTags(x.excerpt || '');
-    const contentPlain = stripTags(x.content || '');
     return {
       id: x.id,
       title: x.title || '',
@@ -1050,7 +1121,7 @@ async function getRelatedArticlesForArticle(articleId, limit = 4) {
       author_name: authorNameMap.get(x.author_id) ?? null,
       published_at: x.published_at || null,
       updated_at: x.updated_at || null,
-      description_preview: (excerptPlain || contentPlain).slice(0, 560) || null,
+      description_preview: buildDescriptionPreviewFromArticleRow(x, 280),
     };
   });
 }
@@ -1176,6 +1247,127 @@ async function getArticleBySlugPublic(slug, viewer = null) {
   };
   if (related_articles.length) out.related_articles = related_articles;
   return out;
+}
+
+const UP_NEXT_LIST_ATTRS = [
+  'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
+  'published_at', 'created_at', 'updated_at', 'blog_access_tier',
+];
+
+/**
+ * "Up next" suggestions for article detail / blog cards.
+ * Order: (1) same published category, newest first; (2) same author; (3) latest published site-wide.
+ * Excludes the current article. Respects optional viewer JWT for premium vs free access flags.
+ */
+async function getUpNextArticlesBySlugPublic(slug, viewer = null, rawLimit) {
+  const parsed = parseInt(rawLimit, 10);
+  const requested = Number.isFinite(parsed) && parsed > 0 ? parsed : 6;
+  /** At least 3, at most 10; default 6 so we usually fill ≥3 from the DB. */
+  const limit = Math.min(10, Math.max(3, requested));
+  const focusRow = await Article.findOne({
+    where: { slug, status: 'publish' },
+    attributes: ['id', 'author_id'],
+  });
+  if (!focusRow) return [];
+  const articleId = Number(focusRow.get('id'));
+  const authorId = focusRow.get('author_id');
+
+  const picked = [];
+  const pickedIds = new Set([articleId]);
+
+  const takeFromRows = (rows) => {
+    for (const r of rows) {
+      const p = r.get({ plain: true });
+      const id = Number(p.id);
+      if (pickedIds.has(id)) continue;
+      pickedIds.add(id);
+      picked.push(p);
+      if (picked.length >= limit) return true;
+    }
+    return false;
+  };
+
+  const maps = await ArticleCategoryMap.findAll({
+    where: { article_id: articleId },
+    attributes: ['category_id'],
+  });
+  const catIds = [...new Set(maps.map((m) => Number(m.category_id)))].filter((n) => Number.isFinite(n));
+
+  if (picked.length < limit && catIds.length) {
+    const sibs = await ArticleCategoryMap.findAll({
+      where: { category_id: { [Op.in]: catIds }, article_id: { [Op.ne]: articleId } },
+      attributes: ['article_id'],
+      limit: 240,
+      raw: true,
+    });
+    const candidateIds = [...new Set(sibs.map((s) => Number(s.article_id)))].filter((n) => Number.isFinite(n));
+    if (candidateIds.length) {
+      const rows = await Article.findAll({
+        where: { id: { [Op.in]: candidateIds }, status: 'publish' },
+        attributes: UP_NEXT_LIST_ATTRS,
+        order: [['published_at', 'DESC'], ['id', 'DESC']],
+      });
+      takeFromRows(rows);
+    }
+  }
+
+  if (picked.length < limit && authorId != null) {
+    const rows = await Article.findAll({
+      where: {
+        status: 'publish',
+        author_id: authorId,
+        id: { [Op.notIn]: [...pickedIds] },
+      },
+      attributes: UP_NEXT_LIST_ATTRS,
+      order: [['published_at', 'DESC'], ['id', 'DESC']],
+      limit: Math.max(limit * 3, 15),
+    });
+    takeFromRows(rows);
+  }
+
+  if (picked.length < limit) {
+    const rows = await Article.findAll({
+      where: {
+        status: 'publish',
+        id: { [Op.notIn]: [...pickedIds] },
+      },
+      attributes: UP_NEXT_LIST_ATTRS,
+      order: [['published_at', 'DESC'], ['id', 'DESC']],
+      limit: Math.max(limit * 4, 24),
+    });
+    takeFromRows(rows);
+  }
+
+  const plain = picked.slice(0, limit);
+  if (!plain.length) return [];
+
+  const authorIds = [...new Set(plain.map((p) => p.author_id).filter(Boolean))];
+  const authorNameMap = authorIds.length ? await getAuthorDisplayNamesBatch(authorIds) : new Map();
+  const articleCats = await buildCategoriesMapsForArticleIds(plain.map((p) => Number(p.id)));
+
+  const ids = [...new Set(plain.map((p) => Number(p.id)))];
+  const contentRows = ids.length
+    ? await Article.findAll({
+      where: { id: { [Op.in]: ids } },
+      attributes: ['id', 'content'],
+    })
+    : [];
+  const contentById = new Map(
+    contentRows.map((r) => {
+      const x = r.get({ plain: true });
+      return [Number(x.id), x.content || ''];
+    }),
+  );
+
+  const enrichedPlain = plain.map((p) => ({
+    ...p,
+    description_preview: buildDescriptionPreviewFromArticleRow(
+      { ...p, content: contentById.get(Number(p.id)) || '' },
+      560,
+    ),
+  }));
+
+  return attachAccessAndAuthorsToArticles(enrichedPlain, authorNameMap, articleCats, viewer);
 }
 
 const ARTICLE_LIST_ATTRS = ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'status', 'published_at', 'created_at', 'updated_at', 'blog_access_tier'];
@@ -1636,6 +1828,7 @@ module.exports = {
     getArticlesPublic,
     getBlogSpotlightFeed,
     getArticleBySlugPublic,
+    getUpNextArticlesBySlugPublic,
     getArticlesInternal,
     getArticleByIdInternal,
     createArticle,

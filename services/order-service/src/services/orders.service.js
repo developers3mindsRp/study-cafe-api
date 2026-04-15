@@ -347,7 +347,8 @@ async function fetchCourseAmount(entityId) {
     validateStatus: (status) => status === 200,
   });
   const payload = parseApiResponse(data);
-  const price = parseAmount(payload?.price);
+  const salePrice = parseAmount(payload?.sale_price);
+  const price = salePrice || parseAmount(payload?.price);
   if (!price) throw new AppError('Course price unavailable', 400);
   return price;
 }
@@ -383,23 +384,22 @@ async function resolveAmountForEntity(type, entityId) {
 
 function isCouponTypeValid(coupon, typeUpper) {
   const discountOn = String(coupon.discount_on || '').trim().toLowerCase();
+  if (!discountOn || discountOn === 'everything' || discountOn === 'all') return true;
   if (typeUpper === 'COURSE') {
-    return discountOn === 'all courses' || discountOn === 'everything';
+    return /course/i.test(discountOn);
   }
   if (typeUpper === 'MEMBERSHIP') {
-    return discountOn === 'membership only' || discountOn === 'everything';
+    return /membership|plan/i.test(discountOn);
   }
   return false;
 }
 
-function getAllowedDiscountOnValues(typeUpper) {
-  if (typeUpper === 'COURSE') {
-    return ['all courses', 'everything'];
-  }
-  if (typeUpper === 'MEMBERSHIP') {
-    return ['membership only', 'everything'];
-  }
-  return [];
+function isDiscountOnAllowedForType(discountOn, typeUpper) {
+  const d = String(discountOn || '').trim().toLowerCase();
+  if (!d || d === 'everything' || d === 'all') return true;
+  if (typeUpper === 'COURSE') return /course/i.test(d);
+  if (typeUpper === 'MEMBERSHIP') return /membership|plan/i.test(d);
+  return false;
 }
 
 function calculateDiscount(coupon, amount) {
@@ -514,12 +514,9 @@ async function getCouponsForEntity(userId, type, entityId) {
   }
 
   const amount = await resolveAmountForEntity(typeUpper, entityId);
-  const allowedDiscountOnValues = getAllowedDiscountOnValues(typeUpper);
   const coupons = await Coupon.findAll({ order: [['created_at', 'DESC']] });
   const results = coupons
-    .filter((coupon) =>
-      allowedDiscountOnValues.includes(String(coupon.discount_on || '').trim().toLowerCase())
-    )
+    .filter((coupon) => isDiscountOnAllowedForType(coupon.discount_on, typeUpper))
     .map((coupon) => buildCouponResult(coupon.get({ plain: true }), amount, typeUpper))
     .sort((a, b) => {
       if (a.canApply !== b.canApply) return a.canApply ? -1 : 1;

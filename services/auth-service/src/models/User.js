@@ -23,6 +23,7 @@ module.exports = (sequelize) => {
       state: { type: DataTypes.STRING(100), allowNull: true },
       country: { type: DataTypes.STRING(100), allowNull: true },
       profile_pic_url: { type: DataTypes.STRING(500), allowNull: true },
+      bio: { type: DataTypes.TEXT, allowNull: true },
       membership: { type: DataTypes.STRING(50), allowNull: true },
       plan: { type: DataTypes.TEXT, allowNull: true },
       role_id: { type: DataTypes.INTEGER, allowNull: true },
