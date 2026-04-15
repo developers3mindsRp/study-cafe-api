@@ -1,4 +1,5 @@
 const ordersService = require('../services/orders.service');
+const webhookService = require('../services/webhook.service');
 const { asyncHandler, AppError, sendSuccess, sendCreated } = require('../../../../shared');
 
 const create = asyncHandler(async (req, res) => {
@@ -50,6 +51,16 @@ const getByOrderIdInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, order);
 });
 
+const webhook = asyncHandler(async (req, res) => {
+  const rawBody = req.rawBody;
+  const signature = req.headers['x-razorpay-signature'] || '';
+  if (!rawBody || !signature) {
+    return res.status(400).json({ status: 'missing_signature_or_body' });
+  }
+  const { statusCode, body } = await webhookService.processWebhook(rawBody, signature, req.body);
+  res.status(statusCode).json(body);
+});
+
 module.exports = {
   create,
   verify,
@@ -60,4 +71,5 @@ module.exports = {
   getInvoice,
   listAllInternal,
   getByOrderIdInternal,
+  webhook,
 };

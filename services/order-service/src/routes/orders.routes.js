@@ -4,6 +4,8 @@ const schemas = require('../validations/schemas');
 const { validate } = require('../../../../shared');
 
 function register(router) {
+  router.post('/orders/webhook/razorpay', ordersController.webhook);
+
   router.post('/orders/create', requireUserId, validate(schemas.createOrder), ordersController.create);
   router.post('/orders/verify', requireUserId, validate(schemas.verifyOrder), ordersController.verify);
   router.get('/orders', requireUserId, ordersController.list);

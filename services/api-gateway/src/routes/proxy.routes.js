@@ -89,6 +89,7 @@ function register(app) {
   app.get('/api/courses/:id', optionalJWT, courseProxy);
   app.get('/api/courses/:id/sessions', validateJWT, requireCourseAccess, courseProxy);
   app.get('/api/courses/:id/materials', validateJWT, requireCourseAccess, courseProxy);
+  app.post('/api/orders/webhook/razorpay', orderProxy);
   app.use('/api/orders', validateJWT, orderProxy);
   app.use('/api/order', validateJWT, orderProxy);
   app.use('/api/admin', validateJWT, adminProxy);
