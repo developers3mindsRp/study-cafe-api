@@ -5,10 +5,105 @@ const { Op } = require('sequelize');
 const { getRedis } = require('../config/redis');
 const config = require('../config');
 const { getRazorpayInstance, getRazorpayConfig } = require('./payment.service');
-const { AppError } = require('../../../../shared');
+const { AppError, logger } = require('../../../../shared');
 
 function generateOrderId() {
   return 'ORD_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
+}
+
+async function fetchPlanDetails(entityId) {
+  try {
+    const { data } = await axios.get(
+      `${config.platformServiceUrl}/internal/platform/plans/${entityId}`,
+      {
+        timeout: 8000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200,
+      }
+    );
+    return data.data !== undefined ? data.data : data;
+  } catch {
+    return null;
+  }
+}
+
+function buildMembershipPayload(order, plan) {
+  const now = new Date();
+  const payload = { userId: order.user_id, orderId: order.order_id };
+
+  if (plan && plan.is_lifetime) {
+    const farFuture = new Date(now);
+    farFuture.setFullYear(farFuture.getFullYear() + 100);
+    payload.membershipType = plan.slug || 'lifetime';
+    payload.startsAt = now.toISOString();
+    payload.expiresAt = farFuture.toISOString();
+  } else if (plan && plan.duration_days) {
+    payload.membershipType = plan.slug || 'basic';
+    payload.startsAt = now.toISOString();
+    const expires = new Date(now.getTime() + plan.duration_days * 86400000);
+    payload.expiresAt = expires.toISOString();
+  } else {
+    const expires = new Date(now);
+    expires.setFullYear(expires.getFullYear() + 1);
+    payload.membershipType = 'annual';
+    payload.startsAt = now.toISOString();
+    payload.expiresAt = expires.toISOString();
+  }
+  return payload;
+}
+
+async function completePayment(order, razorpayPaymentId, { signature = null, source = 'checkout' } = {}) {
+  const t = await sequelize.transaction();
+  try {
+    if (order.status === 'paid') {
+      await t.rollback();
+      return { alreadyPaid: true, message: 'Already paid' };
+    }
+    await order.update({ status: 'paid' }, { transaction: t });
+    await Payment.create(
+      {
+        order_id: order.id,
+        razorpay_payment_id: razorpayPaymentId,
+        razorpay_signature: signature,
+        amount: order.amount,
+        status: 'captured',
+        source,
+      },
+      { transaction: t }
+    );
+
+    const orderId = order.order_id;
+    if (order.type === 'course') {
+      await OutboxEvent.create(
+        {
+          aggregate_type: 'order',
+          aggregate_id: orderId,
+          event_type: 'COURSE_PURCHASED',
+          payload: { userId: order.user_id, orderId, courseId: order.entity_id },
+        },
+        { transaction: t }
+      );
+    } else if (order.type === 'membership') {
+      const plan = await fetchPlanDetails(order.entity_id);
+      const payload = buildMembershipPayload(order, plan);
+      await OutboxEvent.create(
+        {
+          aggregate_type: 'order',
+          aggregate_id: orderId,
+          event_type: 'MEMBERSHIP_ACTIVATED',
+          payload,
+        },
+        { transaction: t }
+      );
+    }
+
+    await t.commit();
+    return { verified: true };
+  } catch (err) {
+    await t.rollback();
+    if (err.name === 'SequelizeUniqueConstraintError') return { verified: true };
+    throw err;
+  }
 }
 
 async function createOrder(userId, { type, entityId, amount, currency = 'INR' }) {
@@ -40,13 +135,13 @@ async function createOrder(userId, { type, entityId, amount, currency = 'INR' })
     });
     await order.update({ razorpay_order_id: rpOrder.id });
     await redis.del(lockKey);
-    const config = await getRazorpayConfig();
+    const rpConfig = await getRazorpayConfig();
     return {
       orderId,
       razorpayOrderId: rpOrder.id,
       amount: amountPaise,
       currency,
-      key: config?.key_id,
+      key: rpConfig?.key_id,
     };
   } catch (err) {
     await redis.del(lockKey).catch(() => { });
@@ -55,76 +150,17 @@ async function createOrder(userId, { type, entityId, amount, currency = 'INR' })
 }
 
 async function verifyOrder(userId, { orderId, razorpay_order_id, razorpay_payment_id, razorpay_signature }) {
-  const config = await getRazorpayConfig();
-  if (!config) throw new AppError('Payment not configured', 503);
+  const rpConfig = await getRazorpayConfig();
+  if (!rpConfig) throw new AppError('Payment not configured', 503);
   const expected = crypto
-    .createHmac('sha256', config.key_secret)
+    .createHmac('sha256', rpConfig.key_secret)
     .update(razorpay_order_id + '|' + razorpay_payment_id)
     .digest('hex');
   if (expected !== razorpay_signature) throw new AppError('Invalid signature', 400);
 
-  const t = await sequelize.transaction();
-  try {
-    const order = await Order.findOne({
-      where: { order_id: orderId, user_id: userId },
-      transaction: t,
-    });
-    if (!order) {
-      await t.rollback();
-      throw new AppError('Order not found', 404);
-    }
-    if (order.status === 'paid') {
-      await t.rollback();
-      return { alreadyPaid: true, message: 'Already paid' };
-    }
-    await order.update({ status: 'paid' }, { transaction: t });
-    await Payment.create(
-      {
-        order_id: order.id,
-        razorpay_payment_id,
-        razorpay_signature,
-        amount: order.amount,
-        status: 'captured',
-      },
-      { transaction: t }
-    );
-    const payload = { userId: order.user_id, orderId };
-    if (order.type === 'course') {
-      payload.courseId = order.entity_id;
-      await OutboxEvent.create(
-        {
-          aggregate_type: 'order',
-          aggregate_id: orderId,
-          event_type: 'COURSE_PURCHASED',
-          payload,
-        },
-        { transaction: t }
-      );
-    } else if (order.type === 'membership') {
-      const now = new Date();
-      const expires = new Date(now);
-      expires.setFullYear(expires.getFullYear() + 1);
-      payload.membershipType = 'annual';
-      payload.orderId = orderId;
-      payload.startsAt = now.toISOString();
-      payload.expiresAt = expires.toISOString();
-      await OutboxEvent.create(
-        {
-          aggregate_type: 'order',
-          aggregate_id: orderId,
-          event_type: 'MEMBERSHIP_ACTIVATED',
-          payload,
-        },
-        { transaction: t }
-      );
-    }
-    await t.commit();
-    return { verified: true };
-  } catch (err) {
-    await t.rollback();
-    if (err.name === 'SequelizeUniqueConstraintError') return { verified: true };
-    throw err;
-  }
+  const order = await Order.findOne({ where: { order_id: orderId, user_id: userId } });
+  if (!order) throw new AppError('Order not found', 404);
+  return completePayment(order, razorpay_payment_id, { signature: razorpay_signature, source: 'checkout' });
 }
 
 async function listOrders(userId) {
@@ -575,6 +611,7 @@ async function deleteCoupon(id) {
 module.exports = {
   createOrder,
   verifyOrder,
+  completePayment,
   listOrders,
   listMyPurchases,
   getInvoice,

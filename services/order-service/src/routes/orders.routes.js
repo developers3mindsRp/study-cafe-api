@@ -4,6 +4,8 @@ const schemas = require('../validations/schemas');
 const { validate } = require('../../../../shared');
 
 function register(router) {
+  router.post('/orders/webhook/razorpay', ordersController.webhook);
+
   // Public — no auth required, frontend uses this to display available coupons
   router.get('/coupons', ordersController.listActiveCoupons);
 

@@ -18,10 +18,12 @@ module.exports = {
   courseServiceUrl: process.env.COURSE_SERVICE_URL || 'http://localhost:4002',
   platformServiceUrl: process.env.PLATFORM_SERVICE_URL || 'http://localhost:4005',
   adminServiceUrl: process.env.ADMIN_SERVICE_URL || 'http://localhost:4004',
+  platformServiceUrl: process.env.PLATFORM_SERVICE_URL || 'http://localhost:4005',
   internalApiKey: process.env.INTERNAL_API_KEY || '',
   razorpay: {
     keyId: process.env.RAZORPAY_KEY_ID || '',
     keySecret: process.env.RAZORPAY_KEY_SECRET || '',
+    webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || '',
   },
   outbox: {
     pollMs: parseInt(process.env.OUTBOX_POLL_MS || '5000', 10),

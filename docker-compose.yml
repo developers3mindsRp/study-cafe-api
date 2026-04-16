@@ -107,9 +107,12 @@ services:
       MYSQL_DATABASE: studycafe_db
       REDIS_URL: redis://redis:6379
       AUTH_SERVICE_URL: http://auth-service:4001
+      COURSE_SERVICE_URL: http://course-service:4002
       ADMIN_SERVICE_URL: http://admin-service:4004
+      PLATFORM_SERVICE_URL: http://platform-service:4005
       RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
       RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-studycafe-internal-key}
     depends_on:
       mysql:
