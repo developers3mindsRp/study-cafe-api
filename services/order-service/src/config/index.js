@@ -16,6 +16,7 @@ module.exports = {
   },
   authServiceUrl: process.env.AUTH_SERVICE_URL || 'http://localhost:4001',
   courseServiceUrl: process.env.COURSE_SERVICE_URL || 'http://localhost:4002',
+  platformServiceUrl: process.env.PLATFORM_SERVICE_URL || 'http://localhost:4005',
   adminServiceUrl: process.env.ADMIN_SERVICE_URL || 'http://localhost:4004',
   internalApiKey: process.env.INTERNAL_API_KEY || '',
   razorpay: {

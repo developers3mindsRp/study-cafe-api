@@ -4,6 +4,9 @@ const schemas = require('../validations/schemas');
 const { validate } = require('../../../../shared');
 
 function register(router) {
+  // Public — no auth required, frontend uses this to display available coupons
+  router.get('/coupons', ordersController.listActiveCoupons);
+
   router.post('/orders/create', requireUserId, validate(schemas.createOrder), ordersController.create);
   router.post('/orders/verify', requireUserId, validate(schemas.verifyOrder), ordersController.verify);
   router.get('/orders', requireUserId, ordersController.list);
@@ -15,6 +18,12 @@ function register(router) {
   router.get('/orders/:orderId/invoice', requireUserId, validate(schemas.invoiceParam), ordersController.getInvoice);
   router.get('/internal/orders', internalAuth, ordersController.listAllInternal);
   router.get('/internal/orders/:orderId', internalAuth, ordersController.getByOrderIdInternal);
+
+  // Internal coupon management (called by admin-service)
+  router.get('/internal/coupons', internalAuth, ordersController.listAllCoupons);
+  router.post('/internal/coupons', internalAuth, ordersController.createCoupon);
+  router.put('/internal/coupons/:id', internalAuth, ordersController.updateCoupon);
+  router.delete('/internal/coupons/:id', internalAuth, ordersController.deleteCoupon);
 }
 
 module.exports = { register };

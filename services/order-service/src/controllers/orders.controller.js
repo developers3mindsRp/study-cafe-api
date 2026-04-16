@@ -1,5 +1,5 @@
 const ordersService = require('../services/orders.service');
-const { asyncHandler, AppError, sendSuccess, sendCreated } = require('../../../../shared');
+const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent } = require('../../../../shared');
 
 const create = asyncHandler(async (req, res) => {
   const result = await ordersService.createOrder(req.userId, req.body);
@@ -50,6 +50,35 @@ const getByOrderIdInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, order);
 });
 
+const listActiveCoupons = asyncHandler(async (req, res) => {
+  const coupons = await ordersService.listActiveCoupons();
+  sendSuccess(res, coupons);
+});
+
+// ── Admin coupon CRUD ────────────────────────────────────────────────────────
+
+const listAllCoupons = asyncHandler(async (req, res) => {
+  const coupons = await ordersService.listAllCoupons();
+  sendSuccess(res, coupons);
+});
+
+const createCoupon = asyncHandler(async (req, res) => {
+  const coupon = await ordersService.createCoupon(req.body);
+  sendCreated(res, coupon);
+});
+
+const updateCoupon = asyncHandler(async (req, res) => {
+  const coupon = await ordersService.updateCoupon(req.params.id, req.body);
+  if (!coupon) throw new AppError('Coupon not found', 404);
+  sendSuccess(res, coupon);
+});
+
+const deleteCoupon = asyncHandler(async (req, res) => {
+  const result = await ordersService.deleteCoupon(req.params.id);
+  if (!result) throw new AppError('Coupon not found', 404);
+  sendNoContent(res);
+});
+
 module.exports = {
   create,
   verify,
@@ -60,4 +89,9 @@ module.exports = {
   getInvoice,
   listAllInternal,
   getByOrderIdInternal,
+  listActiveCoupons,
+  listAllCoupons,
+  createCoupon,
+  updateCoupon,
+  deleteCoupon,
 };

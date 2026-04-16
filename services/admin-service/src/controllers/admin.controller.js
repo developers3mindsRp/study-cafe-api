@@ -215,6 +215,28 @@ const getOrderByOrderId = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+// ── Coupon management (proxied to order-service) ───────────────────
+
+const getCoupons = asyncHandler(async (req, res) => {
+  const { data } = await orderClient.get('/internal/coupons');
+  sendSuccess(res, data);
+});
+
+const createCoupon = asyncHandler(async (req, res) => {
+  const { data } = await orderClient.post('/internal/coupons', req.body);
+  sendCreated(res, data);
+});
+
+const updateCoupon = asyncHandler(async (req, res) => {
+  const { data } = await orderClient.put(`/internal/coupons/${req.params.id}`, req.body);
+  sendSuccess(res, data);
+});
+
+const deleteCoupon = asyncHandler(async (req, res) => {
+  await orderClient.delete(`/internal/coupons/${req.params.id}`);
+  sendNoContent(res);
+});
+
 // ── Platform proxy handlers ────────────────────────────────────────
 
 function platformProxy(handler) {
@@ -419,6 +441,10 @@ module.exports = {
   updateCoursePageSetting,
   getOrders,
   getOrderByOrderId,
+  getCoupons,
+  createCoupon,
+  updateCoupon,
+  deleteCoupon,
   platform,
   uploadImage,
   getAffiliateHistory,

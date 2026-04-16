@@ -446,6 +446,7 @@ async function listActiveCoupons() {
   const coupons = await Coupon.findAll({
     where: {
       status: 'publish',
+      visibility: 'public',
       [Op.and]: [
         {
           [Op.or]: [
@@ -478,12 +479,21 @@ async function getCouponsForEntity(userId, type, entityId) {
   }
 
   const amount = await resolveAmountForEntity(typeUpper, entityId);
-  const coupons = await Coupon.findAll({ order: [['created_at', 'DESC']] });
+  const now = new Date();
+  const coupons = await Coupon.findAll({
+    where: {
+      status: 'publish',
+      [Op.and]: [
+        { [Op.or]: [{ start_date: null }, { start_date: { [Op.lte]: now } }] },
+        { [Op.or]: [{ expire_date: null }, { expire_date: { [Op.gte]: now } }] },
+      ],
+    },
+    order: [['created_at', 'DESC']],
+  });
   const results = coupons
     .filter((coupon) => isDiscountOnAllowedForType(coupon.discount_on, typeUpper))
     .map((coupon) => buildCouponResult(coupon.get({ plain: true }), amount, typeUpper))
     .sort((a, b) => {
-      if (a.canApply !== b.canApply) return a.canApply ? -1 : 1;
       if (b.discountAmount !== a.discountAmount) return b.discountAmount - a.discountAmount;
       return a.min_order - b.min_order;
     });
@@ -536,6 +546,32 @@ async function applyCoupon(userId, { couponCode, type, id }) {
   };
 }
 
+// ── Admin coupon management ─────────────────────────────────────────
+
+async function listAllCoupons() {
+  const coupons = await Coupon.findAll({ order: [['created_at', 'DESC']] });
+  return coupons.map((c) => c.get({ plain: true }));
+}
+
+async function createCoupon(data) {
+  const coupon = await Coupon.create(data);
+  return coupon.get({ plain: true });
+}
+
+async function updateCoupon(id, data) {
+  const coupon = await Coupon.findByPk(id);
+  if (!coupon) return null;
+  await coupon.update(data);
+  return coupon.get({ plain: true });
+}
+
+async function deleteCoupon(id) {
+  const coupon = await Coupon.findByPk(id);
+  if (!coupon) return null;
+  await coupon.destroy();
+  return { id };
+}
+
 module.exports = {
   createOrder,
   verifyOrder,
@@ -546,4 +582,9 @@ module.exports = {
   getOrderByOrderId,
   getCouponsForEntity,
   applyCoupon,
+  listActiveCoupons,
+  listAllCoupons,
+  createCoupon,
+  updateCoupon,
+  deleteCoupon,
 };

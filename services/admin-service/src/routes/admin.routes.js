@@ -18,6 +18,12 @@ function register(router) {
   router.delete('/admin/course-cats/:id', requireAdmin, controller.deleteCourseCat);
   router.get('/admin/orders', requireAdmin, controller.getOrders);
   router.get('/admin/orders/:orderId', requireAdmin, controller.getOrderByOrderId);
+
+  // Coupon management
+  router.get('/admin/coupons', requireAdmin, controller.getCoupons);
+  router.post('/admin/coupons', requireAdmin, controller.createCoupon);
+  router.put('/admin/coupons/:id', requireAdmin, controller.updateCoupon);
+  router.delete('/admin/coupons/:id', requireAdmin, controller.deleteCoupon);
   router.post('/admin/courses', requireAdmin, controller.createCourse);
   router.put('/admin/courses/:id', requireAdmin, controller.updateCourse);
   router.post('/admin/courses/:id/batches', requireAdmin, controller.createBatch);
