@@ -18,6 +18,7 @@ function register(router) {
   router.get('/courses/:id/materials', validate(schemas.idParam), coursesController.getMaterials);
 
   // Internal routes (admin proxy)
+  router.post('/internal/courses/by-ids', internalAuth, coursesController.listByIdsOrCatIds);
   router.get('/internal/courses', internalAuth, coursesController.listAllInternal);
   router.get('/internal/courses/:id', internalAuth, validate(schemas.idParam), coursesController.getByIdInternal);
   router.get('/internal/courses/:id/sessions', internalAuth, validate(schemas.idParam), coursesController.getSessionsInternal);

@@ -4,15 +4,17 @@ const createOrder = {
     body: Joi.object({
         type: Joi.string().valid('course', 'membership').required(),
         entityId: Joi.alternatives().try(Joi.number().integer().positive(), Joi.string().min(1)).required(),
-        amount: Joi.number().positive().required(),
+        // amount is intentionally excluded — always fetched from the backend
         currency: Joi.string().length(3).uppercase().default('INR'),
+        couponCode: Joi.string().max(64).allow('', null),
+        referralCode: Joi.string().max(32).allow('', null),
     }),
 };
 
 const verifyOrder = {
     body: Joi.object({
         orderId: Joi.string().required(),
-        razorpay_order_id: Joi.string().allow('', null),
+        razorpay_order_id: Joi.string().required(),
         razorpay_payment_id: Joi.string().required(),
         razorpay_signature: Joi.string().required(),
     }),

@@ -17,6 +17,8 @@ module.exports = (sequelize) => {
             expire_date: { type: DataTypes.DATE, allowNull: true },
             status: { type: DataTypes.STRING(20), allowNull: true },
             visibility: { type: DataTypes.ENUM('public', 'hidden'), allowNull: false, defaultValue: 'public' },
+            usage_limit: { type: DataTypes.INTEGER, allowNull: true, defaultValue: null },
+            per_user_limit: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
         },
         {
             tableName: 'coupons',

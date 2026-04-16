@@ -1,6 +1,6 @@
 const ordersService = require('../services/orders.service');
 const webhookService = require('../services/webhook.service');
-const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent } = require('../../../../shared');
+const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, logger } = require('../../../../shared');
 
 const create = asyncHandler(async (req, res) => {
   const result = await ordersService.createOrder(req.userId, req.body);
@@ -54,10 +54,17 @@ const getByOrderIdInternal = asyncHandler(async (req, res) => {
 const webhook = asyncHandler(async (req, res) => {
   const rawBody = req.rawBody;
   const signature = req.headers['x-razorpay-signature'] || '';
+
+  logger.info(`[WEBHOOK-CTRL] Received webhook — has rawBody: ${!!rawBody}, rawBody length: ${rawBody ? rawBody.length : 0}, has signature: ${!!signature}, signature length: ${signature.length}`);
+  logger.info(`[WEBHOOK-CTRL] Content-Type: ${req.headers['content-type']}, User-Agent: ${req.headers['user-agent']}`);
+
   if (!rawBody || !signature) {
+    logger.warn(`[WEBHOOK-CTRL] Rejected — missing ${!rawBody ? 'rawBody' : ''} ${!signature ? 'signature' : ''}`);
     return res.status(400).json({ status: 'missing_signature_or_body' });
   }
+
   const { statusCode, body } = await webhookService.processWebhook(rawBody, signature, req.body);
+  logger.info(`[WEBHOOK-CTRL] Response — status: ${statusCode}, body: ${JSON.stringify(body)}`);
   res.status(statusCode).json(body);
 });
 

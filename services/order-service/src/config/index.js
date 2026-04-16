@@ -21,9 +21,9 @@ module.exports = {
   platformServiceUrl: process.env.PLATFORM_SERVICE_URL || 'http://localhost:4005',
   internalApiKey: process.env.INTERNAL_API_KEY || '',
   razorpay: {
-    keyId: process.env.RAZORPAY_KEY_ID || '',
-    keySecret: process.env.RAZORPAY_KEY_SECRET || '',
-    webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || '',
+    keyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_Se6xiUO30POWCb',
+    keySecret: process.env.RAZORPAY_KEY_SECRET || 'WhuT8NpFxKnH4PXV02Kp2vkE',
+    webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || '0a90a3a99c5352a941e53758a21f0e9229cfe86cf97d8962dd11a9ad2777f1d2',
   },
   outbox: {
     pollMs: parseInt(process.env.OUTBOX_POLL_MS || '5000', 10),

@@ -8,6 +8,13 @@ function register(router) {
   router.get('/internal/affiliate/balance/:userId', internalAuth, affiliateController.getBalance);
   router.post('/internal/affiliate/withdrawals', internalAuth, affiliateController.createWithdrawal);
   router.patch('/internal/affiliate/withdrawals/:id', internalAuth, affiliateController.updateWithdrawalStatus);
+  router.post('/internal/affiliate/record-commission', internalAuth, affiliateController.recordCommission);
+
+  // User-facing routes (auth via X-User-Id from gateway)
+  router.get('/affiliate/my-dashboard', affiliateController.getMyAffiliate);
+  router.get('/affiliate/my-orders', affiliateController.getMyCommissionOrders);
+  router.get('/affiliate/my-links', affiliateController.getMyReferralLinks);
+  router.post('/affiliate/my-withdrawals', affiliateController.createMyWithdrawal);
 }
 
 module.exports = { register };

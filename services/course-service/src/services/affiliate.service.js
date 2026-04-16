@@ -7,6 +7,8 @@ const {
 } = require("../models");
 const { QueryTypes, Op } = require("sequelize");
 
+const MEMBERSHIP_COMMISSION_PERCENT = 10;
+
 const affiliateService = {
   /**
    * Fetch affiliate history with details.
@@ -136,7 +138,6 @@ const affiliateService = {
       throw err;
     }
 
-    // Only update if currently pending
     if (request.status !== 'pending') {
        const err = new Error(`Cannot update request with status: ${request.status}`);
        err.statusCode = 400;
@@ -146,7 +147,6 @@ const affiliateService = {
     if (status === 'approved') {
       const balance = await this.getBalance(request.affiliate_id);
       
-      // Atomic-like update
       await balance.update({
         total_withdrawn: parseFloat(balance.total_withdrawn) + parseFloat(request.amount),
         current_balance: parseFloat(balance.current_balance) - parseFloat(request.amount)
@@ -155,7 +155,254 @@ const affiliateService = {
 
     await request.update({ status, remarks });
     return request;
-  }
+  },
+
+  /**
+   * Record a commission from a completed order (called by outbox worker).
+   * Idempotent — skips if order_id already has a commission entry.
+   */
+  async recordCommission({ userId, orderId, type, entityId, amount, referralCode }) {
+    const existing = await AffiliateHistory.findOne({ where: { order_id: orderId } });
+    if (existing) return existing;
+
+    const referrer = await sequelize.query(
+      `SELECT id FROM users WHERE referral_code = :code LIMIT 1`,
+      { replacements: { code: referralCode }, type: QueryTypes.SELECT }
+    );
+    if (!referrer.length) return null;
+
+    const affiliateId = referrer[0].id;
+    if (String(affiliateId) === String(userId)) return null;
+
+    let commissionAmount = 0;
+    let courseId = null;
+
+    if (type === 'course') {
+      courseId = Number(entityId);
+      const course = await Course.findByPk(courseId, { attributes: ['affiliate_commission'] });
+      const pct = course ? parseFloat(course.affiliate_commission) : 0;
+      commissionAmount = pct > 0 ? (amount * pct) / 100 : 0;
+    } else if (type === 'membership') {
+      commissionAmount = (amount * MEMBERSHIP_COMMISSION_PERCENT) / 100;
+    }
+
+    if (commissionAmount <= 0) return null;
+    commissionAmount = Math.round(commissionAmount * 100) / 100;
+
+    const t = await sequelize.transaction();
+    try {
+      const record = await AffiliateHistory.create({
+        course_id: courseId,
+        entity_type: type,
+        entity_id: String(entityId),
+        user_id: userId,
+        affiliate_id: affiliateId,
+        order_id: orderId,
+        order_amount: amount,
+        commission_amount: commissionAmount,
+        status: 'confirmed',
+      }, { transaction: t });
+
+      const [balance] = await AffiliateBalance.findOrCreate({
+        where: { affiliate_id: affiliateId },
+        defaults: { affiliate_id: affiliateId, total_earned: 0, total_withdrawn: 0, current_balance: 0 },
+        transaction: t,
+      });
+      await balance.update({
+        total_earned: parseFloat(balance.total_earned) + commissionAmount,
+        current_balance: parseFloat(balance.current_balance) + commissionAmount,
+      }, { transaction: t });
+
+      await t.commit();
+      return record;
+    } catch (err) {
+      await t.rollback();
+      if (err.name === 'SequelizeUniqueConstraintError') return null;
+      throw err;
+    }
+  },
+
+  /**
+   * User-facing: get affiliate stats and history for a specific user.
+   */
+  async getMyAffiliateData(userId) {
+    const [balance] = await AffiliateBalance.findOrCreate({
+      where: { affiliate_id: userId },
+      defaults: { affiliate_id: userId, total_earned: 0, total_withdrawn: 0, current_balance: 0 },
+    });
+
+    const history = await AffiliateHistory.findAll({
+      where: { affiliate_id: userId },
+      order: [['created_at', 'DESC']],
+    });
+
+    if (history.length === 0) {
+      return {
+        balance: balance.get({ plain: true }),
+        totalOrders: 0,
+        totalOrderValue: 0,
+        totalCommission: parseFloat(balance.total_earned),
+        history: [],
+      };
+    }
+
+    const buyerIds = [...new Set(history.map(h => h.user_id))];
+    const courseIds = [...new Set(history.filter(h => h.course_id).map(h => h.course_id))];
+
+    const users = await sequelize.query(
+      `SELECT id, name, email, phone FROM users WHERE id IN (:buyerIds)`,
+      { replacements: { buyerIds }, type: QueryTypes.SELECT }
+    );
+    const userMap = new Map(users.map(u => [Number(u.id), u]));
+
+    let courseMap = new Map();
+    if (courseIds.length) {
+      const courses = await Course.findAll({
+        where: { id: courseIds },
+        attributes: ['id', 'title'],
+      });
+      courseMap = new Map(courses.map(c => [Number(c.id), c.title]));
+    }
+
+    const enriched = history.map(h => {
+      const r = h.get({ plain: true });
+      const buyer = userMap.get(Number(r.user_id)) || {};
+      return {
+        ...r,
+        buyer_name: buyer.name || 'Unknown',
+        buyer_email: buyer.email ? buyer.email.replace(/(.{2}).*(@.*)/, '$1***$2') : '',
+        buyer_phone: buyer.phone ? buyer.phone.replace(/(.{4}).*(.{3})/, '$1***$2') : '',
+        item_title: r.entity_type === 'course'
+          ? (courseMap.get(Number(r.course_id)) || 'Course')
+          : 'Membership Plan',
+      };
+    });
+
+    const totalOrderValue = enriched.reduce((s, h) => s + parseFloat(h.order_amount || 0), 0);
+
+    return {
+      balance: balance.get({ plain: true }),
+      totalOrders: enriched.length,
+      totalOrderValue: Math.round(totalOrderValue * 100) / 100,
+      totalCommission: parseFloat(balance.total_earned),
+      history: enriched,
+    };
+  },
+
+  /**
+   * User-facing: get commission history with date filtering.
+   */
+  async getMyCommissionOrders(userId, { from, to } = {}) {
+    const where = { affiliate_id: userId };
+    if (from || to) {
+      where.created_at = {};
+      if (from) where.created_at[Op.gte] = new Date(from);
+      if (to) {
+        const toDate = new Date(to);
+        toDate.setHours(23, 59, 59, 999);
+        where.created_at[Op.lte] = toDate;
+      }
+    }
+
+    const history = await AffiliateHistory.findAll({
+      where,
+      order: [['created_at', 'DESC']],
+    });
+
+    if (!history.length) return [];
+
+    const buyerIds = [...new Set(history.map(h => h.user_id))];
+    const courseIds = [...new Set(history.filter(h => h.course_id).map(h => h.course_id))];
+
+    const users = await sequelize.query(
+      `SELECT id, name, email, phone FROM users WHERE id IN (:buyerIds)`,
+      { replacements: { buyerIds }, type: QueryTypes.SELECT }
+    );
+    const userMap = new Map(users.map(u => [Number(u.id), u]));
+
+    let courseMap = new Map();
+    if (courseIds.length) {
+      const courses = await Course.findAll({
+        where: { id: courseIds },
+        attributes: ['id', 'title'],
+      });
+      courseMap = new Map(courses.map(c => [Number(c.id), c.title]));
+    }
+
+    return history.map(h => {
+      const r = h.get({ plain: true });
+      const buyer = userMap.get(Number(r.user_id)) || {};
+      return {
+        ...r,
+        buyer_name: buyer.name || 'Unknown',
+        buyer_email: buyer.email ? buyer.email.replace(/(.{2}).*(@.*)/, '$1***$2') : '',
+        buyer_phone: buyer.phone ? buyer.phone.replace(/(.{4}).*(.{3})/, '$1***$2') : '',
+        item_title: r.entity_type === 'course'
+          ? (courseMap.get(Number(r.course_id)) || 'Course')
+          : 'Membership Plan',
+      };
+    });
+  },
+
+  /**
+   * Resolve a user's referral code — return the provided code if non-empty,
+   * otherwise look it up from the users table, and generate + persist one if absent.
+   */
+  async resolveReferralCode(userId, headerCode) {
+    if (headerCode && String(headerCode).trim()) return String(headerCode).trim();
+
+    const rows = await sequelize.query(
+      'SELECT referral_code FROM users WHERE id = :userId LIMIT 1',
+      { replacements: { userId }, type: QueryTypes.SELECT }
+    );
+    if (rows.length && rows[0].referral_code) return rows[0].referral_code;
+
+    // Auto-generate and persist
+    const crypto = require('crypto');
+    const newCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+    await sequelize.query(
+      'UPDATE users SET referral_code = :code WHERE id = :userId',
+      { replacements: { code: newCode, userId }, type: QueryTypes.UPDATE }
+    );
+    return newCode;
+  },
+
+  /**
+   * Generate referral links for a user based on available courses, categories, and memberships.
+   */
+  async getReferralLinks(userId, referralCode) {
+    const courses = await Course.findAll({
+      where: { is_published: true, status: 'publish' },
+      attributes: ['id', 'title', 'slug', 'price', 'sale_price', 'brief_description'],
+      order: [['created_at', 'DESC']],
+    });
+
+    const { CourseCat } = require('../models');
+    const categories = await CourseCat.findAll({
+      attributes: ['id', 'name', 'slug'],
+      order: [['name', 'ASC']],
+    });
+
+    return {
+      referralCode,
+      homepage: `?ref=${referralCode}`,
+      membership: `/plans?ref=${referralCode}`,
+      categories: categories.map(c => ({
+        id: c.id,
+        title: c.name,
+        description: '',
+        url: `/courses?category=${c.slug}&ref=${referralCode}`,
+      })),
+      courses: courses.map(c => ({
+        id: c.id,
+        title: c.title,
+        description: c.brief_description || '',
+        originalPrice: parseFloat(c.price) || 0,
+        discountedPrice: parseFloat(c.sale_price || c.price) || 0,
+        url: `/course/${c.slug}?ref=${referralCode}`,
+      })),
+    };
+  },
 };
 
 module.exports = affiliateService;

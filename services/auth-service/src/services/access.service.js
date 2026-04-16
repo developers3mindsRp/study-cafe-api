@@ -1,13 +1,89 @@
-const { UserCourse, UserMembership } = require('../models');
+const { UserCourse, UserMembership, sequelize } = require('../models');
+const { QueryTypes } = require('sequelize');
 const authService = require('./auth.service');
 const config = require('../config');
 
+/**
+ * Check if the user has access to a course via an active membership.
+ * A membership grants access to a course if:
+ *   - The course is explicitly listed in plan_courses for the user's plan, OR
+ *   - The course belongs to a category listed in plan_course_categories for the user's plan.
+ * All tables (user_memberships, premium_plans, plan_courses, plan_course_categories,
+ * course_categories) are in the same DB, so we do this with a single SQL query.
+ */
+async function checkMembershipAccess(userId, courseId) {
+  const now = new Date();
+
+  // Step 1: Does the user have any active membership?
+  const activeMemberships = await UserMembership.findAll({
+    where: { user_id: userId },
+    attributes: ['membership_type'],
+  });
+
+  const activeSlugs = activeMemberships
+    .map((m) => m.membership_type)
+    .filter(Boolean);
+
+  if (activeSlugs.length === 0) return false;
+
+  // Step 2: Filter to only non-expired memberships
+  const now_str = now.toISOString().slice(0, 19).replace('T', ' ');
+
+  // Step 3: Check if any active plan includes this course (via direct ID or category)
+  const [result] = await sequelize.query(
+    `SELECT 1 AS has_access
+     FROM premium_plans pp
+     WHERE pp.slug IN (:slugs)
+       AND pp.is_active = 1
+       AND EXISTS (
+         SELECT 1 FROM user_memberships um
+         WHERE um.user_id = :userId
+           AND um.membership_type = pp.slug
+           AND um.expires_at > NOW()
+       )
+       AND (
+         EXISTS (
+           SELECT 1 FROM plan_courses pc
+           WHERE pc.plan_id = pp.id AND pc.course_id = :courseId
+         )
+         OR EXISTS (
+           SELECT 1 FROM plan_course_categories pcc
+           JOIN course_categories cc ON cc.course_cat_id = pcc.course_cat_id
+           WHERE pcc.plan_id = pp.id AND cc.course_id = :courseId
+         )
+       )
+     LIMIT 1`,
+    {
+      replacements: { slugs: activeSlugs, userId: Number(userId), courseId: Number(courseId) },
+      type: QueryTypes.SELECT,
+    }
+  );
+
+  return !!result;
+}
+
 async function checkAccess(token, courseId) {
   const decoded = authService.verifyAccess(token);
+  const userId = decoded.userId;
+
+  // Fast path: direct purchase enrollment
   const row = await UserCourse.findOne({
-    where: { user_id: decoded.userId, course_id: courseId },
+    where: { user_id: userId, course_id: courseId },
   });
-  return { allowed: !!row };
+  if (row) return { allowed: true };
+
+  // Slower path: membership-based access
+  const hasMembershipAccess = await checkMembershipAccess(userId, courseId);
+  if (!hasMembershipAccess) return { allowed: false };
+
+  // Lazy-enroll the user in user_courses so progress tracking works going forward.
+  // Uses findOrCreate so concurrent requests are safe.
+  await UserCourse.findOrCreate({
+    where: { user_id: userId, course_id: courseId },
+    defaults: { order_id: null },
+  });
+
+  return { allowed: true };
 }
 
 function isAuthorizedForGrant(req) {

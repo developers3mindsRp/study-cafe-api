@@ -21,8 +21,10 @@ function register(router) {
 
   // Coupon management
   router.get('/admin/coupons', requireAdmin, controller.getCoupons);
-  router.post('/admin/coupons', requireAdmin, controller.createCoupon);
-  router.put('/admin/coupons/:id', requireAdmin, controller.updateCoupon);
+  router.get('/admin/coupons/check-code', requireAdmin, controller.checkCouponCodeExists);
+  router.get('/admin/coupons/:id', requireAdmin, controller.getCoupon);
+  router.post('/admin/coupons', requireAdmin, controller.postCoupon);
+  router.put('/admin/coupons/:id', requireAdmin, controller.putCoupon);
   router.delete('/admin/coupons/:id', requireAdmin, controller.deleteCoupon);
   router.post('/admin/courses', requireAdmin, controller.createCourse);
   router.put('/admin/courses/:id', requireAdmin, controller.updateCourse);

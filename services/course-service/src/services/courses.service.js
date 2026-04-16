@@ -895,6 +895,58 @@ const coursesService = {
 
     return { data, total, page: safePage, pageCount };
   },
+
+  /**
+   * Fetch published courses by explicit IDs and/or by course-category IDs.
+   * Used by auth-service to resolve "courses included in a membership plan".
+   * Returns deduplicated list ordered by id ASC.
+   */
+  async listByIdsOrCatIds({ ids = [], cat_ids = [] } = {}) {
+    const { Op, QueryTypes } = require('sequelize');
+    const { sequelize, CourseCategory } = require('../models');
+
+    const courseIdSet = new Set(ids.map(Number).filter(Boolean));
+
+    // Resolve courses belonging to any of the given category IDs
+    if (cat_ids.length > 0) {
+      const catLinks = await CourseCategory.findAll({
+        where: { course_cat_id: { [Op.in]: cat_ids.map(Number).filter(Boolean) } },
+        attributes: ['course_id'],
+        raw: true,
+      });
+      for (const link of catLinks) {
+        courseIdSet.add(Number(link.course_id));
+      }
+    }
+
+    if (courseIdSet.size === 0) return [];
+
+    // Use a raw query to easily join course_cats without alias issues.
+    // MIN() aggregates are required for MySQL ONLY_FULL_GROUP_BY mode.
+    const rows = await sequelize.query(
+      `SELECT c.id, c.title, c.slug, c.brief_description, c.thumbnail_url, c.price, c.sale_price,
+              MIN(cc.name) AS category_name, MIN(cc.slug) AS category_slug
+       FROM courses c
+       LEFT JOIN course_categories ccm ON ccm.course_id = c.id
+       LEFT JOIN course_cats cc ON cc.id = ccm.course_cat_id
+       WHERE c.id IN (:ids) AND c.is_published = 1
+       GROUP BY c.id, c.title, c.slug, c.brief_description, c.thumbnail_url, c.price, c.sale_price
+       ORDER BY c.id ASC`,
+      { replacements: { ids: [...courseIdSet] }, type: QueryTypes.SELECT }
+    );
+
+    return rows.map((d) => ({
+      id: d.id,
+      title: d.title,
+      slug: d.slug,
+      brief_description: d.brief_description,
+      thumbnail_url: d.thumbnail_url,
+      price: d.price,
+      sale_price: d.sale_price,
+      category: d.category_name || null,
+      cat_slug: d.category_slug || null,
+    }));
+  },
 };
 
 module.exports = coursesService;

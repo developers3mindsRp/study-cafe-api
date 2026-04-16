@@ -34,6 +34,16 @@ const uploadAvatar = asyncHandler(async (req, res) => {
   sendSuccess(res, { url });
 });
 
+const getSubscription = asyncHandler(async (req, res) => {
+  const data = await accountService.getSubscription(req.user.userId);
+  sendSuccess(res, data);
+});
+
+const getMembershipCourses = asyncHandler(async (req, res) => {
+  const data = await accountService.getMembershipCourses(req.user.userId);
+  sendSuccess(res, data);
+});
+
 module.exports = {
   getProfile,
   updateProfile,
@@ -41,4 +51,6 @@ module.exports = {
   dashboardStats,
   myCourses,
   uploadAvatar,
+  getSubscription,
+  getMembershipCourses,
 };

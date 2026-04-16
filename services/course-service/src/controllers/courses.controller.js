@@ -103,6 +103,13 @@ const listAllInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, rows);
 });
 
+const listByIdsOrCatIds = asyncHandler(async (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+  const cat_ids = Array.isArray(req.body.cat_ids) ? req.body.cat_ids : [];
+  const rows = await coursesService.listByIdsOrCatIds({ ids, cat_ids });
+  sendSuccess(res, rows);
+});
+
 const listCourseCatsPublic = asyncHandler(async (req, res) => {
   const rows = await coursesService.listCourseCatsPublic();
   sendSuccess(res, rows);
@@ -243,4 +250,5 @@ module.exports = {
   getByIdInternal,
   getPageSettings,
   updatePageSetting,
+  listByIdsOrCatIds,
 };
