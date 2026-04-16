@@ -10,6 +10,7 @@ function register(router) {
   router.get('/platform/home', controller.getHome);
   router.get('/platform/states', controller.getStates);
   router.get('/platform/testimonials', controller.getTestimonials);
+  router.get('/plateform/contact-inquiries', controller.getContactInquiryInternal)
   router.get('/platform/footer', controller.getFooter);
   router.get('/platform/plans', controller.getPlans);
   router.get('/platform/plans/:slug', validate(schemas.slugParam), controller.getPlanBySlug);
@@ -25,6 +26,7 @@ function register(router) {
   router.get('/platform/articles/:slug', optionalWebUser, validate(schemas.slugParam), controller.getArticleBySlug);
   router.get('/platform/article-categories', controller.getArticleCategories);
   router.get('/platform/cms-pages/:slug', validate(schemas.slugParam), controller.getCmsPageBySlug);
+  router.post('/platform/contact-us', validate(schemas.createContactInquiry), controller.createContactInquiry);
 
   // ── Internal routes (admin proxy) ────────────────────────────────
   router.get('/internal/platform/home', internalAuth, controller.getHomeInternal);
@@ -55,6 +57,7 @@ function register(router) {
   router.put('/internal/platform/plans/:id', internalAuth, validate(schemas.updatePlan), controller.updatePlan);
   router.put('/internal/platform/plans/:id/popular', internalAuth, validate(schemas.idParam), controller.togglePlanPopular);
   router.delete('/internal/platform/plans/:id', internalAuth, validate(schemas.idParam), controller.deletePlan);
+  router.get('/internal/platform/contact-inquiries', internalAuth, controller.getContactInquiryInternal);
 
   // ── Comparison Features ──────────────────────────────────────────
   router.get('/internal/platform/comparison-features', internalAuth, controller.getComparisonFeatures);

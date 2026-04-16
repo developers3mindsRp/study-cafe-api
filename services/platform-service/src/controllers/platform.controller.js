@@ -398,6 +398,18 @@ const deleteFaq = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+// ── Contact Inquiries ───────────────────────────────────────────────
+
+const createContactInquiry = asyncHandler(async (req, res) => {
+  const data = await platformService.contactInquiries.createContactInquiry(req.body);
+  sendCreated(res, data);
+});
+
+const getContactInquiryInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.contactInquiries.getContactInquiry();
+  sendSuccess(res, data);
+});
+
 // ── SEO Metadata ───────────────────────────────────────────────────
 
 const getSeoMetadataInternal = asyncHandler(async (req, res) => {
@@ -453,6 +465,8 @@ module.exports = {
   createFaq,
   updateFaq,
   deleteFaq,
+  createContactInquiry,
+  getContactInquiryInternal,
   getSeoMetadataInternal,
   getSeoMetadataByIdInternal,
   getSeoMetadataBySlugPublic,
