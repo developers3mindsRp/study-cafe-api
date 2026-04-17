@@ -1,5 +1,5 @@
 const coursesService = require('../services/courses.service');
-const { asyncHandler, AppError, sendSuccess, sendCreated } = require('../../../../shared');
+const { asyncHandler, AppError, sendSuccess, sendCreated, sendPaginated } = require('../../../../shared');
 
 const list = asyncHandler(async (req, res) => {
   const rows = await coursesService.listPublished();
@@ -31,7 +31,12 @@ const getSessions = asyncHandler(async (req, res) => {
 });
 
 const getSessionsBySlug = asyncHandler(async (req, res) => {
-  const result = await coursesService.getSessionsBySlug(req.params.slug);
+  // optionalJWT in gateway sets x-user-id if a valid token was present.
+  const userIdHeader = req.headers['x-user-id'];
+  const userId = userIdHeader ? Number(userIdHeader) : null;
+  const result = await coursesService.getSessionsBySlug(req.params.slug, {
+    userId: Number.isFinite(userId) && userId > 0 ? userId : null,
+  });
   if (result === null) throw new AppError('Course not found', 404);
   sendSuccess(res, result);
 });
@@ -40,6 +45,21 @@ const getSessionsInternal = asyncHandler(async (req, res) => {
   const result = await coursesService.getSessionsByCourseIdInternal(req.params.id);
   if (result === null) throw new AppError('Course not found', 404);
   sendSuccess(res, result);
+});
+
+const listBatchesAdmin = asyncHandler(async (req, res) => {
+  const result = await coursesService.listBatchesAdminPaginated({
+    courseId: req.query.course_id,
+    page: req.query.page,
+    limit: req.query.limit,
+  });
+  sendPaginated(res, result);
+});
+
+const getBatchByIdInternal = asyncHandler(async (req, res) => {
+  const batch = await coursesService.getBatchByIdInternal(req.params.id);
+  if (!batch) throw new AppError('Batch not found', 404);
+  sendSuccess(res, batch);
 });
 
 const getMaterials = asyncHandler(async (req, res) => {
@@ -208,10 +228,26 @@ const addBatchEnrollment = asyncHandler(async (req, res) => {
 });
 
 const autoEnrollBatch = asyncHandler(async (req, res) => {
-  const { user_id } = req.body;
+  const { user_id, batch_id } = req.body;
   if (!user_id) throw new AppError('user_id is required', 400);
-  const result = await coursesService.autoEnrollInBatch(req.params.id, user_id);
+  const result = await coursesService.autoEnrollInBatch(
+    req.params.id,
+    user_id,
+    batch_id || null
+  );
   sendSuccess(res, result || { message: 'No active batch found' });
+});
+
+const selectPurchaseBatch = asyncHandler(async (req, res) => {
+  const batch = await coursesService.selectPurchaseBatch(req.params.id);
+  if (!batch) return sendSuccess(res, null);
+  sendSuccess(res, {
+    id: batch.id,
+    course_id: batch.course_id,
+    name: batch.name,
+    start_date: batch.start_date,
+    end_date: batch.end_date,
+  });
 });
 
 const removeBatchEnrollment = asyncHandler(async (req, res) => {
@@ -230,6 +266,8 @@ module.exports = {
   getSessions,
   getSessionsBySlug,
   getSessionsInternal,
+  listBatchesAdmin,
+  getBatchByIdInternal,
   getMaterials,
   createCourse,
   updateCourse,
@@ -248,6 +286,7 @@ module.exports = {
   addBatchEnrollment,
   removeBatchEnrollment,
   autoEnrollBatch,
+  selectPurchaseBatch,
   addMaterial,
   listAllInternal,
   listCourseCatsInternal,

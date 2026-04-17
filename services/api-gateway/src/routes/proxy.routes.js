@@ -72,12 +72,20 @@ function register(app) {
   app.use('/api/users', validateJWT, usersProxy);
   app.use('/api/user', validateJWT, userAccountProxy);
   app.use('/api/user-uploads', userUploadsProxy);
+  // Propagate the resolved user id to downstream services when optionalJWT succeeded.
+  // Needed so the course-service can scope recordings to a specific batch purchase.
+  const injectOptionalUserId = (req, _res, next) => {
+    const uid = req.user?.userId ?? req.user?.id;
+    if (uid != null && uid !== '') req.headers['x-user-id'] = String(uid);
+    next();
+  };
+
   app.get('/api/course-cats', courseProxy);
   app.get('/api/courses/by-category', courseProxy);
-  app.get('/api/courses/slug/:slug', optionalJWT, courseProxy);
-  app.get('/api/courses/slug/:slug/sessions', optionalJWT, courseProxy);
-  app.get('/api/courses', optionalJWT, courseProxy);
-  app.get('/api/courses/:id', optionalJWT, courseProxy);
+  app.get('/api/courses/slug/:slug', optionalJWT, injectOptionalUserId, courseProxy);
+  app.get('/api/courses/slug/:slug/sessions', optionalJWT, injectOptionalUserId, courseProxy);
+  app.get('/api/courses', optionalJWT, injectOptionalUserId, courseProxy);
+  app.get('/api/courses/:id', optionalJWT, injectOptionalUserId, courseProxy);
   app.get('/api/courses/:id/sessions', validateJWT, requireCourseAccess, courseProxy);
   app.get('/api/courses/:id/materials', validateJWT, requireCourseAccess, courseProxy);
   app.post('/api/orders/webhook/razorpay', orderProxy);

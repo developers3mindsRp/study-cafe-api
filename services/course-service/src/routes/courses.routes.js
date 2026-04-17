@@ -29,6 +29,9 @@ function register(router) {
   router.post('/internal/courses', internalAuth, validate(schemas.createCourse), coursesController.createCourse);
   router.put('/internal/courses/:id', internalAuth, validate(schemas.updateCourse), coursesController.updateCourse);
   router.post('/internal/courses/:id/batches', internalAuth, validate(schemas.createBatch), coursesController.createBatch);
+  // List batches (paginated) — must be registered before /internal/batches/:id routes
+  router.get('/internal/batches', internalAuth, validate(schemas.listBatchesQuery), coursesController.listBatchesAdmin);
+  router.get('/internal/batches/:id', internalAuth, validate(schemas.idParam), coursesController.getBatchByIdInternal);
   router.put('/internal/batches/:id', internalAuth, validate(schemas.updateBatch), coursesController.updateBatch);
   router.post('/internal/batches/:id/sync', internalAuth, validate(schemas.idParam), coursesController.syncBatch);
   router.post('/internal/batches/:id/sessions', internalAuth, validate(schemas.createSession), coursesController.createSession);
@@ -47,7 +50,8 @@ function register(router) {
   router.get('/internal/batches/:id/enrollments', internalAuth, validate(schemas.idParam), coursesController.getBatchEnrollments);
   router.post('/internal/batches/:id/enrollments', internalAuth, validate(schemas.addBatchEnrollment), coursesController.addBatchEnrollment);
   router.delete('/internal/batch-enrollments/:id', internalAuth, validate(schemas.idParam), coursesController.removeBatchEnrollment);
-  router.post('/internal/courses/:id/auto-enroll', internalAuth, validate(schemas.addBatchEnrollment), coursesController.autoEnrollBatch);
+  router.post('/internal/courses/:id/auto-enroll', internalAuth, validate(schemas.autoEnrollBatch), coursesController.autoEnrollBatch);
+  router.get('/internal/courses/:id/select-purchase-batch', internalAuth, validate(schemas.idParam), coursesController.selectPurchaseBatch);
 
   // Course Page Settings
   router.get('/internal/course-page-settings', internalAuth, coursesController.getPageSettings);

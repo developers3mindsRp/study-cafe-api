@@ -33,6 +33,18 @@ Payment.associate({ Order });
 async function connect() {
   await sequelize.authenticate();
   await sequelize.sync();
+  // Idempotent column add for environments where sync() already ran before
+  // this column existed in the model. Safe to run every boot.
+  try {
+    await sequelize.query(
+      "ALTER TABLE orders ADD COLUMN batch_id INT NULL AFTER entity_id"
+    );
+  } catch (err) {
+    // MySQL error 1060 = "Duplicate column name" — column already present.
+    if (err?.parent?.errno !== 1060 && err?.original?.errno !== 1060) {
+      throw err;
+    }
+  }
 }
 
 module.exports = {

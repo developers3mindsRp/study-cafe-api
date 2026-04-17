@@ -118,6 +118,29 @@ const getCourseSessions = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+const listBatches = asyncHandler(async (req, res) => {
+  const payload = (
+    await courseClient.get('/internal/batches', {
+      params: {
+        course_id: req.query.course_id,
+        page: req.query.page,
+        limit: req.query.limit,
+      },
+    })
+  ).data;
+  sendPaginated(res, {
+    data: payload.data,
+    meta: {
+      total: payload.total,
+      page: payload.page,
+      limit: payload.limit,
+      totalPages: payload.totalPages,
+      hasNextPage: payload.hasNextPage,
+      hasPreviousPage: payload.hasPreviousPage,
+    },
+  });
+});
+
 const updateRecording = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
   const { data } = await courseClient.put(`/internal/recordings/${req.params.id}`, req.body);
@@ -419,6 +442,7 @@ module.exports = {
   getCourses,
   getCourse,
   getCourseSessions,
+  listBatches,
   getCourseCats,
   createCourseCat,
   updateCourseCat,
