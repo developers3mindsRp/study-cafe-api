@@ -120,6 +120,7 @@ async function main() {
     await migrateEnrollments(src, tgt);
     await migrateUserCourses(src, tgt);
     await migrateCourseAuthors(src, tgt);
+    await migrateAffiliateData(src, tgt);
 
     console.log('\n════════════════════════════════════');
     console.log('  ✅ Migration complete!');
@@ -182,6 +183,9 @@ async function createAllTables(tgt) {
       youtube VARCHAR(500),
       gst VARCHAR(100),
       account_status VARCHAR(50),
+      referral_code VARCHAR(32) UNIQUE,
+      referred_by BIGINT UNSIGNED,
+      referred_at DATETIME,
       bio TEXT NULL,
       created_at DATETIME,
       updated_at DATETIME,
@@ -274,6 +278,7 @@ async function createAllTables(tgt) {
       rel_download_url VARCHAR(500),
       external_links TEXT,
       status VARCHAR(20) DEFAULT 'publish',
+      blog_access_tier VARCHAR(20) NOT NULL DEFAULT 'free',
       published_at DATETIME,
       created_at DATETIME,
       updated_at DATETIME
@@ -543,6 +548,9 @@ async function createAllTables(tgt) {
       type VARCHAR(32),
       entity_id VARCHAR(64),
       amount DECIMAL(10,2),
+      original_amount DECIMAL(10,2),
+      coupon_code VARCHAR(100),
+      coupon_discount DECIMAL(10,2) DEFAULT 0,
       currency VARCHAR(10) NOT NULL DEFAULT 'INR',
       buyer_name VARCHAR(250),
       buyer_email VARCHAR(255),
@@ -564,7 +572,24 @@ async function createAllTables(tgt) {
       razorpay_payment_id VARCHAR(128),
       razorpay_signature VARCHAR(255),
       amount DECIMAL(10,2) NOT NULL,
-      status VARCHAR(32) NOT NULL
+      status VARCHAR(32) NOT NULL,
+      source VARCHAR(32) DEFAULT 'checkout',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_payment_id_status (razorpay_payment_id, status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    -- Webhook Events (order-service — idempotency for Razorpay webhooks)
+    CREATE TABLE IF NOT EXISTS webhook_events (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      event_id VARCHAR(64) NOT NULL UNIQUE,
+      event_type VARCHAR(64) NOT NULL,
+      razorpay_order_id VARCHAR(128),
+      razorpay_payment_id VARCHAR(128),
+      payload JSON NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'received',
+      error_message TEXT,
+      processed_at DATETIME,
+      created_at DATETIME NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
     -- Outbox Events (order-service)
@@ -595,7 +620,21 @@ async function createAllTables(tgt) {
       start_date DATETIME,
       expire_date DATETIME,
       status VARCHAR(20),
+      visibility ENUM('public','hidden') NOT NULL DEFAULT 'public',
+      usage_limit INT DEFAULT NULL,
+      per_user_limit INT NOT NULL DEFAULT 1,
       created_at DATETIME
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    -- Coupon Usages (order-service — per-user coupon redemption tracking)
+    CREATE TABLE IF NOT EXISTS coupon_usages (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      coupon_id BIGINT UNSIGNED NOT NULL,
+      user_id BIGINT UNSIGNED NOT NULL,
+      order_id VARCHAR(128) NOT NULL,
+      created_at DATETIME NOT NULL,
+      UNIQUE KEY coupon_usages_coupon_id_order_id (coupon_id, order_id),
+      KEY coupon_usages_coupon_id_user_id (coupon_id, user_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
     -- Admin Logs (admin-service)
@@ -615,7 +654,75 @@ async function createAllTables(tgt) {
       id INT AUTO_INCREMENT PRIMARY KEY,
       key_name VARCHAR(128) NOT NULL UNIQUE,
       key_value TEXT,
+      razorpay_key_id VARCHAR(255),
+      razorpay_key_secret VARCHAR(255),
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    -- SEO Metadata (platform-service)
+    CREATE TABLE IF NOT EXISTS seo_metadata (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      page_name VARCHAR(255) NOT NULL,
+      page_slug VARCHAR(255) NOT NULL UNIQUE,
+      meta_title VARCHAR(255) NOT NULL,
+      meta_description TEXT,
+      robots VARCHAR(255) DEFAULT 'index, follow',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    -- Contact Inquiries (platform-service)
+    CREATE TABLE IF NOT EXISTS contact_inquiries (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      first_name VARCHAR(100) NOT NULL,
+      last_name VARCHAR(100) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      mobile_number VARCHAR(30) NOT NULL,
+      country_code VARCHAR(8) DEFAULT 'IN',
+      subject VARCHAR(255),
+      message TEXT NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'new',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    -- Affiliate History (course-service)
+    CREATE TABLE IF NOT EXISTS affiliate_history (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      course_id BIGINT UNSIGNED,
+      entity_type VARCHAR(32) DEFAULT 'course',
+      entity_id VARCHAR(64),
+      user_id BIGINT UNSIGNED NOT NULL,
+      affiliate_id BIGINT UNSIGNED NOT NULL,
+      order_id VARCHAR(128) UNIQUE,
+      order_amount DECIMAL(10,2),
+      commission_amount DECIMAL(10,2) NOT NULL,
+      status ENUM('pending','confirmed') NOT NULL DEFAULT 'confirmed',
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      KEY idx_ah_affiliate (affiliate_id),
+      KEY idx_ah_user (user_id),
+      KEY idx_ah_entity (entity_type, entity_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    -- Affiliate Balances (course-service)
+    CREATE TABLE IF NOT EXISTS affiliate_balances (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      affiliate_id BIGINT UNSIGNED NOT NULL UNIQUE,
+      total_earned DECIMAL(10,2) NOT NULL DEFAULT 0,
+      total_withdrawn DECIMAL(10,2) NOT NULL DEFAULT 0,
+      current_balance DECIMAL(10,2) NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    -- Withdrawal Requests (course-service)
+    CREATE TABLE IF NOT EXISTS withdrawal_requests (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      affiliate_id BIGINT UNSIGNED NOT NULL,
+      amount DECIMAL(10,2) NOT NULL,
+      status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+      remarks TEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      KEY idx_wr_affiliate (affiliate_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
     -- Home Sections (platform-service). meta = JSON for hero/features/stats/testimonial_highlight.
@@ -730,22 +837,50 @@ async function createAllTables(tgt) {
 }
 
 async function ensurePremiumPlansColumns(tgt) {
+    // Safe ALTER TABLE patches — each is idempotent: silently skipped if column already exists.
     const alters = [
+        // premium_plans
         "ALTER TABLE premium_plans ADD COLUMN slug VARCHAR(128) NULL AFTER name",
         "ALTER TABLE premium_plans ADD COLUMN description TEXT NULL AFTER slug",
         "ALTER TABLE premium_plans ADD COLUMN currency VARCHAR(10) NOT NULL DEFAULT 'INR' AFTER price",
         "ALTER TABLE premium_plans ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
         "ALTER TABLE premium_plans ADD COLUMN is_lifetime TINYINT(1) NOT NULL DEFAULT 0 AFTER duration_days",
         "ALTER TABLE premium_plans ADD COLUMN is_popular TINYINT(1) NOT NULL DEFAULT 0 AFTER is_active",
+        // courses
         "ALTER TABLE courses ADD COLUMN course_includes LONGTEXT NULL AFTER includes_info",
+        "ALTER TABLE courses ADD COLUMN is_published TINYINT(1) NOT NULL DEFAULT 0",
+        "ALTER TABLE courses ADD COLUMN affiliate_commission DECIMAL(10,2) NOT NULL DEFAULT 0",
+        // users
         "ALTER TABLE users ADD COLUMN gst VARCHAR(100) NULL AFTER youtube",
         "ALTER TABLE users ADD COLUMN account_status VARCHAR(50) NULL AFTER gst",
+        "ALTER TABLE users ADD COLUMN referral_code VARCHAR(32) UNIQUE",
+        "ALTER TABLE users ADD COLUMN referred_by BIGINT UNSIGNED NULL",
+        "ALTER TABLE users ADD COLUMN referred_at DATETIME NULL",
+        // orders
+        "ALTER TABLE orders ADD COLUMN original_amount DECIMAL(10,2) NULL",
+        "ALTER TABLE orders ADD COLUMN coupon_code VARCHAR(100) NULL",
+        "ALTER TABLE orders ADD COLUMN coupon_discount DECIMAL(10,2) NULL DEFAULT 0",
+        // payments
+        "ALTER TABLE payments ADD COLUMN source VARCHAR(32) DEFAULT 'checkout'",
+        "ALTER TABLE payments ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP",
+        // coupons
+        "ALTER TABLE coupons ADD COLUMN visibility ENUM('public','hidden') NOT NULL DEFAULT 'public'",
+        "ALTER TABLE coupons ADD COLUMN usage_limit INT DEFAULT NULL",
+        "ALTER TABLE coupons ADD COLUMN per_user_limit INT NOT NULL DEFAULT 1",
+        // articles
+        "ALTER TABLE articles ADD COLUMN blog_access_tier VARCHAR(20) NOT NULL DEFAULT 'free'",
+        // payment_config
+        "ALTER TABLE payment_config ADD COLUMN razorpay_key_id VARCHAR(255) NULL",
+        "ALTER TABLE payment_config ADD COLUMN razorpay_key_secret VARCHAR(255) NULL",
     ];
     for (const sql of alters) {
         try {
             await tgt.query(sql, { raw: true });
         } catch (e) {
-            if (e.original && e.original.code !== 'ER_DUP_FIELDNAME') throw e;
+            // ER_DUP_FIELDNAME (1060): column already exists — safe to ignore
+            if (e.original && e.original.code === 'ER_DUP_FIELDNAME') continue;
+            if (e.message && e.message.includes('Duplicate column name')) continue;
+            throw e;
         }
     }
 }
@@ -762,7 +897,8 @@ const ADMIN_MANAGED_TABLES = new Set([
 /** Truncate only source-synced tables on target (3307). Admin-managed tables are preserved. */
 async function clearTargetDatabase(tgt) {
     const tables = [
-        'plan_course_categories', 'plan_courses', 'premium_plans',
+        'withdrawal_requests', 'affiliate_balances', 'affiliate_history',
+        'coupon_usages', 'plan_course_categories', 'plan_courses', 'premium_plans',
         'coupons', 'orders',
         'enrollments', 'course_authors', 'forum_topics', 'media', 'redirections', 'pages', 'file_categories', 'files',
         'file_cats', 'course_categories', 'course_cats', 'courses', 'comments', 'article_courts', 'article_types_map', 'article_tags',
@@ -1259,9 +1395,10 @@ async function migrateArticles(src, tgt) {
     for (let i = 0; i < allArticles.length; i += BATCH) {
         const chunk = allArticles.slice(i, i + BATCH);
         const values = chunk.map(a => {
-            return `(${a.id}, ${esc(a.wp_post_id)}, ${esc(a.title, 65535)}, ${esc(a.slug)}, ${esc(a.content, 16000000)}, ${esc(a.excerpt, 65535)}, ${esc(a.sub_heading)}, ${a.author_id || 'NULL'}, ${esc(a.thumbnail_url)}, ${a.views || 0}, ${esc(a.meta_title)}, ${esc(a.meta_description)}, ${esc(a.meta_keywords)}, ${esc(a.case_name)}, ${esc(a.citation)}, ${esc(a.appeal_number)}, ${esc(a.judgement_date)}, ${esc(a.assessment_year)}, ${esc(a.court_name)}, ${esc(a.section)}, ${esc(a.noti_no)}, ${esc(a.noti_date)}, ${esc(a.ext_link)}, ${esc(a.upload_url)}, ${esc(a.rel_download_url)}, ${esc(a.external_links)}, ${esc(a.status)}, ${escDate(a.published_at)}, ${escDate(a.created_at)}, ${escDate(a.updated_at)})`;
+            const accessTier = esc(a.blog_access_tier || 'free');
+            return `(${a.id}, ${esc(a.wp_post_id)}, ${esc(a.title, 65535)}, ${esc(a.slug)}, ${esc(a.content, 16000000)}, ${esc(a.excerpt, 65535)}, ${esc(a.sub_heading)}, ${a.author_id || 'NULL'}, ${esc(a.thumbnail_url)}, ${a.views || 0}, ${esc(a.meta_title)}, ${esc(a.meta_description)}, ${esc(a.meta_keywords)}, ${esc(a.case_name)}, ${esc(a.citation)}, ${esc(a.appeal_number)}, ${esc(a.judgement_date)}, ${esc(a.assessment_year)}, ${esc(a.court_name)}, ${esc(a.section)}, ${esc(a.noti_no)}, ${esc(a.noti_date)}, ${esc(a.ext_link)}, ${esc(a.upload_url)}, ${esc(a.rel_download_url)}, ${esc(a.external_links)}, ${esc(a.status)}, ${accessTier}, ${escDate(a.published_at)}, ${escDate(a.created_at)}, ${escDate(a.updated_at)})`;
         }).join(',');
-        await tgt.query(`INSERT INTO articles (id, wp_post_id, title, slug, content, excerpt, sub_heading, author_id, thumbnail_url, views, meta_title, meta_description, meta_keywords, case_name, citation, appeal_number, judgement_date, assessment_year, court_name, section, noti_no, noti_date, ext_link, upload_url, rel_download_url, external_links, status, published_at, created_at, updated_at) VALUES ${values}`, { raw: true });
+        await tgt.query(`INSERT INTO articles (id, wp_post_id, title, slug, content, excerpt, sub_heading, author_id, thumbnail_url, views, meta_title, meta_description, meta_keywords, case_name, citation, appeal_number, judgement_date, assessment_year, court_name, section, noti_no, noti_date, ext_link, upload_url, rel_download_url, external_links, status, blog_access_tier, published_at, created_at, updated_at) VALUES ${values}`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allArticles.length)}/${allArticles.length}\r`);
     }
     console.log(`   ✅ ${allArticles.length} articles`);
@@ -1397,8 +1534,8 @@ async function migrateRecordings(src, tgt) {
     if (!filtered.length) { console.log('   ✅ 0 source recordings (existing recordings preserved)'); return; }
     for (let i = 0; i < filtered.length; i += BATCH) {
         const chunk = filtered.slice(i, i + BATCH);
-        const values = chunk.map(r => `(${r.id}, ${r.session_id}, ${esc(r.url)}, ${esc(r.source)})`).join(',');
-        await tgt.query(`INSERT INTO recordings (id, session_id, url, source) VALUES ${values} ON DUPLICATE KEY UPDATE session_id=VALUES(session_id), url=VALUES(url), source=VALUES(source)`, { raw: true });
+        const values = chunk.map(r => `(${r.id}, ${r.session_id}, ${esc(r.url)}, ${esc(r.source)}, ${r.is_visible ? 1 : 0})`).join(',');
+        await tgt.query(`INSERT INTO recordings (id, session_id, url, source, is_visible) VALUES ${values} ON DUPLICATE KEY UPDATE session_id=VALUES(session_id), url=VALUES(url), source=VALUES(source), is_visible=VALUES(is_visible)`, { raw: true });
     }
     console.log(`   ✅ ${filtered.length} source recordings synced (admin-created recordings preserved)`);
 }
@@ -1429,9 +1566,12 @@ async function migrateOrders(src, tgt) {
             const orderId = esc(`ORD_${o.id}`);
             const type = (o.course_id != null && o.course_id !== '') ? 'course' : 'membership';
             const entityId = o.course_id != null && o.course_id !== '' ? esc(String(o.course_id)) : 'NULL';
-            return `(${o.id}, ${esc(o.wp_post_id)}, ${orderId}, ${o.user_id || 'NULL'}, ${o.course_id || 'NULL'}, ${esc(type)}, ${entityId}, ${o.amount || 'NULL'}, 'INR', ${esc(o.buyer_name)}, ${esc(o.buyer_email)}, ${esc(o.buyer_mobile)}, ${esc(o.rp_payment_id)}, NULL, ${esc(o.affiliate)}, ${esc(o.certificate_name)}, ${esc(o.certificate_issue_date)}, ${esc(o.status)}, ${esc(o.gateway)}, ${escDate(o.created_at)})`;
+            const originalAmount = o.original_amount != null ? o.original_amount : (o.amount || 'NULL');
+            const couponCode = o.coupon_code ? esc(o.coupon_code) : 'NULL';
+            const couponDiscount = o.coupon_discount != null ? o.coupon_discount : 0;
+            return `(${o.id}, ${esc(o.wp_post_id)}, ${orderId}, ${o.user_id || 'NULL'}, ${o.course_id || 'NULL'}, ${esc(type)}, ${entityId}, ${o.amount || 'NULL'}, ${originalAmount}, ${couponCode}, ${couponDiscount}, 'INR', ${esc(o.buyer_name)}, ${esc(o.buyer_email)}, ${esc(o.buyer_mobile)}, ${esc(o.rp_payment_id)}, NULL, ${esc(o.affiliate)}, ${esc(o.certificate_name)}, ${esc(o.certificate_issue_date)}, ${esc(o.status)}, ${esc(o.gateway)}, ${escDate(o.created_at)})`;
         }).join(',');
-        await tgt.query(`INSERT INTO orders (id, wp_post_id, order_id, user_id, course_id, type, entity_id, amount, currency, buyer_name, buyer_email, buyer_mobile, rp_payment_id, razorpay_order_id, affiliate, certificate_name, certificate_issue_date, status, gateway, created_at) VALUES ${values}`, { raw: true });
+        await tgt.query(`INSERT INTO orders (id, wp_post_id, order_id, user_id, course_id, type, entity_id, amount, original_amount, coupon_code, coupon_discount, currency, buyer_name, buyer_email, buyer_mobile, rp_payment_id, razorpay_order_id, affiliate, certificate_name, certificate_issue_date, status, gateway, created_at) VALUES ${values}`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allOrders.length)}/${allOrders.length}\r`);
     }
     console.log(`   ✅ ${allOrders.length} orders`);
@@ -1443,9 +1583,12 @@ async function migrateCoupons(src, tgt) {
     const rows = await src.query('SELECT * FROM sc_coupons ORDER BY id', { type: QueryTypes.SELECT });
     if (!rows.length) { console.log('   ✅ 0 coupons'); return; }
     const values = rows.map(c => {
-        return `(${c.id}, ${esc(c.wp_post_id)}, ${esc(c.code)}, ${esc(c.description)}, ${esc(c.type)}, ${c.value || 'NULL'}, ${c.min_order || 'NULL'}, ${c.max_discount || 'NULL'}, ${esc(c.discount_on)}, ${escDate(c.start_date)}, ${escDate(c.expire_date)}, ${esc(c.status)}, ${escDate(c.created_at)})`;
+        const visibility = esc(c.visibility || 'public');
+        const usageLimit = c.usage_limit != null ? c.usage_limit : 'NULL';
+        const perUserLimit = c.per_user_limit != null ? c.per_user_limit : 1;
+        return `(${c.id}, ${esc(c.wp_post_id)}, ${esc(c.code)}, ${esc(c.description)}, ${esc(c.type)}, ${c.value || 'NULL'}, ${c.min_order || 'NULL'}, ${c.max_discount || 'NULL'}, ${esc(c.discount_on)}, ${escDate(c.start_date)}, ${escDate(c.expire_date)}, ${esc(c.status)}, ${visibility}, ${usageLimit}, ${perUserLimit}, ${escDate(c.created_at)})`;
     }).join(',');
-    await tgt.query(`INSERT INTO coupons (id, wp_post_id, code, description, type, value, min_order, max_discount, discount_on, start_date, expire_date, status, created_at) VALUES ${values}`, { raw: true });
+    await tgt.query(`INSERT INTO coupons (id, wp_post_id, code, description, type, value, min_order, max_discount, discount_on, start_date, expire_date, status, visibility, usage_limit, per_user_limit, created_at) VALUES ${values}`, { raw: true });
     console.log(`   ✅ ${rows.length} coupons`);
 }
 
@@ -1751,6 +1894,132 @@ async function migrateCourseAuthors(src, tgt) {
     const values = rows.map(a => `(${a.id}, ${a.course_id}, ${a.user_id}, ${a.sort_order || 0})`).join(',');
     await tgt.query(`INSERT INTO course_authors (id, course_id, user_id, sort_order) VALUES ${values}`, { raw: true });
     console.log(`   ✅ ${rows.length} course authors`);
+}
+
+/**
+ * Migrate affiliate data (history, balances, withdrawal_requests) from source.
+ * Source tables are optional; migration is skipped gracefully if they don't exist.
+ * Also syncs referral_code/referred_by from sc_users if those columns exist.
+ */
+async function migrateAffiliateData(src, tgt) {
+    console.log('💸 Migrating affiliate data...');
+
+    // ── 1) referral_code + referred_by on users (from sc_users if columns exist) ──
+    try {
+        const cols = await src.query(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME IN ('referral_code','referred_by','referred_at')",
+            { replacements: [_srcUsersTable], type: QueryTypes.SELECT }
+        );
+        const hasReferral = cols.some(c => c.COLUMN_NAME === 'referral_code');
+        if (hasReferral) {
+            const rows = await src.query(
+                `SELECT id, referral_code, referred_by, referred_at FROM \`${_srcUsersTable}\` WHERE referral_code IS NOT NULL`,
+                { type: QueryTypes.SELECT }
+            );
+            let updated = 0;
+            for (const r of rows) {
+                try {
+                    await tgt.query(
+                        'UPDATE users SET referral_code = ?, referred_by = ?, referred_at = ? WHERE id = ?',
+                        { replacements: [r.referral_code, r.referred_by || null, r.referred_at || null, r.id], raw: true }
+                    );
+                    updated++;
+                } catch (_) { }
+            }
+            if (updated > 0) console.log(`   referral_codes: ${updated} users updated`);
+        }
+    } catch (_) { }
+
+    // ── 2) affiliate_history ──
+    try {
+        const tables = await src.query(
+            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'affiliate_history'",
+            { type: QueryTypes.SELECT }
+        );
+        if (tables.length) {
+            const rows = await src.query('SELECT * FROM affiliate_history ORDER BY id', { type: QueryTypes.SELECT });
+            if (rows.length) {
+                await tgt.query('DELETE FROM affiliate_history', { raw: true });
+                for (let i = 0; i < rows.length; i += BATCH) {
+                    const chunk = rows.slice(i, i + BATCH);
+                    const values = chunk.map(r => {
+                        const entityType = esc(r.entity_type || 'course');
+                        const entityId = r.entity_id ? esc(String(r.entity_id)) : 'NULL';
+                        return `(${r.id}, ${r.course_id || 'NULL'}, ${entityType}, ${entityId}, ${r.user_id}, ${r.affiliate_id}, ${esc(r.order_id)}, ${r.order_amount || 'NULL'}, ${r.commission_amount || 0}, ${esc(r.status || 'confirmed')}, ${escDate(r.created_at)})`;
+                    }).join(',');
+                    await tgt.query(
+                        `INSERT IGNORE INTO affiliate_history (id, course_id, entity_type, entity_id, user_id, affiliate_id, order_id, order_amount, commission_amount, status, created_at) VALUES ${values}`,
+                        { raw: true }
+                    );
+                }
+                console.log(`   affiliate_history: ${rows.length} rows`);
+            } else {
+                console.log('   affiliate_history: 0 rows (source empty)');
+            }
+        } else {
+            console.log('   ⏭️  affiliate_history not in source; skip');
+        }
+    } catch (e) {
+        console.warn('   ⚠️  affiliate_history migration failed:', e.message);
+    }
+
+    // ── 3) affiliate_balances ──
+    try {
+        const tables = await src.query(
+            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'affiliate_balances'",
+            { type: QueryTypes.SELECT }
+        );
+        if (tables.length) {
+            const rows = await src.query('SELECT * FROM affiliate_balances ORDER BY id', { type: QueryTypes.SELECT });
+            if (rows.length) {
+                await tgt.query('DELETE FROM affiliate_balances', { raw: true });
+                const values = rows.map(r =>
+                    `(${r.id}, ${r.affiliate_id}, ${r.total_earned || 0}, ${r.total_withdrawn || 0}, ${r.current_balance || 0}, ${escDate(r.created_at)})`
+                ).join(',');
+                await tgt.query(
+                    `INSERT IGNORE INTO affiliate_balances (id, affiliate_id, total_earned, total_withdrawn, current_balance, created_at) VALUES ${values}`,
+                    { raw: true }
+                );
+                console.log(`   affiliate_balances: ${rows.length} rows`);
+            } else {
+                console.log('   affiliate_balances: 0 rows');
+            }
+        } else {
+            console.log('   ⏭️  affiliate_balances not in source; skip');
+        }
+    } catch (e) {
+        console.warn('   ⚠️  affiliate_balances migration failed:', e.message);
+    }
+
+    // ── 4) withdrawal_requests ──
+    try {
+        const tables = await src.query(
+            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'withdrawal_requests'",
+            { type: QueryTypes.SELECT }
+        );
+        if (tables.length) {
+            const rows = await src.query('SELECT * FROM withdrawal_requests ORDER BY id', { type: QueryTypes.SELECT });
+            if (rows.length) {
+                await tgt.query('DELETE FROM withdrawal_requests', { raw: true });
+                const values = rows.map(r =>
+                    `(${r.id}, ${r.affiliate_id}, ${r.amount}, ${esc(r.status || 'pending')}, ${r.remarks ? esc(r.remarks) : 'NULL'}, ${escDate(r.created_at)})`
+                ).join(',');
+                await tgt.query(
+                    `INSERT IGNORE INTO withdrawal_requests (id, affiliate_id, amount, status, remarks, created_at) VALUES ${values}`,
+                    { raw: true }
+                );
+                console.log(`   withdrawal_requests: ${rows.length} rows`);
+            } else {
+                console.log('   withdrawal_requests: 0 rows');
+            }
+        } else {
+            console.log('   ⏭️  withdrawal_requests not in source; skip');
+        }
+    } catch (e) {
+        console.warn('   ⚠️  withdrawal_requests migration failed:', e.message);
+    }
+
+    console.log('   ✅ Affiliate data migration done');
 }
 
 // ──── Run ────
