@@ -268,7 +268,42 @@ const coursesService = {
     if (!row) return null;
     const d = row.get({ plain: true });
     d.language = normalizeLanguage(d.language);
-    return this.enrichCourseWithAuthors(d);
+    const enriched = await this.enrichCourseWithAuthors(d);
+
+    // Fetch batches with sessions & recordings
+    const batches = await this._getBatchesSessionsRecordings(id, { visibleOnly: true });
+
+    // Fetch materials
+    const materials = await Material.findAll({
+      where: { course_id: id },
+      order: [['id', 'ASC']],
+      attributes: ['id', 'title', 'url', 'type'],
+    });
+
+    // Fetch categories
+    const { CourseCategory } = require('../models');
+    const catLinks = await CourseCategory.findAll({
+      where: { course_id: id },
+      attributes: ['course_cat_id'],
+      raw: true,
+    });
+    const catIds = catLinks.map((l) => l.course_cat_id);
+    let categories = [];
+    if (catIds.length > 0) {
+      const { Op } = require('sequelize');
+      categories = await CourseCat.findAll({
+        where: { id: { [Op.in]: catIds } },
+        attributes: ['id', 'name', 'slug'],
+        raw: true,
+      });
+    }
+
+    return {
+      ...enriched,
+      batches,
+      materials: materials.map((m) => m.get({ plain: true })),
+      categories,
+    };
   },
 
   async getBySlug(slug) {
@@ -276,7 +311,42 @@ const coursesService = {
     if (!row) return null;
     const d = row.get({ plain: true });
     d.language = normalizeLanguage(d.language);
-    return this.enrichCourseWithAuthors(d);
+    const enriched = await this.enrichCourseWithAuthors(d);
+
+    // Fetch batches with sessions & recordings
+    const batches = await this._getBatchesSessionsRecordings(d.id, { visibleOnly: true });
+
+    // Fetch materials
+    const materials = await Material.findAll({
+      where: { course_id: d.id },
+      order: [['id', 'ASC']],
+      attributes: ['id', 'title', 'url', 'type'],
+    });
+
+    // Fetch categories
+    const { CourseCategory } = require('../models');
+    const catLinks = await CourseCategory.findAll({
+      where: { course_id: d.id },
+      attributes: ['course_cat_id'],
+      raw: true,
+    });
+    const catIds = catLinks.map((l) => l.course_cat_id);
+    let categories = [];
+    if (catIds.length > 0) {
+      const { Op } = require('sequelize');
+      categories = await CourseCat.findAll({
+        where: { id: { [Op.in]: catIds } },
+        attributes: ['id', 'name', 'slug'],
+        raw: true,
+      });
+    }
+
+    return {
+      ...enriched,
+      batches,
+      materials: materials.map((m) => m.get({ plain: true })),
+      categories,
+    };
   },
 
   async getSessionsBySlug(slug) {
