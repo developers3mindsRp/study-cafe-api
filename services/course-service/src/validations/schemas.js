@@ -169,6 +169,22 @@ const addBatchEnrollment = {
     }),
 };
 
+const autoEnrollBatch = {
+    params: idParam.params,
+    body: Joi.object({
+        user_id: Joi.number().integer().positive().required(),
+        batch_id: Joi.number().integer().positive().allow(null),
+    }),
+};
+
+const listBatchesQuery = {
+    query: Joi.object({
+        course_id: Joi.number().integer().positive().optional(),
+        page: Joi.number().integer().min(1).optional(),
+        limit: Joi.number().integer().min(1).max(50).optional(),
+    }),
+};
+
 // ── Materials ──────────────────────────────────────────────────────
 
 const addMaterial = {
@@ -203,6 +219,8 @@ module.exports = {
     updateRecording,
     toggleVisibility,
     addBatchEnrollment,
+    autoEnrollBatch,
+    listBatchesQuery,
     addMaterial,
     updatePageSetting,
 };

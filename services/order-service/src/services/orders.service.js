@@ -113,6 +113,55 @@ async function fetchCourseAmount(entityId) {
   return price;
 }
 
+/**
+ * Ask course-service which batch this course purchase should enroll the user into.
+ * Resolves synchronously at purchase creation so a batch lock-in decision is made BEFORE
+ * new batches (added after purchase) are available. Returns null if the course has no batches yet.
+ */
+async function fetchPurchaseBatchId(courseId) {
+  try {
+    const { data } = await axios.get(
+      `${config.courseServiceUrl}/internal/courses/${courseId}/select-purchase-batch`,
+      {
+        timeout: 8000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200,
+      }
+    );
+    const payload = parseApiResponse(data);
+    return payload?.id ? Number(payload.id) : null;
+  } catch (err) {
+    logger.warn(`[orders] failed to resolve purchase batch for course ${courseId}: ${err.message}`);
+    return null;
+  }
+}
+
+/** Course-service batch row (GET /internal/batches/:id) for my-purchases enrichment. */
+async function fetchBatchById(batchId) {
+  try {
+    const { data } = await axios.get(`${config.courseServiceUrl}/internal/batches/${batchId}`, {
+      timeout: 8000,
+      headers: { 'x-internal-api-key': config.internalApiKey },
+      validateStatus: (s) => s === 200,
+    });
+    return parseApiResponse(data);
+  } catch (err) {
+    logger.warn(`[orders] failed to load batch ${batchId}: ${err.message}`);
+    return null;
+  }
+}
+
+/** DATEONLY compare in UTC — upcoming live batch vs in-progress vs ended. */
+function computeLiveBatchPhase(batch) {
+  if (!batch) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const sd = batch.start_date ? String(batch.start_date).slice(0, 10) : null;
+  const ed = batch.end_date ? String(batch.end_date).slice(0, 10) : null;
+  if (sd && sd > today) return 'upcoming';
+  if (ed && ed < today) return 'completed';
+  return 'live';
+}
+
 async function fetchMembershipAmount(entityId) {
   const { data } = await axios.get(`${config.platformServiceUrl}/internal/platform/plans/${entityId}`, {
     timeout: 8000,
@@ -295,7 +344,13 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
           aggregate_type: 'order',
           aggregate_id: orderId,
           event_type: 'COURSE_PURCHASED',
-          payload: { userId: locked.user_id, orderId, courseId: locked.entity_id },
+          payload: {
+            userId: locked.user_id,
+            orderId,
+            courseId: locked.entity_id,
+            // batch_id is resolved at createOrder time and locked onto the order row.
+            batchId: locked.batch_id ? Number(locked.batch_id) : null,
+          },
         },
         { transaction: t }
       );
@@ -373,12 +428,21 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
   const orderId = generateOrderId();
   const amountPaise = Math.round(finalAmount * 100);
 
+  // For course purchases, resolve + lock the batch the buyer will be enrolled into.
+  // (upcoming > latest completed > newest) — so adding a new upcoming batch AFTER
+  // this order is placed does NOT retroactively move the learner to a different cohort.
+  let resolvedBatchId = null;
+  if (typeUpper === 'COURSE') {
+    resolvedBatchId = await fetchPurchaseBatchId(entityId);
+  }
+
   try {
     const order = await Order.create({
       order_id: orderId,
       user_id: userId,
       type: typeUpper.toLowerCase(),
       entity_id: String(entityId),
+      batch_id: resolvedBatchId,
       original_amount: originalAmount,
       coupon_code: couponResult ? couponResult.coupon.code : null,
       coupon_discount: discountAmount,
@@ -518,6 +582,7 @@ async function listMyPurchases(userId) {
       course = {
         id: cid,
         title: meta?.title || `Course ${cid}`,
+        slug: meta?.slug ?? null,
         description: meta?.brief_description || meta?.description || '',
         thumbnail: meta?.thumbnail_url || '',
         thumbnail_url: meta?.thumbnail_url || null,
@@ -558,11 +623,33 @@ async function listMyPurchases(userId) {
     const purchaseStatus =
       o.status === 'paid' ? 'completed' : o.status === 'pending' ? 'pending' : 'failed';
 
+    let enrolledBatch = null;
+    if (o.type === 'course' && o.batch_id && course) {
+      const batchRow = await fetchBatchById(o.batch_id);
+      if (batchRow) {
+        const phase = computeLiveBatchPhase(batchRow);
+        enrolledBatch = {
+          batchId: batchRow.id,
+          name: batchRow.name,
+          startDate: batchRow.start_date,
+          endDate: batchRow.end_date,
+          meetLink: batchRow.meet_link || null,
+          phase,
+        };
+        if (batchRow.course_slug && !course.slug) {
+          course.slug = batchRow.course_slug;
+        }
+      }
+    }
+
     out.push({
       id: String(o.id),
       userId: String(o.user_id),
       courseId: o.entity_id ? String(o.entity_id) : String(o.id),
       course,
+      // Batch this purchase was locked to (nullable — e.g. courses without batches yet).
+      batchId: o.batch_id || null,
+      enrolledBatch,
       purchaseDate: o.created_at,
       price: Number(o.amount) || 0,
       paymentMethod: payment ? 'Razorpay' : o.gateway || 'Razorpay',

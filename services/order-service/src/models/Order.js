@@ -11,6 +11,9 @@ module.exports = (sequelize) => {
       course_id: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
       type: { type: DataTypes.STRING(32), allowNull: true },
       entity_id: { type: DataTypes.STRING(64), allowNull: true },
+      /** For course purchases: the batch the buyer is enrolled into.
+       *  Resolved at order creation (upcoming > latest completed > latest created). */
+      batch_id: { type: DataTypes.INTEGER, allowNull: true },
       amount: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
       currency: { type: DataTypes.STRING(10), allowNull: false, defaultValue: 'INR' },
       buyer_name: { type: DataTypes.STRING(250), allowNull: true },
