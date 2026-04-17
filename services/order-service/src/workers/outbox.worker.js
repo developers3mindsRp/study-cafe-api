@@ -33,7 +33,6 @@ async function processEvent(record) {
           },
           { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
         ).catch(err => {
-          // Log but do not fail the whole process if auto-enrollment fails, as the core purchase succeeded
           logger.warn(`Failed to auto-enroll user ${data.userId} into batch for course ${data.courseId}: ${err.message}`);
         })
       ]);
@@ -49,6 +48,22 @@ async function processEvent(record) {
         },
         { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
       );
+    } else if (event_type === 'AFFILIATE_COMMISSION') {
+      await axios.post(
+        `${config.courseServiceUrl}/internal/affiliate/record-commission`,
+        {
+          userId: data.userId,
+          orderId: data.orderId,
+          type: data.type,
+          entityId: data.entityId,
+          amount: data.amount,
+          referralCode: data.referralCode,
+        },
+        { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
+      ).catch(err => {
+        logger.warn(`Failed to record affiliate commission for order ${data.orderId}: ${err.message}`);
+        throw err;
+      });
     }
     await OutboxEvent.update(
       { status: 'processed', processed_at: new Date() },

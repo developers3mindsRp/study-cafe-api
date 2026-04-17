@@ -37,6 +37,7 @@ module.exports = (sequelize) => {
       status: { type: DataTypes.STRING(20), defaultValue: 'draft' },
       start_date: { type: DataTypes.DATE, allowNull: true },
       end_date: { type: DataTypes.DATE, allowNull: true },
+      affiliate_commission: { type: DataTypes.DECIMAL(10, 2), allowNull: false, defaultValue: 0 },
     },
     {
       tableName: 'courses',

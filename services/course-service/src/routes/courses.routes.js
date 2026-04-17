@@ -8,6 +8,8 @@ function register(router) {
   router.get('/courses', coursesController.list);
   router.get('/course-cats', coursesController.listCourseCatsPublic);
   router.get('/courses/by-category', coursesController.listByCategory);
+  // Static path before /:id — "featured" is not a numeric id
+  router.get('/courses/featured', coursesController.listFeatured);
   // Slug-based lookup (must be before /:id to avoid being caught as a numeric id)
   router.get('/courses/slug/:slug', coursesController.getBySlug);
   router.get('/courses/slug/:slug/sessions', coursesController.getSessionsBySlug);
@@ -16,6 +18,7 @@ function register(router) {
   router.get('/courses/:id/materials', validate(schemas.idParam), coursesController.getMaterials);
 
   // Internal routes (admin proxy)
+  router.post('/internal/courses/by-ids', internalAuth, coursesController.listByIdsOrCatIds);
   router.get('/internal/courses', internalAuth, coursesController.listAllInternal);
   router.get('/internal/courses/:id', internalAuth, validate(schemas.idParam), coursesController.getByIdInternal);
   router.get('/internal/courses/:id/sessions', internalAuth, validate(schemas.idParam), coursesController.getSessionsInternal);

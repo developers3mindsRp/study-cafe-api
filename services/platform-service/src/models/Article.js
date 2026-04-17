@@ -32,6 +32,8 @@ module.exports = (sequelize) => {
       external_links: { type: DataTypes.TEXT, allowNull: true },
       status: { type: DataTypes.STRING(20), defaultValue: 'publish' },
       published_at: { type: DataTypes.DATE, allowNull: true },
+      /** `free` = full content for everyone; `premium` = full content only for members (or admins). */
+      blog_access_tier: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'free' },
     },
     {
       tableName: 'articles',

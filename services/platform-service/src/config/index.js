@@ -1,6 +1,10 @@
 module.exports = {
   port: parseInt(process.env.PORT || '4005', 10),
   serviceName: 'platform-service',
+  /** Same secret as auth-service JWT for optional Bearer parsing on public article routes. */
+  jwt: {
+    secret: process.env.JWT_SECRET || 'studycafe-jwt-secret',
+  },
   mysql: {
     host: process.env.MYSQL_HOST || 'localhost',
     port: parseInt(process.env.MYSQL_PORT || '3306', 10),

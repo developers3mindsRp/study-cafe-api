@@ -9,6 +9,8 @@ function register(router) {
   router.get('/user/dashboard/stats', requireAuth, accountController.dashboardStats);
   router.get('/user/courses', requireAuth, accountController.myCourses);
   router.post('/user/avatar', requireAuth, uploadAvatarMw.single('avatar'), accountController.uploadAvatar);
+  router.get('/user/subscription', requireAuth, accountController.getSubscription);
+  router.get('/user/membership-courses', requireAuth, accountController.getMembershipCourses);
 }
 
 module.exports = { register };

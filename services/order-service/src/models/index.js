@@ -24,6 +24,8 @@ const Order = require('./Order')(sequelize);
 const Payment = require('./Payment')(sequelize);
 const OutboxEvent = require('./OutboxEvent')(sequelize);
 const Coupon = require('./Coupon')(sequelize);
+const WebhookEvent = require('./WebhookEvent')(sequelize);
+const CouponUsage = require('./CouponUsage')(sequelize);
 
 Order.associate({ Payment });
 Payment.associate({ Order });
@@ -39,5 +41,7 @@ module.exports = {
   Payment,
   OutboxEvent,
   Coupon,
+  CouponUsage,
+  WebhookEvent,
   connect,
 };

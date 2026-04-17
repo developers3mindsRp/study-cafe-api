@@ -1,113 +1,307 @@
 const crypto = require('crypto');
 const axios = require('axios');
-const { sequelize, Order, Payment, OutboxEvent, Coupon } = require('../models');
+const { sequelize, Order, Payment, OutboxEvent, Coupon, CouponUsage } = require('../models');
 const { Op } = require('sequelize');
 const { getRedis } = require('../config/redis');
 const config = require('../config');
 const { getRazorpayInstance, getRazorpayConfig } = require('./payment.service');
-const { AppError } = require('../../../../shared');
+const { AppError, logger } = require('../../../../shared');
 
 function generateOrderId() {
   return 'ORD_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
 }
 
-async function createOrder(userId, { type, entityId, amount, currency = 'INR' }) {
-  const razorpay = await getRazorpayInstance();
-  if (!razorpay) throw new AppError('Payment not configured', 503);
+// ─── Internal service helpers ─────────────────────────────────────────────────
 
-  const orderId = generateOrderId();
-  const amountPaise = Math.round(parseFloat(amount) * 100);
-  const lockKey = `order:lock:${userId}:${type}:${entityId}`;
-  const redis = await getRedis();
-  const locked = await redis.set(lockKey, '1', { NX: true, EX: 30 });
-  if (!locked) throw new AppError('Duplicate order in progress', 429);
-
+async function fetchPlanDetails(entityId) {
   try {
-    const order = await Order.create({
-      order_id: orderId,
-      user_id: userId,
-      type,
-      entity_id: String(entityId),
-      amount,
-      currency,
-      status: 'pending',
-    });
-    const rpOrder = await razorpay.orders.create({
-      amount: amountPaise,
-      currency,
-      receipt: orderId,
-      notes: { orderId, userId: String(userId), type, entityId: String(entityId) },
-    });
-    await order.update({ razorpay_order_id: rpOrder.id });
-    await redis.del(lockKey);
-    const config = await getRazorpayConfig();
-    return {
-      orderId,
-      razorpayOrderId: rpOrder.id,
-      amount: amountPaise,
-      currency,
-      key: config?.key_id,
-    };
-  } catch (err) {
-    await redis.del(lockKey).catch(() => { });
-    throw err;
+    const { data } = await axios.get(
+      `${config.platformServiceUrl}/internal/platform/plans/${entityId}`,
+      {
+        timeout: 8000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200,
+      }
+    );
+    return data.data !== undefined ? data.data : data;
+  } catch {
+    return null;
   }
 }
 
-async function verifyOrder(userId, { orderId, razorpay_order_id, razorpay_payment_id, razorpay_signature }) {
-  const config = await getRazorpayConfig();
-  if (!config) throw new AppError('Payment not configured', 503);
-  const expected = crypto
-    .createHmac('sha256', config.key_secret)
-    .update(razorpay_order_id + '|' + razorpay_payment_id)
-    .digest('hex');
-  if (expected !== razorpay_signature) throw new AppError('Invalid signature', 400);
+function buildMembershipPayload(order, plan) {
+  const now = new Date();
+  const payload = { userId: order.user_id, orderId: order.order_id };
 
+  if (plan && plan.is_lifetime) {
+    const farFuture = new Date(now);
+    farFuture.setFullYear(farFuture.getFullYear() + 100);
+    payload.membershipType = plan.slug || 'lifetime';
+    payload.startsAt = now.toISOString();
+    payload.expiresAt = farFuture.toISOString();
+  } else if (plan && plan.duration_days) {
+    payload.membershipType = plan.slug || 'basic';
+    payload.startsAt = now.toISOString();
+    const expires = new Date(now.getTime() + plan.duration_days * 86400000);
+    payload.expiresAt = expires.toISOString();
+  } else {
+    const expires = new Date(now);
+    expires.setFullYear(expires.getFullYear() + 1);
+    payload.membershipType = 'annual';
+    payload.startsAt = now.toISOString();
+    payload.expiresAt = expires.toISOString();
+  }
+  return payload;
+}
+
+async function resolveReferrer(userId, referralCode) {
+  if (!referralCode) return null;
+  try {
+    const { data } = await axios.get(
+      `${config.authServiceUrl}/internal/users/by-referral-code/${referralCode}`,
+      { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 5000 }
+    );
+    const referrer = data.data || data;
+    if (!referrer || String(referrer.id) === String(userId)) return null;
+    const referredAt = referrer.referred_at ? new Date(referrer.referred_at) : null;
+    if (referredAt) {
+      const windowMs = 7 * 24 * 60 * 60 * 1000;
+      if (Date.now() - referredAt.getTime() > windowMs) return null;
+    }
+    return referrer;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchUserContact(userId) {
+  try {
+    const { data } = await axios.get(
+      `${config.authServiceUrl}/internal/users/${userId}/contact`,
+      { headers: { 'x-internal-api-key': config.internalApiKey }, timeout: 5000 }
+    );
+    return data.data || data;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeOrderType(type) {
+  if (!type || typeof type !== 'string') return '';
+  return type.trim().toUpperCase();
+}
+
+function parseAmount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function parseApiResponse(response) {
+  return response?.data !== undefined ? response.data : response;
+}
+
+async function fetchCourseAmount(entityId) {
+  const { data } = await axios.get(`${config.courseServiceUrl}/internal/courses/${entityId}`, {
+    timeout: 8000,
+    headers: { 'x-internal-api-key': config.internalApiKey },
+    validateStatus: (status) => status === 200,
+  });
+  const payload = parseApiResponse(data);
+  const salePrice = parseAmount(payload?.sale_price);
+  const price = salePrice || parseAmount(payload?.price);
+  if (!price) throw new AppError('Course price unavailable', 400);
+  return price;
+}
+
+async function fetchMembershipAmount(entityId) {
+  const { data } = await axios.get(`${config.platformServiceUrl}/internal/platform/plans/${entityId}`, {
+    timeout: 8000,
+    headers: { 'x-internal-api-key': config.internalApiKey },
+    validateStatus: (status) => status === 200,
+  });
+  const payload = parseApiResponse(data);
+  const price = parseAmount(payload?.price);
+  if (!price) throw new AppError('Membership price unavailable', 400);
+  return price;
+}
+
+async function resolveAmountForEntity(type, entityId) {
+  const typeUpper = normalizeOrderType(type);
+  if (typeUpper === 'COURSE') return fetchCourseAmount(entityId);
+  if (typeUpper === 'MEMBERSHIP') return fetchMembershipAmount(entityId);
+  throw new AppError('Invalid type, expected COURSE or MEMBERSHIP', 400);
+}
+
+// ─── Coupon helpers ───────────────────────────────────────────────────────────
+
+function isCouponTypeValid(coupon, typeUpper) {
+  const discountOn = String(coupon.discount_on || '').trim().toLowerCase();
+  if (!discountOn || discountOn === 'everything' || discountOn === 'all') return true;
+  if (typeUpper === 'COURSE') return /course/i.test(discountOn);
+  if (typeUpper === 'MEMBERSHIP') return /membership|plan/i.test(discountOn);
+  return false;
+}
+
+function isDiscountOnAllowedForType(discountOn, typeUpper) {
+  const d = String(discountOn || '').trim().toLowerCase();
+  if (!d || d === 'everything' || d === 'all') return true;
+  if (typeUpper === 'COURSE') return /course/i.test(d);
+  if (typeUpper === 'MEMBERSHIP') return /membership|plan/i.test(d);
+  return false;
+}
+
+function calculateDiscount(coupon, amount) {
+  const value = parseAmount(coupon.value);
+  const maxDiscount = parseAmount(coupon.max_discount);
+  let discount = 0;
+  if (String(coupon.type || '').trim().toLowerCase() === 'percentage') {
+    discount = (amount * value) / 100;
+  } else {
+    discount = value;
+  }
+  if (maxDiscount > 0) discount = Math.min(discount, maxDiscount);
+  return Math.max(0, Math.min(discount, amount));
+}
+
+function buildCouponResult(coupon, amount, typeUpper) {
+  const now = new Date();
+  const startDate = coupon.start_date ? new Date(coupon.start_date) : null;
+  const expireDate = coupon.expire_date ? new Date(coupon.expire_date) : null;
+  const published = coupon.status === 'publish';
+  const validType = isCouponTypeValid(coupon, typeUpper);
+  const meetsMinOrder = amount >= parseAmount(coupon.min_order);
+  const dateValid = (!startDate || now >= startDate) && (!expireDate || now <= expireDate);
+  const discountAmount = calculateDiscount(coupon, amount);
+  const finalAmount = Number((amount - discountAmount).toFixed(2));
+  const canApply = published && validType && dateValid && meetsMinOrder;
+  let inactiveReason = null;
+
+  if (!validType) {
+    inactiveReason = 'Coupon not applicable for selected type';
+  } else if (!published) {
+    inactiveReason = 'Coupon is not published';
+  } else if (!dateValid) {
+    inactiveReason = startDate && now < startDate ? 'Coupon not active yet' : 'Coupon has expired';
+  } else if (!meetsMinOrder) {
+    inactiveReason = `Minimum order value ₹${parseAmount(coupon.min_order)} required`;
+  }
+
+  return {
+    id: coupon.id,
+    code: coupon.code,
+    description: coupon.description,
+    type: coupon.type,
+    value: parseAmount(coupon.value),
+    min_order: parseAmount(coupon.min_order),
+    max_discount: parseAmount(coupon.max_discount),
+    discount_on: coupon.discount_on,
+    start_date: coupon.start_date,
+    expire_date: coupon.expire_date,
+    status: coupon.status,
+    created_at: coupon.created_at,
+    amount,
+    discountAmount,
+    finalAmount,
+    canApply,
+    inactiveReason,
+  };
+}
+
+/**
+ * Validate a coupon server-side for a specific user + purchase.
+ * Returns { coupon, discountAmount, finalAmount } or throws AppError.
+ * Does NOT record usage — call recordCouponUsage() after order is created.
+ */
+async function validateCouponForOrder(userId, couponCode, amount, typeUpper) {
+  const normalizedCode = String(couponCode || '').trim().toLowerCase();
+  if (!normalizedCode) return null;
+
+  const coupon = await Coupon.findOne({
+    where: sequelize.where(sequelize.fn('lower', sequelize.col('code')), normalizedCode),
+  });
+  if (!coupon) throw new AppError('Coupon not found', 404);
+
+  const c = coupon.get({ plain: true });
+  const result = buildCouponResult(c, amount, typeUpper);
+  if (!result.canApply) {
+    throw new AppError(`Coupon cannot be applied: ${result.inactiveReason}`, 400);
+  }
+
+  // ── Usage limit check ────────────────────────────────────────────────────
+  // Total usage across all users
+  if (c.usage_limit != null) {
+    const totalUsed = await CouponUsage.count({ where: { coupon_id: c.id } });
+    if (totalUsed >= c.usage_limit) {
+      throw new AppError('Coupon usage limit has been reached', 400);
+    }
+  }
+
+  // Per-user limit (default 1: one-time use per user)
+  const perUserLimit = c.per_user_limit ?? 1;
+  const userUsed = await CouponUsage.count({ where: { coupon_id: c.id, user_id: userId } });
+  if (userUsed >= perUserLimit) {
+    throw new AppError('You have already used this coupon', 400);
+  }
+
+  return { coupon, discountAmount: result.discountAmount, finalAmount: result.finalAmount };
+}
+
+async function recordCouponUsage(couponId, userId, orderId, transaction) {
+  await CouponUsage.create(
+    { coupon_id: couponId, user_id: userId, order_id: orderId },
+    { transaction }
+  );
+}
+
+// ─── completePayment ──────────────────────────────────────────────────────────
+// Called by both checkout verify and webhook. Uses SELECT … FOR UPDATE to
+// prevent a double-payment race when verify + webhook arrive simultaneously.
+
+async function completePayment(order, razorpayPaymentId, { signature = null, source = 'checkout' } = {}) {
   const t = await sequelize.transaction();
   try {
-    const order = await Order.findOne({
-      where: { order_id: orderId, user_id: userId },
+    // Lock the row so concurrent calls wait instead of both proceeding
+    const locked = await Order.findOne({
+      where: { id: order.id },
+      lock: t.LOCK.UPDATE,
       transaction: t,
     });
-    if (!order) {
-      await t.rollback();
-      throw new AppError('Order not found', 404);
-    }
-    if (order.status === 'paid') {
+
+    if (!locked || locked.status === 'paid') {
       await t.rollback();
       return { alreadyPaid: true, message: 'Already paid' };
     }
-    await order.update({ status: 'paid' }, { transaction: t });
-    await Payment.create(
-      {
-        order_id: order.id,
-        razorpay_payment_id,
-        razorpay_signature,
-        amount: order.amount,
+
+    await locked.update({ status: 'paid' }, { transaction: t });
+
+    // Use findOrCreate so concurrent webhook + checkout calls don't double-insert
+    await Payment.findOrCreate({
+      where: { razorpay_payment_id: razorpayPaymentId, status: 'captured' },
+      defaults: {
+        order_id: locked.id,
+        razorpay_payment_id: razorpayPaymentId,
+        razorpay_signature: signature,
+        amount: locked.amount,
         status: 'captured',
+        source,
       },
-      { transaction: t }
-    );
-    const payload = { userId: order.user_id, orderId };
-    if (order.type === 'course') {
-      payload.courseId = order.entity_id;
+      transaction: t,
+    });
+
+    const orderId = locked.order_id;
+    if (locked.type === 'course') {
       await OutboxEvent.create(
         {
           aggregate_type: 'order',
           aggregate_id: orderId,
           event_type: 'COURSE_PURCHASED',
-          payload,
+          payload: { userId: locked.user_id, orderId, courseId: locked.entity_id },
         },
         { transaction: t }
       );
-    } else if (order.type === 'membership') {
-      const now = new Date();
-      const expires = new Date(now);
-      expires.setFullYear(expires.getFullYear() + 1);
-      payload.membershipType = 'annual';
-      payload.orderId = orderId;
-      payload.startsAt = now.toISOString();
-      payload.expiresAt = expires.toISOString();
+    } else if (locked.type === 'membership') {
+      const plan = await fetchPlanDetails(locked.entity_id);
+      const payload = buildMembershipPayload(locked, plan);
       await OutboxEvent.create(
         {
           aggregate_type: 'order',
@@ -118,14 +312,164 @@ async function verifyOrder(userId, { orderId, razorpay_order_id, razorpay_paymen
         { transaction: t }
       );
     }
+
+    if (locked.affiliate) {
+      await OutboxEvent.create(
+        {
+          aggregate_type: 'order',
+          aggregate_id: orderId,
+          event_type: 'AFFILIATE_COMMISSION',
+          payload: {
+            userId: locked.user_id,
+            orderId,
+            type: locked.type,
+            entityId: locked.entity_id,
+            amount: parseFloat(locked.amount),
+            referralCode: locked.affiliate,
+          },
+        },
+        { transaction: t }
+      );
+    }
+
     await t.commit();
     return { verified: true };
   } catch (err) {
     await t.rollback();
-    if (err.name === 'SequelizeUniqueConstraintError') return { verified: true };
+    // Unique constraint on razorpay_payment_id — already recorded, treat as success
+    if (err.name === 'SequelizeUniqueConstraintError') return { verified: true, alreadyPaid: true };
     throw err;
   }
 }
+
+// ─── createOrder ─────────────────────────────────────────────────────────────
+// SECURITY: Always fetches price from backend. Client-supplied `amount` is IGNORED.
+// Coupon is validated server-side and discount recorded on the order row.
+
+async function createOrder(userId, { type, entityId, couponCode, referralCode, currency = 'INR' }) {
+  const razorpay = await getRazorpayInstance();
+  if (!razorpay) throw new AppError('Payment not configured', 503);
+
+  const typeUpper = normalizeOrderType(type);
+
+  // 1. Fetch canonical price from the owning service — never trust client
+  const originalAmount = await resolveAmountForEntity(typeUpper, entityId);
+
+  // 2. Validate coupon (throws on invalid/expired/over-limit)
+  let couponResult = null;
+  if (couponCode && String(couponCode).trim()) {
+    couponResult = await validateCouponForOrder(userId, couponCode, originalAmount, typeUpper);
+  }
+
+  const discountAmount = couponResult ? couponResult.discountAmount : 0;
+  const finalAmount = couponResult ? couponResult.finalAmount : originalAmount;
+
+  // 3. Guard: idempotency lock per (user, type, entity) — prevents race-created duplicates
+  const lockKey = `order:lock:${userId}:${typeUpper}:${entityId}`;
+  const redis = await getRedis();
+  const locked = await redis.set(lockKey, '1', { NX: true, EX: 30 });
+  if (!locked) throw new AppError('Duplicate order in progress', 429);
+
+  const orderId = generateOrderId();
+  const amountPaise = Math.round(finalAmount * 100);
+
+  try {
+    const order = await Order.create({
+      order_id: orderId,
+      user_id: userId,
+      type: typeUpper.toLowerCase(),
+      entity_id: String(entityId),
+      original_amount: originalAmount,
+      coupon_code: couponResult ? couponResult.coupon.code : null,
+      coupon_discount: discountAmount,
+      amount: finalAmount,            // what we actually charge
+      currency,
+      status: 'pending',
+      affiliate: referralCode || null,
+    });
+
+    // 4. Create Razorpay order using the server-derived amount
+    const rpOrder = await razorpay.orders.create({
+      amount: amountPaise,
+      currency,
+      receipt: orderId,
+      notes: {
+        orderId,
+        userId: String(userId),
+        type: typeUpper,
+        entityId: String(entityId),
+      },
+    });
+
+    await order.update({ razorpay_order_id: rpOrder.id });
+
+    // 5. Record coupon usage atomically AFTER the order row exists
+    if (couponResult) {
+      await recordCouponUsage(couponResult.coupon.id, userId, orderId, null);
+    }
+
+    await redis.del(lockKey);
+
+    const rpConfig = await getRazorpayConfig();
+    const contact = await fetchUserContact(userId);
+
+    return {
+      orderId,
+      razorpayOrderId: rpOrder.id,
+      amount: amountPaise,
+      originalAmount: Math.round(originalAmount * 100),
+      discountAmount: Math.round(discountAmount * 100),
+      currency,
+      key: rpConfig?.key_id,
+      prefill: {
+        name: contact?.name || '',
+        email: contact?.email || '',
+        contact: contact?.phone || '',
+      },
+    };
+  } catch (err) {
+    await redis.del(lockKey).catch(() => {});
+    throw err;
+  }
+}
+
+// ─── verifyOrder ─────────────────────────────────────────────────────────────
+// SECURITY:
+//  1. Verifies Razorpay signature using HMAC(key_secret, rp_order_id|rp_payment_id)
+//  2. Ensures the Razorpay order ID on the order row matches what was signed
+//     → prevents a user from submitting payment proof for order A to complete order B
+
+async function verifyOrder(userId, { orderId, razorpay_order_id, razorpay_payment_id, razorpay_signature }) {
+  const rpConfig = await getRazorpayConfig();
+  if (!rpConfig) throw new AppError('Payment not configured', 503);
+
+  // 1. Validate signature first — cheap, no DB needed
+  const expected = crypto
+    .createHmac('sha256', rpConfig.key_secret)
+    .update(razorpay_order_id + '|' + razorpay_payment_id)
+    .digest('hex');
+  if (expected !== razorpay_signature) throw new AppError('Invalid signature', 400);
+
+  // 2. Load our order
+  const order = await Order.findOne({ where: { order_id: orderId, user_id: userId } });
+  if (!order) throw new AppError('Order not found', 404);
+
+  // 3. Cross-check: the Razorpay order ID signed must match what we stored
+  //    This prevents "submit payment of order A to fulfil order B" attacks
+  if (order.razorpay_order_id && order.razorpay_order_id !== razorpay_order_id) {
+    logger.warn(`[verifyOrder] razorpay_order_id mismatch — stored: ${order.razorpay_order_id}, received: ${razorpay_order_id}`);
+    throw new AppError('Order ID mismatch', 400);
+  }
+
+  // 4. Guard: don't re-process a completed order
+  if (order.status === 'paid') {
+    return { alreadyPaid: true, message: 'Already paid' };
+  }
+
+  return completePayment(order, razorpay_payment_id, { signature: razorpay_signature, source: 'checkout' });
+}
+
+// ─── Read-only query helpers ──────────────────────────────────────────────────
 
 async function listOrders(userId) {
   const rows = await Order.findAll({
@@ -136,9 +480,6 @@ async function listOrders(userId) {
   return rows.map((r) => r.get({ plain: true }));
 }
 
-/**
- * Purchase rows for the learner dashboard — matches cafestudy-fe UserCourse / Payment shapes.
- */
 async function listMyPurchases(userId) {
   const courseCache = new Map();
   async function fetchCourseForOrder(entityId) {
@@ -247,35 +588,51 @@ async function listAllOrders(limit = 100, offset = 0) {
 }
 
 async function getOrderByOrderId(orderId) {
-  const order = await Order.findOne({
-    where: { order_id: orderId },
-  });
+  const order = await Order.findOne({ where: { order_id: orderId } });
   if (!order) return null;
   const payment = await Payment.findOne({
     where: { order_id: order.id },
     order: [['id', 'DESC']],
   });
   const p = order.get({ plain: true });
-  return {
-    ...p,
-    payment_id: payment ? payment.razorpay_payment_id : null,
-  };
+  return { ...p, payment_id: payment ? payment.razorpay_payment_id : null };
 }
 
 async function getInvoice(userId, orderId) {
-  const order = await Order.findOne({
-    where: { order_id: orderId, user_id: userId },
-  });
+  const order = await Order.findOne({ where: { order_id: orderId, user_id: userId } });
   if (!order) return null;
   const payment = await Payment.findOne({
     where: { order_id: order.id },
     order: [['id', 'DESC']],
   });
   const p = order.get({ plain: true });
+
+  let itemName = p.type === 'membership' ? 'Membership Plan' : 'Course';
+  let itemCategory = '';
+  try {
+    if (p.type === 'course' && p.entity_id) {
+      const { data } = await axios.get(`${config.courseServiceUrl}/courses/${p.entity_id}`, {
+        timeout: 5000, validateStatus: (s) => s === 200,
+      });
+      const course = data.data !== undefined ? data.data : data;
+      itemName = course?.title || itemName;
+      itemCategory = course?.category || '';
+    } else if (p.type === 'membership' && p.entity_id) {
+      const plan = await fetchPlanDetails(p.entity_id);
+      itemName = plan?.name || itemName;
+      itemCategory = plan?.duration_days ? `${plan.duration_days} days` : '';
+    }
+  } catch { /* use defaults */ }
+
   return {
     orderId: p.order_id,
     type: p.type,
     entityId: p.entity_id,
+    itemName,
+    itemCategory,
+    originalAmount: p.original_amount,
+    couponCode: p.coupon_code,
+    couponDiscount: p.coupon_discount,
     amount: p.amount,
     currency: p.currency,
     status: p.status,
@@ -284,181 +641,17 @@ async function getInvoice(userId, orderId) {
   };
 }
 
-function normalizeOrderType(type) {
-  if (!type || typeof type !== 'string') return '';
-  return type.trim().toUpperCase();
-}
-
-function parseAmount(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : 0;
-}
-
-function parseApiResponse(response) {
-  return response?.data !== undefined ? response.data : response;
-}
-
-async function fetchCourseAmount(entityId) {
-  if (!config.internalApiKey) {
-    throw new AppError('Internal API key not configured', 500);
-  }
-
-  const { data } = await axios.get(`${config.courseServiceUrl}/internal/courses/${entityId}`, {
-    timeout: 8000,
-    headers: {
-      'x-internal-api-key': config.internalApiKey,
-    },
-    validateStatus: (status) => status === 200,
-  });
-  const payload = parseApiResponse(data);
-  const price = parseAmount(payload?.price);
-  if (!price) throw new AppError('Course price unavailable', 400);
-  return price;
-}
-
-async function fetchMembershipAmount(entityId) {
-  if (!config.internalApiKey) {
-    throw new AppError('Internal API key not configured', 500);
-  }
-
-  const { data } = await axios.get(`${config.platformServiceUrl}/internal/platform/plans/${entityId}`, {
-    timeout: 8000,
-    headers: {
-      'x-internal-api-key': config.internalApiKey,
-    },
-    validateStatus: (status) => status === 200,
-  });
-  const payload = parseApiResponse(data);
-  const price = parseAmount(payload?.price);
-  if (!price) throw new AppError('Membership price unavailable', 400);
-  return price;
-}
-
-async function resolveAmountForEntity(type, entityId) {
-  const typeUpper = normalizeOrderType(type);
-  if (typeUpper === 'COURSE') {
-    return fetchCourseAmount(entityId);
-  }
-  if (typeUpper === 'MEMBERSHIP') {
-    return fetchMembershipAmount(entityId);
-  }
-  throw new AppError('Invalid type, expected COURSE or MEMBERSHIP', 400);
-}
-
-function isCouponTypeValid(coupon, typeUpper) {
-  const discountOn = String(coupon.discount_on || '').trim().toLowerCase();
-  if (typeUpper === 'COURSE') {
-    return discountOn === 'all courses' || discountOn === 'everything';
-  }
-  if (typeUpper === 'MEMBERSHIP') {
-    return discountOn === 'membership only' || discountOn === 'everything';
-  }
-  return false;
-}
-
-function getAllowedDiscountOnValues(typeUpper) {
-  if (typeUpper === 'COURSE') {
-    return ['all courses', 'everything'];
-  }
-  if (typeUpper === 'MEMBERSHIP') {
-    return ['membership only', 'everything'];
-  }
-  return [];
-}
-
-function calculateDiscount(coupon, amount) {
-  const value = parseAmount(coupon.value);
-  const maxDiscount = parseAmount(coupon.max_discount);
-  let discount = 0;
-  if (String(coupon.type || '').trim().toLowerCase() === 'percentage') {
-    discount = (amount * value) / 100;
-  } else {
-    discount = value;
-  }
-  if (maxDiscount > 0) discount = Math.min(discount, maxDiscount);
-  return Math.max(0, Math.min(discount, amount));
-}
-
-function buildCouponResult(coupon, amount, typeUpper) {
-  const now = new Date();
-  const startDate = coupon.start_date ? new Date(coupon.start_date) : null;
-  const expireDate = coupon.expire_date ? new Date(coupon.expire_date) : null;
-  const published = coupon.status === 'publish';
-  const validType = isCouponTypeValid(coupon, typeUpper);
-  const meetsMinOrder = amount >= parseAmount(coupon.min_order);
-  const dateValid = (!startDate || now >= startDate) && (!expireDate || now <= expireDate);
-  const discountAmount = calculateDiscount(coupon, amount);
-  const finalAmount = Number((amount - discountAmount).toFixed(2));
-  let canApply = published && validType && dateValid && meetsMinOrder;
-  let inactiveReason = null;
-
-  if (!validType) {
-    inactiveReason = 'Coupon not applicable for selected type';
-  } else if (!published) {
-    inactiveReason = 'Coupon is not published';
-  } else if (!dateValid) {
-    inactiveReason = startDate && now < startDate ? 'Coupon not active yet' : 'Coupon has expired';
-  } else if (!meetsMinOrder) {
-    inactiveReason = `Minimum order value ₹${parseAmount(coupon.min_order)} required`;
-  }
-
-  return {
-    id: coupon.id,
-    code: coupon.code,
-    description: coupon.description,
-    type: coupon.type,
-    value: parseAmount(coupon.value),
-    min_order: parseAmount(coupon.min_order),
-    max_discount: parseAmount(coupon.max_discount),
-    discount_on: coupon.discount_on,
-    start_date: coupon.start_date,
-    expire_date: coupon.expire_date,
-    status: coupon.status,
-    created_at: coupon.created_at,
-    amount,
-    discountAmount,
-    finalAmount,
-    canApply,
-    inactiveReason,
-  };
-}
-
-// function buildActiveCouponResult(coupon) {
-//   return {
-//     id: coupon.id,
-//     code: coupon.code,
-//     description: coupon.description,
-//     type: coupon.type,
-//     value: parseAmount(coupon.value),
-//     min_order: parseAmount(coupon.min_order),
-//     max_discount: parseAmount(coupon.max_discount),
-//     discount_on: coupon.discount_on,
-//     start_date: coupon.start_date,
-//     expire_date: coupon.expire_date,
-//     status: coupon.status,
-//     created_at: coupon.created_at,
-//     isActive: true,
-//   };
-// }
+// ─── Coupon listing / apply (for storefront display) ─────────────────────────
 
 async function listActiveCoupons() {
   const now = new Date();
   const coupons = await Coupon.findAll({
     where: {
       status: 'publish',
+      visibility: 'public',
       [Op.and]: [
-        {
-          [Op.or]: [
-            { start_date: null },
-            { start_date: { [Op.lte]: now } },
-          ],
-        },
-        {
-          [Op.or]: [
-            { expire_date: null },
-            { expire_date: { [Op.gte]: now } },
-          ],
-        },
+        { [Op.or]: [{ start_date: null }, { start_date: { [Op.lte]: now } }] },
+        { [Op.or]: [{ expire_date: null }, { expire_date: { [Op.gte]: now } }] },
       ],
     },
     order: [['created_at', 'DESC']],
@@ -469,36 +662,34 @@ async function listActiveCoupons() {
 async function getCouponsForEntity(userId, type, entityId) {
   const typeUpper = normalizeOrderType(type);
   if (!typeUpper && !entityId) {
-    return {
-      type: null,
-      entityId: null,
-      amount: null,
-      coupons: await listActiveCoupons(),
-    };
+    return { type: null, entityId: null, amount: null, coupons: await listActiveCoupons() };
   }
 
   const amount = await resolveAmountForEntity(typeUpper, entityId);
-  const allowedDiscountOnValues = getAllowedDiscountOnValues(typeUpper);
-  const coupons = await Coupon.findAll({ order: [['created_at', 'DESC']] });
+  const now = new Date();
+  const coupons = await Coupon.findAll({
+    where: {
+      status: 'publish',
+      [Op.and]: [
+        { [Op.or]: [{ start_date: null }, { start_date: { [Op.lte]: now } }] },
+        { [Op.or]: [{ expire_date: null }, { expire_date: { [Op.gte]: now } }] },
+      ],
+    },
+    order: [['created_at', 'DESC']],
+  });
+
   const results = coupons
-    .filter((coupon) =>
-      allowedDiscountOnValues.includes(String(coupon.discount_on || '').trim().toLowerCase())
-    )
+    .filter((coupon) => isDiscountOnAllowedForType(coupon.discount_on, typeUpper))
     .map((coupon) => buildCouponResult(coupon.get({ plain: true }), amount, typeUpper))
     .sort((a, b) => {
-      if (a.canApply !== b.canApply) return a.canApply ? -1 : 1;
       if (b.discountAmount !== a.discountAmount) return b.discountAmount - a.discountAmount;
       return a.min_order - b.min_order;
     });
 
-  return {
-    type: typeUpper,
-    entityId,
-    amount,
-    coupons: results,
-  };
+  return { type: typeUpper, entityId, amount, coupons: results };
 }
 
+// applyCoupon — preview only (no usage recorded). Real enforcement is in createOrder.
 async function applyCoupon(userId, { couponCode, type, id }) {
   const typeUpper = normalizeOrderType(type);
   const amount = await resolveAmountForEntity(typeUpper, id);
@@ -506,16 +697,23 @@ async function applyCoupon(userId, { couponCode, type, id }) {
   if (!normalizedCode) throw new AppError('Coupon code is required', 400);
 
   const coupon = await Coupon.findOne({
-    where: sequelize.where(
-      sequelize.fn('lower', sequelize.col('code')),
-      normalizedCode,
-    ),
+    where: sequelize.where(sequelize.fn('lower', sequelize.col('code')), normalizedCode),
   });
   if (!coupon) throw new AppError('Coupon not found', 404);
 
-  const result = buildCouponResult(coupon.get({ plain: true }), amount, typeUpper);
+  const c = coupon.get({ plain: true });
+  const result = buildCouponResult(c, amount, typeUpper);
   if (!result.canApply) {
     throw new AppError(`Coupon cannot be applied: ${result.inactiveReason}`, 400);
+  }
+
+  // Check per-user limit for the preview as well so UI shows accurate state
+  const perUserLimit = c.per_user_limit ?? 1;
+  if (userId) {
+    const userUsed = await CouponUsage.count({ where: { coupon_id: c.id, user_id: userId } });
+    if (userUsed >= perUserLimit) {
+      throw new AppError('You have already used this coupon', 400);
+    }
   }
 
   return {
@@ -539,9 +737,36 @@ async function applyCoupon(userId, { couponCode, type, id }) {
   };
 }
 
+// ─── Admin coupon CRUD ────────────────────────────────────────────────────────
+
+async function listAllCoupons() {
+  const coupons = await Coupon.findAll({ order: [['created_at', 'DESC']] });
+  return coupons.map((c) => c.get({ plain: true }));
+}
+
+async function createCoupon(data) {
+  const coupon = await Coupon.create(data);
+  return coupon.get({ plain: true });
+}
+
+async function updateCoupon(id, data) {
+  const coupon = await Coupon.findByPk(id);
+  if (!coupon) return null;
+  await coupon.update(data);
+  return coupon.get({ plain: true });
+}
+
+async function deleteCoupon(id) {
+  const coupon = await Coupon.findByPk(id);
+  if (!coupon) return null;
+  await coupon.destroy();
+  return { id };
+}
+
 module.exports = {
   createOrder,
   verifyOrder,
+  completePayment,
   listOrders,
   listMyPurchases,
   getInvoice,
@@ -549,4 +774,9 @@ module.exports = {
   getOrderByOrderId,
   getCouponsForEntity,
   applyCoupon,
+  listActiveCoupons,
+  listAllCoupons,
+  createCoupon,
+  updateCoupon,
+  deleteCoupon,
 };

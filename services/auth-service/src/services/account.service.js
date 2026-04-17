@@ -20,6 +20,7 @@ function mapUserToProfile(userRow) {
     city: u.city || undefined,
     state: u.state || undefined,
     country: u.country || undefined,
+    bio: u.bio != null && String(u.bio).trim() !== '' ? String(u.bio) : undefined,
     createdAt: u.created_at,
     updatedAt: u.updated_at,
   };
@@ -49,12 +50,17 @@ async function updateProfile(userId, body) {
     'state',
     'country',
     'profile_pic_url',
+    'bio',
   ];
   const patch = {};
   for (const k of allowed) {
     if (body[k] !== undefined) patch[k] = body[k];
   }
   if (body.avatar !== undefined) patch.profile_pic_url = body.avatar;
+  if (patch.bio !== undefined) {
+    patch.bio =
+      patch.bio == null || String(patch.bio).trim() === '' ? null : String(patch.bio);
+  }
 
   await user.update(patch);
   return getProfile(userId);
@@ -131,6 +137,124 @@ async function myCourses(userId) {
   return out;
 }
 
+async function getSubscription(userId) {
+  const { UserMembership } = require('../models');
+  const now = new Date();
+  const membership = await UserMembership.findOne({
+    where: { user_id: userId },
+    order: [['expires_at', 'DESC']],
+  });
+  if (!membership) {
+    return { hasActiveMembership: false, membershipType: null, startsAt: null, expiresAt: null };
+  }
+  const m = membership.get({ plain: true });
+  const isActive = new Date(m.expires_at) > now;
+  return {
+    hasActiveMembership: isActive,
+    membershipType: m.membership_type || null,
+    startsAt: m.starts_at || null,
+    expiresAt: m.expires_at || null,
+  };
+}
+
+/**
+ * Fetch plan details (course_ids + course_cat_ids) from platform-service by slug.
+ * Returns null if the plan is not found or the request fails.
+ */
+async function fetchPlanBySlug(slug) {
+  try {
+    // Platform-service exposes an internal endpoint: GET /internal/platform/plans?slug=...
+    // We must search the list since there's no /internal/platform/plans/slug/:slug
+    const { data } = await axios.get(`${config.platformServiceUrl}/internal/platform/plans`, {
+      timeout: 8000,
+      headers: { 'x-internal-api-key': config.internalApiKey },
+      validateStatus: (s) => s === 200,
+    });
+    const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+    const plan = list.find((p) => p.slug === slug);
+    if (!plan) return null;
+    // Fetch full plan with course_ids / course_cat_ids
+    const { data: detail } = await axios.get(
+      `${config.platformServiceUrl}/internal/platform/plans/${plan.id}`,
+      {
+        timeout: 8000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200,
+      },
+    );
+    return detail?.data ?? detail ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch courses by IDs + category IDs from course-service.
+ */
+async function fetchCoursesByIdsOrCatIds(ids, cat_ids) {
+  if (ids.length === 0 && cat_ids.length === 0) return [];
+  try {
+    const { data } = await axios.post(
+      `${config.courseServiceUrl}/internal/courses/by-ids`,
+      { ids, cat_ids },
+      {
+        timeout: 10000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200,
+      },
+    );
+    return Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Returns all courses available to the user via their active memberships.
+ * Groups courses by plan: [{ planName, planSlug, courses: [...] }, ...]
+ * Courses are deduplicated across plans at the plan level (each plan lists its own set).
+ */
+async function getMembershipCourses(userId) {
+  const { UserMembership } = require('../models');
+  const now = new Date();
+
+  // Get ALL active memberships for this user (multiple plans possible)
+  const memberships = await UserMembership.findAll({
+    where: { user_id: userId },
+    order: [['expires_at', 'DESC']],
+  });
+
+  const activeMemberships = memberships
+    .map((m) => m.get({ plain: true }))
+    .filter((m) => new Date(m.expires_at) > now);
+
+  if (activeMemberships.length === 0) return [];
+
+  const results = [];
+
+  for (const membership of activeMemberships) {
+    const slug = membership.membership_type;
+    if (!slug) continue;
+
+    const plan = await fetchPlanBySlug(slug);
+    const course_ids = Array.isArray(plan?.course_ids) ? plan.course_ids : [];
+    const course_cat_ids = Array.isArray(plan?.course_cat_ids) ? plan.course_cat_ids : [];
+
+    const courses = await fetchCoursesByIdsOrCatIds(course_ids, course_cat_ids);
+
+    results.push({
+      membershipId: membership.id,
+      planSlug: slug,
+      planName: plan?.name || slug,
+      startsAt: membership.starts_at,
+      expiresAt: membership.expires_at,
+      courses,
+    });
+  }
+
+  return results;
+}
+
 module.exports = {
   getProfile,
   updateProfile,
@@ -139,4 +263,6 @@ module.exports = {
   dashboardStats,
   myCourses,
   mapUserToProfile,
+  getSubscription,
+  getMembershipCourses,
 };

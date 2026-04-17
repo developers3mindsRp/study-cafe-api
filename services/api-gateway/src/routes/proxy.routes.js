@@ -20,30 +20,15 @@ function register(app) {
     target: config.orderServiceUrl,
     changeOrigin: true,
     pathRewrite: {
+      '^/api/coupons': '/coupons',
       '^/api/orders': '/orders',
       '^/api/order': '/order',
-    },
-    on: {
-      proxyReq: (proxyReq, req) => {
-        // Order-service only trusts X-User-Id (validateToken returns userId and id)
-        const uid = req.user?.userId ?? req.user?.id;
-        if (uid != null && uid !== '') {
-          proxyReq.setHeader('X-User-Id', String(uid));
-        }
-      },
     },
   });
   const adminProxy = createProxyMiddleware({
     target: config.adminServiceUrl,
     changeOrigin: true,
     pathRewrite: { '^/api/admin': '/admin' },
-    on: {
-      proxyReq: (proxyReq, req) => {
-        const uid = req.user?.userId ?? req.user?.id;
-        if (uid != null && uid !== '') proxyReq.setHeader('X-User-Id', String(uid));
-        if (req.user?.role) proxyReq.setHeader('X-User-Role', req.user.role);
-      },
-    },
   });
   const platformProxy = createProxyMiddleware({
     target: config.platformServiceUrl,
@@ -76,6 +61,12 @@ function register(app) {
     pathRewrite: { '^/api/user-uploads': '/user-uploads' },
   });
 
+  const affiliateProxy = createProxyMiddleware({
+    target: config.courseServiceUrl,
+    changeOrigin: true,
+    pathRewrite: { '^/api/affiliate': '/affiliate' },
+  });
+
   app.use('/api/auth', authProxy);
   app.use('/api/access', validateJWT, authProxy);
   app.use('/api/users', validateJWT, usersProxy);
@@ -89,9 +80,27 @@ function register(app) {
   app.get('/api/courses/:id', optionalJWT, courseProxy);
   app.get('/api/courses/:id/sessions', validateJWT, requireCourseAccess, courseProxy);
   app.get('/api/courses/:id/materials', validateJWT, requireCourseAccess, courseProxy);
-  app.use('/api/orders', validateJWT, orderProxy);
-  app.use('/api/order', validateJWT, orderProxy);
-  app.use('/api/admin', validateJWT, adminProxy);
+  app.post('/api/orders/webhook/razorpay', orderProxy);
+  app.get('/api/coupons', orderProxy);
+  const injectOrderUserId = (req, _res, next) => {
+    const uid = req.user?.userId ?? req.user?.id;
+    if (uid != null && uid !== '') req.headers['x-user-id'] = String(uid);
+    next();
+  };
+  app.use('/api/orders', validateJWT, injectOrderUserId, orderProxy);
+  app.use('/api/order', validateJWT, injectOrderUserId, orderProxy);
+  app.use('/api/affiliate', validateJWT, (req, _res, next) => {
+    const uid = req.user?.userId ?? req.user?.id;
+    if (uid != null && uid !== '') req.headers['x-user-id'] = String(uid);
+    if (req.user?.referral_code) req.headers['x-referral-code'] = req.user.referral_code;
+    next();
+  }, affiliateProxy);
+  app.use('/api/admin', validateJWT, (req, _res, next) => {
+    const uid = req.user?.userId ?? req.user?.id;
+    if (uid != null && uid !== '') req.headers['x-user-id'] = String(uid);
+    if (req.user?.role) req.headers['x-user-role'] = req.user.role;
+    next();
+  }, adminProxy);
   app.use('/api/platform', platformProxy);
   app.use('/api/uploads', uploadsProxy);
 }

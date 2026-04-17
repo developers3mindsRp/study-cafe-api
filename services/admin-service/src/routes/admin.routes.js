@@ -18,6 +18,14 @@ function register(router) {
   router.delete('/admin/course-cats/:id', requireAdmin, controller.deleteCourseCat);
   router.get('/admin/orders', requireAdmin, controller.getOrders);
   router.get('/admin/orders/:orderId', requireAdmin, controller.getOrderByOrderId);
+
+  // Coupon management
+  router.get('/admin/coupons', requireAdmin, controller.getCoupons);
+  router.get('/admin/coupons/check-code', requireAdmin, controller.checkCouponCodeExists);
+  router.get('/admin/coupons/:id', requireAdmin, controller.getCoupon);
+  router.post('/admin/coupons', requireAdmin, controller.postCoupon);
+  router.put('/admin/coupons/:id', requireAdmin, controller.putCoupon);
+  router.delete('/admin/coupons/:id', requireAdmin, controller.deleteCoupon);
   router.post('/admin/courses', requireAdmin, controller.createCourse);
   router.put('/admin/courses/:id', requireAdmin, controller.updateCourse);
   router.post('/admin/courses/:id/batches', requireAdmin, controller.createBatch);
@@ -101,6 +109,13 @@ function register(router) {
   router.get('/admin/platform/media-assets', requireAdmin, p.getMediaAssets);
   router.post('/admin/platform/media-assets', requireAdmin, p.postMediaAsset);
   router.delete('/admin/platform/media-assets/:id', requireAdmin, p.deleteMediaAsset);
+
+  // ── Affiliate routes ───────────────────────────────────────────────
+  router.get('/admin/affiliate/history', requireAdmin, controller.getAffiliateHistory);
+  router.get('/admin/affiliate/withdrawals', requireAdmin, controller.getWithdrawalRequests);
+  router.get('/admin/affiliate/balance/:userId', requireAdmin, controller.getAffiliateBalance);
+  router.post('/admin/affiliate/withdrawals', requireAdmin, controller.createWithdrawalRequest);
+  router.patch('/admin/affiliate/withdrawals/:id', requireAdmin, controller.updateWithdrawalStatus);
 }
 
 module.exports = { register };

@@ -23,6 +23,7 @@ module.exports = (sequelize) => {
       state: { type: DataTypes.STRING(100), allowNull: true },
       country: { type: DataTypes.STRING(100), allowNull: true },
       profile_pic_url: { type: DataTypes.STRING(500), allowNull: true },
+      bio: { type: DataTypes.TEXT, allowNull: true },
       membership: { type: DataTypes.STRING(50), allowNull: true },
       plan: { type: DataTypes.TEXT, allowNull: true },
       role_id: { type: DataTypes.INTEGER, allowNull: true },
@@ -37,6 +38,9 @@ module.exports = (sequelize) => {
       youtube: { type: DataTypes.STRING(500), allowNull: true },
       gst: { type: DataTypes.STRING(100), allowNull: true },
       account_status: { type: DataTypes.STRING(50), allowNull: true },
+      referral_code: { type: DataTypes.STRING(32), allowNull: true, unique: true },
+      referred_by: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
+      referred_at: { type: DataTypes.DATE, allowNull: true },
     },
     {
       tableName: 'users',

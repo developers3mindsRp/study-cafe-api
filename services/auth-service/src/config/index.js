@@ -24,4 +24,6 @@ module.exports = {
   internalApiKey: process.env.INTERNAL_API_KEY || '',
   /** Used to hydrate course titles for /user/courses */
   courseServiceUrl: process.env.COURSE_SERVICE_URL || 'http://localhost:4002',
+  /** Used to resolve plan course lists for membership courses */
+  platformServiceUrl: process.env.PLATFORM_SERVICE_URL || 'http://localhost:4005',
 };

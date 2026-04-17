@@ -1,5 +1,6 @@
 const ordersService = require('../services/orders.service');
-const { asyncHandler, AppError, sendSuccess, sendCreated } = require('../../../../shared');
+const webhookService = require('../services/webhook.service');
+const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, logger } = require('../../../../shared');
 
 const create = asyncHandler(async (req, res) => {
   const result = await ordersService.createOrder(req.userId, req.body);
@@ -50,6 +51,52 @@ const getByOrderIdInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, order);
 });
 
+const webhook = asyncHandler(async (req, res) => {
+  const rawBody = req.rawBody;
+  const signature = req.headers['x-razorpay-signature'] || '';
+
+  logger.info(`[WEBHOOK-CTRL] Received webhook — has rawBody: ${!!rawBody}, rawBody length: ${rawBody ? rawBody.length : 0}, has signature: ${!!signature}, signature length: ${signature.length}`);
+  logger.info(`[WEBHOOK-CTRL] Content-Type: ${req.headers['content-type']}, User-Agent: ${req.headers['user-agent']}`);
+
+  if (!rawBody || !signature) {
+    logger.warn(`[WEBHOOK-CTRL] Rejected — missing ${!rawBody ? 'rawBody' : ''} ${!signature ? 'signature' : ''}`);
+    return res.status(400).json({ status: 'missing_signature_or_body' });
+  }
+
+  const { statusCode, body } = await webhookService.processWebhook(rawBody, signature, req.body);
+  logger.info(`[WEBHOOK-CTRL] Response — status: ${statusCode}, body: ${JSON.stringify(body)}`);
+  res.status(statusCode).json(body);
+});
+
+const listActiveCoupons = asyncHandler(async (req, res) => {
+  const coupons = await ordersService.listActiveCoupons();
+  sendSuccess(res, coupons);
+});
+
+// ── Admin coupon CRUD ────────────────────────────────────────────────────────
+
+const listAllCoupons = asyncHandler(async (req, res) => {
+  const coupons = await ordersService.listAllCoupons();
+  sendSuccess(res, coupons);
+});
+
+const createCoupon = asyncHandler(async (req, res) => {
+  const coupon = await ordersService.createCoupon(req.body);
+  sendCreated(res, coupon);
+});
+
+const updateCoupon = asyncHandler(async (req, res) => {
+  const coupon = await ordersService.updateCoupon(req.params.id, req.body);
+  if (!coupon) throw new AppError('Coupon not found', 404);
+  sendSuccess(res, coupon);
+});
+
+const deleteCoupon = asyncHandler(async (req, res) => {
+  const result = await ordersService.deleteCoupon(req.params.id);
+  if (!result) throw new AppError('Coupon not found', 404);
+  sendNoContent(res);
+});
+
 module.exports = {
   create,
   verify,
@@ -60,4 +107,10 @@ module.exports = {
   getInvoice,
   listAllInternal,
   getByOrderIdInternal,
+  listActiveCoupons,
+  listAllCoupons,
+  createCoupon,
+  updateCoupon,
+  deleteCoupon,
+  webhook,
 };

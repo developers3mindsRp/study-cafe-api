@@ -5,7 +5,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "migrate:affiliate-commission": "node scripts/add-courses-affiliate-commission-column.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

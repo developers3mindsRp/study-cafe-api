@@ -474,7 +474,26 @@ async function getPlanBySlugPublic(slug) {
   });
   if (!row) return null;
   const p = row.get({ plain: true });
-  return { ...p, features: normalizeFeatures(p.features) };
+
+  const allCompFeatures = await PlanComparisonFeature.findAll({
+    order: [['sort_order', 'ASC'], ['id', 'ASC']],
+    attributes: ['id', 'name', 'sort_order'],
+  });
+  const availRows = await PlanFeatureAvailability.findAll({
+    where: { plan_id: p.id },
+    attributes: ['plan_id', 'feature_id', 'available'],
+  });
+  const availMap = new Map();
+  for (const a of availRows) {
+    const av = a.get({ plain: true });
+    availMap.set(av.feature_id, !!av.available);
+  }
+  const comparison_features = allCompFeatures.map((f) => {
+    const feat = f.get({ plain: true });
+    return { id: feat.id, name: feat.name, available: availMap.get(feat.id) ?? false };
+  });
+
+  return { ...p, features: normalizeStructuredFeatures(p.features), comparison_features };
 }
 
 async function getPlansInternal() {
@@ -662,10 +681,293 @@ async function getArticlesPublic(options = {}) {
   return out;
 }
 
+async function getAuthorPublicProfile(authorId) {
+  if (authorId == null) return null;
+  const rows = await sequelize.query(
+    `SELECT id, display_name, name, profession, designation, company, city, state, country, profile_pic_url
+     FROM users WHERE id = ? LIMIT 1`,
+    { replacements: [authorId], type: QueryTypes.SELECT },
+  );
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    id: Number(r.id),
+    display_name: r.display_name || r.name || null,
+    name: r.name || null,
+    profession: r.profession || null,
+    designation: r.designation || null,
+    company: r.company || null,
+    city: r.city || null,
+    state: r.state || null,
+    country: r.country || null,
+    profile_pic_url: r.profile_pic_url || null,
+  };
+}
+
+async function getPublishedArticleCountForAuthor(authorId) {
+  if (authorId == null) return 0;
+  const rows = await sequelize.query(
+    'SELECT COUNT(*) AS n FROM articles WHERE author_id = ? AND status = ?',
+    { replacements: [authorId, 'publish'], type: QueryTypes.SELECT },
+  );
+  return Number(rows[0]?.n || 0);
+}
+
+async function getPopularArticleTags(limit = 12) {
+  const lim = Math.min(50, Math.max(1, Number(limit) || 12));
+  const rows = await sequelize.query(
+    `SELECT t.id, t.name, t.slug, COUNT(*) AS cnt
+     FROM article_tags at
+     INNER JOIN tags t ON t.id = at.tag_id
+     INNER JOIN articles a ON a.id = at.article_id AND a.status = 'publish'
+     GROUP BY t.id, t.name, t.slug
+     ORDER BY cnt DESC
+     LIMIT ${lim}`,
+    { type: QueryTypes.SELECT },
+  );
+  return rows.map((r) => ({
+    id: Number(r.id),
+    name: r.name || '',
+    slug: r.slug || null,
+    article_count: Number(r.cnt) || 0,
+  }));
+}
+
+async function buildCategoriesMapsForArticleIds(articleIds) {
+  if (!articleIds.length) return new Map();
+  const catMaps = await ArticleCategoryMap.findAll({
+    where: { article_id: { [Op.in]: articleIds } },
+    attributes: ['article_id', 'category_id'],
+  });
+  const catIds = [...new Set(catMaps.map((m) => m.category_id))];
+  const catRows = catIds.length
+    ? await Category.findAll({ where: { id: { [Op.in]: catIds } }, attributes: ['id', 'name', 'slug'] })
+    : [];
+  const catById = new Map(catRows.map((row) => [Number(row.id), row.get({ plain: true })]));
+  const articleCats = new Map();
+  for (const m of catMaps) {
+    if (!articleCats.has(Number(m.article_id))) articleCats.set(Number(m.article_id), []);
+    const cat = catById.get(Number(m.category_id));
+    if (cat) articleCats.get(Number(m.article_id)).push(cat);
+  }
+  return articleCats;
+}
+
+function attachAccessAndAuthorsToArticles(plainRows, authorNameMap, articleCats, viewer) {
+  return plainRows.map((p) => {
+    const blog_access_tier = normalizeBlogAccessTier(p.blog_access_tier);
+    const access = canReadFullArticle(blog_access_tier, viewer);
+    return {
+      id: p.id,
+      title: p.title || '',
+      slug: p.slug || '',
+      excerpt: p.excerpt || null,
+      sub_heading: p.sub_heading || null,
+      meta_description: p.meta_description ?? null,
+      thumbnail_url: p.thumbnail_url || null,
+      cover_image_url: p.thumbnail_url || null,
+      author_id: p.author_id,
+      author_name: authorNameMap.get(p.author_id) ?? null,
+      published_at: p.published_at,
+      created_at: p.created_at,
+      updated_at: p.updated_at,
+      blog_access_tier,
+      access: {
+        can_read_full: access.can_read_full,
+        reason: access.reason,
+        show_read_more_cta: !access.can_read_full && blog_access_tier === 'premium',
+      },
+      categories: articleCats.get(Number(p.id)) || [],
+      description_preview: p.description_preview ?? null,
+    };
+  });
+}
+
+/**
+ * Blog landing (`currentSlug` unset): latest hero + sidebar + author for that hero.
+ * Article detail (`currentSlug` set): sidebar + author for that slug; `hero` null (page uses full article).
+ * Uses optional JWT (optionalWebUser) for premium access flags on list cards.
+ */
+async function getBlogSpotlightFeed(viewer, options = {}) {
+  const recentLimit = Math.min(20, Math.max(1, Number(options.recentLimit) || 3));
+  const allLimit = Math.min(30, Math.max(1, Number(options.allLimit) || 6));
+  const authorRecentLimit = Math.min(20, Math.max(1, Number(options.authorRecentLimit) || 5));
+  const tagLimit = Math.min(30, Math.max(1, Number(options.tagLimit) || 12));
+  const currentSlug = options.currentSlug && String(options.currentSlug).trim();
+
+  const popular_tags = await getPopularArticleTags(tagLimit);
+
+  /** Context: single article page — lists exclude this id; author block matches this article. */
+  if (currentSlug) {
+    const focusRow = await Article.findOne({
+      where: { slug: currentSlug, status: 'publish' },
+      attributes: [
+        'id', 'title', 'slug', 'excerpt', 'content', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
+        'published_at', 'created_at', 'updated_at', 'blog_access_tier',
+      ],
+    });
+    if (!focusRow) {
+      return {
+        hero: null,
+        recent_posts: [],
+        all_posts: [],
+        author: null,
+        author_recent_articles: [],
+        popular_tags,
+      };
+    }
+    const focus = focusRow.get({ plain: true });
+    const focusId = Number(focus.id);
+
+    const moreRows = await Article.findAll({
+      where: { status: 'publish', id: { [Op.ne]: focusId } },
+      attributes: [
+        'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
+        'published_at', 'created_at', 'updated_at', 'blog_access_tier',
+      ],
+      order: [['published_at', 'DESC'], ['id', 'DESC']],
+      limit: recentLimit + allLimit,
+      offset: 0,
+    });
+    const morePlain = moreRows.map((r) => r.get({ plain: true }));
+    const recentPlain = morePlain.slice(0, recentLimit);
+    const allPlain = morePlain.slice(recentLimit, recentLimit + allLimit);
+
+    const authorRecentRows = focus.author_id
+      ? await Article.findAll({
+        where: {
+          status: 'publish',
+          author_id: focus.author_id,
+          id: { [Op.ne]: focusId },
+        },
+        attributes: [
+          'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
+          'published_at', 'created_at', 'updated_at', 'blog_access_tier',
+        ],
+        order: [['published_at', 'DESC'], ['id', 'DESC']],
+        limit: authorRecentLimit,
+      })
+      : [];
+    const authorRecentPlain = authorRecentRows.map((r) => r.get({ plain: true }));
+
+    const poolIds = [...new Set([focusId, ...recentPlain.map((x) => Number(x.id)), ...allPlain.map((x) => Number(x.id)), ...authorRecentPlain.map((x) => Number(x.id))])];
+    const authorIds = [...new Set([
+      focus.author_id,
+      ...recentPlain.map((x) => x.author_id),
+      ...allPlain.map((x) => x.author_id),
+      ...authorRecentPlain.map((x) => x.author_id),
+    ].filter((id) => id != null))];
+
+    const [authorNameMap, articleCats, authorProfile, authorCount] = await Promise.all([
+      getAuthorDisplayNamesBatch(authorIds),
+      buildCategoriesMapsForArticleIds(poolIds),
+      focus.author_id ? getAuthorPublicProfile(focus.author_id) : Promise.resolve(null),
+      focus.author_id ? getPublishedArticleCountForAuthor(focus.author_id) : Promise.resolve(0),
+    ]);
+
+    return {
+      hero: null,
+      recent_posts: attachAccessAndAuthorsToArticles(recentPlain, authorNameMap, articleCats, viewer),
+      all_posts: attachAccessAndAuthorsToArticles(allPlain, authorNameMap, articleCats, viewer),
+      author: authorProfile
+        ? { ...authorProfile, published_article_count: authorCount }
+        : null,
+      author_recent_articles: attachAccessAndAuthorsToArticles(authorRecentPlain, authorNameMap, articleCats, viewer),
+      popular_tags,
+    };
+  }
+
+  const heroRow = await Article.findOne({
+    where: { status: 'publish' },
+    attributes: [
+      'id', 'title', 'slug', 'excerpt', 'content', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
+      'published_at', 'created_at', 'updated_at', 'blog_access_tier',
+    ],
+    order: [
+      ['published_at', 'DESC'],
+      ['id', 'DESC'],
+    ],
+  });
+
+  if (!heroRow) {
+    return {
+      hero: null,
+      recent_posts: [],
+      all_posts: [],
+      author: null,
+      author_recent_articles: [],
+      popular_tags,
+    };
+  }
+
+  const hero = heroRow.get({ plain: true });
+  const heroId = Number(hero.id);
+
+  const moreRows = await Article.findAll({
+    where: { status: 'publish', id: { [Op.ne]: heroId } },
+    attributes: [
+      'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
+      'published_at', 'created_at', 'updated_at', 'blog_access_tier',
+    ],
+    order: [
+      ['published_at', 'DESC'],
+      ['id', 'DESC'],
+    ],
+    limit: recentLimit + allLimit,
+    offset: 0,
+  });
+
+  const morePlain = moreRows.map((r) => r.get({ plain: true }));
+  const recentPlain = morePlain.slice(0, recentLimit);
+  const allPlain = morePlain.slice(recentLimit, recentLimit + allLimit);
+
+  const authorRecentRows = hero.author_id
+    ? await Article.findAll({
+      where: {
+        status: 'publish',
+        author_id: hero.author_id,
+        id: { [Op.ne]: heroId },
+      },
+      attributes: [
+        'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
+        'published_at', 'created_at', 'updated_at', 'blog_access_tier',
+      ],
+      order: [['published_at', 'DESC'], ['id', 'DESC']],
+      limit: authorRecentLimit,
+    })
+    : [];
+
+  const authorRecentPlain = authorRecentRows.map((r) => r.get({ plain: true }));
+  const allPieces = [hero, ...recentPlain, ...allPlain, ...authorRecentPlain];
+  const poolIds = [...new Set(allPieces.map((x) => Number(x.id)))];
+  const authorIds = [...new Set(allPieces.map((x) => x.author_id).filter((id) => id != null))];
+
+  const [authorNameMap, articleCats, authorProfile, authorCount] = await Promise.all([
+    getAuthorDisplayNamesBatch(authorIds),
+    buildCategoriesMapsForArticleIds(poolIds),
+    hero.author_id ? getAuthorPublicProfile(hero.author_id) : Promise.resolve(null),
+    hero.author_id ? getPublishedArticleCountForAuthor(hero.author_id) : Promise.resolve(0),
+  ]);
+
+  const heroCard = attachAccessAndAuthorsToArticles([hero], authorNameMap, articleCats, viewer)[0];
+  heroCard.description_preview = buildDescriptionPreviewFromArticleRow(hero, 560);
+
+  return {
+    hero: heroCard,
+    recent_posts: attachAccessAndAuthorsToArticles(recentPlain, authorNameMap, articleCats, viewer),
+    all_posts: attachAccessAndAuthorsToArticles(allPlain, authorNameMap, articleCats, viewer),
+    author: authorProfile
+      ? { ...authorProfile, published_article_count: authorCount }
+      : null,
+    author_recent_articles: attachAccessAndAuthorsToArticles(authorRecentPlain, authorNameMap, articleCats, viewer),
+    popular_tags,
+  };
+}
+
 function extractRelatedIds(content) {
   if (typeof content !== 'string' || !content.length) return [];
   const ids = [];
-  const re = /\[related\s+id="(\d+)"\]/gi;
+  const re = /\[related\s+id=['"](\d+)['"]\]/gi;
   let m;
   while ((m = re.exec(content)) !== null) {
     const id = parseInt(m[1], 10);
@@ -678,6 +980,162 @@ function extractRelatedIds(content) {
  * Replace [related id="N"] shortcodes in the article body with inline HTML links.
  * Resolves WP post IDs to article slugs and renders "Also Read" styled links.
  */
+function normalizeBlogAccessTier(raw) {
+  const v = String(raw || 'free').toLowerCase();
+  return v === 'premium' ? 'premium' : 'free';
+}
+
+function stripTags(html) {
+  return String(html || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripRelatedShortcodesAndMarkers(html) {
+  let s = String(html || '');
+  s = s.replace(/\[related\s+id=['"]\d+['"]\]/gi, ' ');
+  s = s.replace(/<div[^>]*related-article-inline[^>]*>[\s\S]*?<\/div>/gi, ' ');
+  return s;
+}
+
+function sanitizePreviewPlain(text) {
+  if (!text) return '';
+  let s = String(text).replace(/\[related\s+id=['"]\d+['"]\]/gi, ' ');
+  s = s.replace(/\bAlso\s+Read\b[:\s]*/gi, ' ');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+const MIN_PROPER_DESC_LEN = 60;
+const BODY_SNIPPET_LEN = 150;
+
+function buildBodySnippetPlain(contentHtml, maxLen = BODY_SNIPPET_LEN) {
+  const body = stripTags(stripRelatedShortcodesAndMarkers(contentHtml || '')).trim();
+  const cleaned = sanitizePreviewPlain(body);
+  if (!cleaned) return '';
+  return cleaned.length > maxLen ? `${cleaned.slice(0, maxLen - 1)}…` : cleaned;
+}
+
+function teaserFromExcerptSubMetaOnly(p) {
+  const title = stripTags(p.title || '').toLowerCase();
+  const pick = (s) => {
+    const t = stripTags(s || '').trim();
+    if (!t || t.toLowerCase() === title) return '';
+    return t;
+  };
+  let ex = pick(p.excerpt);
+  const sub = pick(p.sub_heading);
+  const meta = pick(p.meta_description);
+  let text = ex;
+  if (ex.length < 80) {
+    text = [ex, sub, meta].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  }
+  return text ? sanitizePreviewPlain(text) : '';
+}
+
+/**
+ * Hero / list preview: excerpt + sub + meta when substantive; else a short body snippet (no related / Also read).
+ */
+function buildDescriptionPreviewFromArticleRow(p, maxLen = 560) {
+  const fromFields = teaserFromExcerptSubMetaOnly(p);
+  if (fromFields && fromFields.length >= MIN_PROPER_DESC_LEN) {
+    return fromFields.length > maxLen ? `${fromFields.slice(0, maxLen - 1)}…` : fromFields;
+  }
+  const snippet = buildBodySnippetPlain(p.content || '', BODY_SNIPPET_LEN);
+  if (snippet) return snippet;
+  return fromFields || null;
+}
+
+function escapeHtmlText(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function buildPremiumPreviewHtml(excerpt, fullContent) {
+  if (excerpt && String(excerpt).trim()) return String(excerpt);
+  const plain = stripTags(stripRelatedShortcodesAndMarkers(fullContent));
+  const cut = plain.length > 560 ? `${plain.slice(0, 560)}…` : plain;
+  return `<p>${escapeHtmlText(cut)}</p>`;
+}
+
+async function getRelatedArticlesForArticle(articleId, limit = 4) {
+  const RELATED_ATTRS = [
+    'id', 'title', 'slug', 'thumbnail_url', 'excerpt',
+    'sub_heading', 'author_id', 'published_at', 'updated_at', 'content',
+  ];
+
+  const maps = await ArticleCategoryMap.findAll({
+    where: { article_id: articleId },
+    attributes: ['category_id'],
+  });
+  const catIds = [...new Set(maps.map((m) => Number(m.category_id)))].filter((n) => Number.isFinite(n));
+
+  let rows = [];
+
+  // Try same-category articles first
+  if (catIds.length) {
+    const sibs = await ArticleCategoryMap.findAll({
+      where: { category_id: { [Op.in]: catIds }, article_id: { [Op.ne]: articleId } },
+      attributes: ['article_id'],
+      limit: 48,
+    });
+    const candidateIds = [...new Set(sibs.map((s) => Number(s.article_id)))].filter((n) => Number.isFinite(n));
+    if (candidateIds.length) {
+      rows = await Article.findAll({
+        where: { id: { [Op.in]: candidateIds }, status: 'publish' },
+        attributes: RELATED_ATTRS,
+        order: [['published_at', 'DESC']],
+        limit,
+      });
+    }
+  }
+
+  // Fallback: latest published articles (excluding current)
+  if (!rows.length) {
+    rows = await Article.findAll({
+      where: { status: 'publish', id: { [Op.ne]: articleId } },
+      attributes: RELATED_ATTRS,
+      order: [['published_at', 'DESC'], ['id', 'DESC']],
+      limit,
+    });
+  }
+
+  if (!rows.length) return [];
+
+  // Resolve author display names
+  const authorIds = [...new Set(rows.map((r) => r.get({ plain: true }).author_id).filter(Boolean))];
+  const authorNameMap = authorIds.length ? await getAuthorDisplayNamesBatch(authorIds) : new Map();
+
+  return rows.map((r) => {
+    const x = r.get({ plain: true });
+    return {
+      id: x.id,
+      title: x.title || '',
+      slug: x.slug || '',
+      thumbnail_url: x.thumbnail_url || null,
+      cover_image_url: x.thumbnail_url || null,
+      excerpt: x.excerpt || null,
+      sub_heading: x.sub_heading || null,
+      author_name: authorNameMap.get(x.author_id) ?? null,
+      published_at: x.published_at || null,
+      updated_at: x.updated_at || null,
+      description_preview: buildDescriptionPreviewFromArticleRow(x, 280),
+    };
+  });
+}
+
+function canReadFullArticle(tier, viewer) {
+  const t = normalizeBlogAccessTier(tier);
+  if (t !== 'premium') return { can_read_full: true, reason: 'free' };
+  if (!viewer) return { can_read_full: false, reason: 'premium_locked' };
+  if (['admin', 'super_admin'].includes(viewer.role)) return { can_read_full: true, reason: 'admin' };
+  if (viewer.hasActiveMembership) return { can_read_full: true, reason: 'membership' };
+  return { can_read_full: false, reason: 'premium_locked' };
+}
+
 async function embedRelatedArticles(content) {
   if (typeof content !== 'string' || !content.length) return content;
   const relatedIds = extractRelatedIds(content);
@@ -696,42 +1154,224 @@ async function embedRelatedArticles(content) {
     byId.set(Number(p.id), p);
   });
 
-  // Replace each [related id="N"] shortcode with an HTML block
-  const replaced = content.replace(/\[related\s+id="(\d+)"\]/gi, (match, rawId) => {
+  // Replace each [related id="N"] shortcode with an HTML block (cafestudy-fe uses /blogs/:slug)
+  const replaced = content.replace(/\[related\s+id=['"](\d+)['"]\]/gi, (match, rawId) => {
     const n = Number(rawId);
     const article = byWpId.get(n) || byId.get(n);
     if (!article) return ''; // remove unresolvable shortcodes
-    const href = `/articles/${article.slug}`;
-    return `<div class="related-article-inline"><span class="related-label">Also Read:</span> <a href="${href}" class="related-link">${article.title}</a></div>`;
+    const slug = String(article.slug || '').trim();
+    const href = `/blogs/${encodeURIComponent(slug)}`;
+    return `<div class="related-article-inline"><p class="related-heading">Also Read</p><a href="${href}" class="related-link">${escapeHtmlText(article.title || '')}</a></div>`;
   });
   return replaced;
 }
 
-async function getArticleBySlugPublic(slug) {
+/**
+ * Sanitise article HTML that may have been pasted from ChatGPT or other AI tools.
+ * Strips layout-breaking CSS classes (flex, grid, columns, etc.) and removes
+ * wrapper divs with data-* attributes that come from the source page.
+ */
+function sanitizeArticleHtml(html) {
+  if (typeof html !== 'string' || !html.length) return html;
+
+  let out = html;
+
+  // 1. Remove class attributes that contain layout-breaking Tailwind / CSS classes
+  //    Matches class="..." where the value contains flex, grid, gap-, grow, min-w, etc.
+  // Do not match `text-base` here — TipTap / pasted prose often uses it for sizing; stripping
+  // removes the entire class attribute and flattens typography (bold/colour utilities).
+  out = out.replace(/\s*class="[^"]*(?:flex|grid|gap-|grow|shrink|min-w|min-h|max-w-\(|pb-25|scroll-mt|focus:|pointer-events|z-0|agent-turn|text-message|text-token|dark:prose|markdown-new-styling|prose-invert|@w-)[^"]*"/gi, '');
+
+  // 2. Remove data-* attributes (data-testid, data-turn-id, data-message-*, etc.)
+  out = out.replace(/\s*data-[a-z][a-z0-9-]*="[^"]*"/gi, '');
+
+  // 3. Remove dir="auto" and tabindex attributes
+  out = out.replace(/\s*dir="auto"/gi, '');
+  out = out.replace(/\s*tabindex="[^"]*"/gi, '');
+
+  // 4. Unwrap empty/redundant wrapper <div> and <section> tags left after attribute removal.
+  //    Keep only <div class="related-article-inline"> and similar known patterns.
+  //    Replace <div>\n<section>\n ... \n</section>\n</div> wrapper chains.
+  out = out.replace(/<(div|section)\s*>\s*(?=<(div|section|p|h[1-6]|ul|ol|table|blockquote))/gi, '');
+
+  // Close matching end tags for the unwrapped opens (greedy, removes trailing close tags
+  // that pair with the removed opens). This is approximate but handles the common case.
+  // We'll do multiple passes to peel layers.
+  for (let i = 0; i < 6; i++) {
+    // Remove </div> or </section> that appears right before another closing tag or EOF,
+    // but only if there's no matching open tag.
+    out = out.replace(/<\/(div|section)>\s*(<\/(div|section)>)/gi, '$2');
+  }
+
+  // 5. Clean up any remaining empty divs/sections (no content, no meaningful children)
+  out = out.replace(/<(div|section)\s*>\s*<\/\1>/gi, '');
+
+  // 6. Collapse excessive whitespace / blank lines
+  out = out.replace(/(\r?\n){3,}/g, '\n\n');
+
+  return out.trim();
+}
+
+async function getArticleBySlugPublic(slug, viewer = null) {
   const row = await Article.findOne({
     where: { slug, status: 'publish' },
     attributes: [
-      'id', 'title', 'slug', 'excerpt', 'content', 'thumbnail_url', 'author_id',
+      'id', 'title', 'slug', 'excerpt', 'content', 'sub_heading', 'thumbnail_url', 'author_id',
       'published_at', 'meta_title', 'meta_description', 'created_at', 'updated_at',
-      'rel_download_url', 'upload_url',
+      'rel_download_url', 'upload_url', 'blog_access_tier',
     ],
   });
   if (!row) return null;
   const p = row.get({ plain: true });
+  const blog_access_tier = normalizeBlogAccessTier(p.blog_access_tier);
+  const access = canReadFullArticle(blog_access_tier, viewer);
   const authorName = await getAuthorDisplayName(p.author_id);
-  const body = await embedRelatedArticles(p.content);
+  const fullBody = sanitizeArticleHtml(await embedRelatedArticles(p.content));
+  const related_articles = access.can_read_full ? [] : await getRelatedArticlesForArticle(p.id, 4);
+  const body = access.can_read_full ? fullBody : buildPremiumPreviewHtml(p.excerpt, p.content);
   const out = {
     ...p,
+    blog_access_tier,
+    access: {
+      can_read_full: access.can_read_full,
+      reason: access.reason,
+      show_read_more_cta: !access.can_read_full && blog_access_tier === 'premium',
+      // Downloads are always premium-only regardless of article tier
+      can_download: viewer
+        ? (['admin', 'super_admin'].includes(viewer.role) || !!viewer.hasActiveMembership)
+        : false,
+    },
     body,
     cover_image_url: p.thumbnail_url,
     author_name: authorName ?? p.author_id,
-    // Single download URL for "Download File" button: prefer rel_download_url, else upload_url
     download_url: p.rel_download_url || p.upload_url || null,
   };
+  if (related_articles.length) out.related_articles = related_articles;
   return out;
 }
 
-const ARTICLE_LIST_ATTRS = ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'status', 'published_at', 'created_at', 'updated_at'];
+const UP_NEXT_LIST_ATTRS = [
+  'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
+  'published_at', 'created_at', 'updated_at', 'blog_access_tier',
+];
+
+/**
+ * "Up next" suggestions for article detail / blog cards.
+ * Order: (1) same published category, newest first; (2) same author; (3) latest published site-wide.
+ * Excludes the current article. Respects optional viewer JWT for premium vs free access flags.
+ */
+async function getUpNextArticlesBySlugPublic(slug, viewer = null, rawLimit) {
+  const parsed = parseInt(rawLimit, 10);
+  const requested = Number.isFinite(parsed) && parsed > 0 ? parsed : 6;
+  /** At least 3, at most 10; default 6 so we usually fill ≥3 from the DB. */
+  const limit = Math.min(10, Math.max(3, requested));
+  const focusRow = await Article.findOne({
+    where: { slug, status: 'publish' },
+    attributes: ['id', 'author_id'],
+  });
+  if (!focusRow) return [];
+  const articleId = Number(focusRow.get('id'));
+  const authorId = focusRow.get('author_id');
+
+  const picked = [];
+  const pickedIds = new Set([articleId]);
+
+  const takeFromRows = (rows) => {
+    for (const r of rows) {
+      const p = r.get({ plain: true });
+      const id = Number(p.id);
+      if (pickedIds.has(id)) continue;
+      pickedIds.add(id);
+      picked.push(p);
+      if (picked.length >= limit) return true;
+    }
+    return false;
+  };
+
+  const maps = await ArticleCategoryMap.findAll({
+    where: { article_id: articleId },
+    attributes: ['category_id'],
+  });
+  const catIds = [...new Set(maps.map((m) => Number(m.category_id)))].filter((n) => Number.isFinite(n));
+
+  if (picked.length < limit && catIds.length) {
+    const sibs = await ArticleCategoryMap.findAll({
+      where: { category_id: { [Op.in]: catIds }, article_id: { [Op.ne]: articleId } },
+      attributes: ['article_id'],
+      limit: 240,
+      raw: true,
+    });
+    const candidateIds = [...new Set(sibs.map((s) => Number(s.article_id)))].filter((n) => Number.isFinite(n));
+    if (candidateIds.length) {
+      const rows = await Article.findAll({
+        where: { id: { [Op.in]: candidateIds }, status: 'publish' },
+        attributes: UP_NEXT_LIST_ATTRS,
+        order: [['published_at', 'DESC'], ['id', 'DESC']],
+      });
+      takeFromRows(rows);
+    }
+  }
+
+  if (picked.length < limit && authorId != null) {
+    const rows = await Article.findAll({
+      where: {
+        status: 'publish',
+        author_id: authorId,
+        id: { [Op.notIn]: [...pickedIds] },
+      },
+      attributes: UP_NEXT_LIST_ATTRS,
+      order: [['published_at', 'DESC'], ['id', 'DESC']],
+      limit: Math.max(limit * 3, 15),
+    });
+    takeFromRows(rows);
+  }
+
+  if (picked.length < limit) {
+    const rows = await Article.findAll({
+      where: {
+        status: 'publish',
+        id: { [Op.notIn]: [...pickedIds] },
+      },
+      attributes: UP_NEXT_LIST_ATTRS,
+      order: [['published_at', 'DESC'], ['id', 'DESC']],
+      limit: Math.max(limit * 4, 24),
+    });
+    takeFromRows(rows);
+  }
+
+  const plain = picked.slice(0, limit);
+  if (!plain.length) return [];
+
+  const authorIds = [...new Set(plain.map((p) => p.author_id).filter(Boolean))];
+  const authorNameMap = authorIds.length ? await getAuthorDisplayNamesBatch(authorIds) : new Map();
+  const articleCats = await buildCategoriesMapsForArticleIds(plain.map((p) => Number(p.id)));
+
+  const ids = [...new Set(plain.map((p) => Number(p.id)))];
+  const contentRows = ids.length
+    ? await Article.findAll({
+      where: { id: { [Op.in]: ids } },
+      attributes: ['id', 'content'],
+    })
+    : [];
+  const contentById = new Map(
+    contentRows.map((r) => {
+      const x = r.get({ plain: true });
+      return [Number(x.id), x.content || ''];
+    }),
+  );
+
+  const enrichedPlain = plain.map((p) => ({
+    ...p,
+    description_preview: buildDescriptionPreviewFromArticleRow(
+      { ...p, content: contentById.get(Number(p.id)) || '' },
+      560,
+    ),
+  }));
+
+  return attachAccessAndAuthorsToArticles(enrichedPlain, authorNameMap, articleCats, viewer);
+}
+
+const ARTICLE_LIST_ATTRS = ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'status', 'published_at', 'created_at', 'updated_at', 'blog_access_tier'];
 const SORTABLE_ARTICLE_COLUMNS = ['id', 'title', 'slug', 'created_at', 'updated_at', 'status', 'published_at'];
 
 function buildArticlesWhere(options = {}) {
@@ -864,6 +1504,7 @@ async function createArticle(data) {
     meta_title: data.meta_title || null,
     meta_description: data.meta_description || null,
     meta_keywords: data.meta_keywords || null,
+    blog_access_tier: normalizeBlogAccessTier(data.blog_access_tier),
   });
   const articleId = row.id;
   const category_ids = Array.isArray(data.category_ids) ? data.category_ids : [];
@@ -895,6 +1536,8 @@ async function updateArticle(id, data) {
   if (data.meta_title !== undefined) updates.meta_title = data.meta_title;
   if (data.meta_description !== undefined) updates.meta_description = data.meta_description;
   if (data.meta_keywords !== undefined) updates.meta_keywords = data.meta_keywords;
+  if (data.blog_access_tier !== undefined) updates.blog_access_tier = normalizeBlogAccessTier(data.blog_access_tier);
+  if (data.rel_download_url !== undefined) updates.rel_download_url = data.rel_download_url || null;
   await row.update(updates);
   if (data.category_ids !== undefined) {
     await ArticleCategoryMap.destroy({ where: { article_id: id } });
@@ -1208,7 +1851,9 @@ module.exports = {
   },
   articles: {
     getArticlesPublic,
+    getBlogSpotlightFeed,
     getArticleBySlugPublic,
+    getUpNextArticlesBySlugPublic,
     getArticlesInternal,
     getArticleByIdInternal,
     createArticle,

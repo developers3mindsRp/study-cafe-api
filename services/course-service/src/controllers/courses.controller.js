@@ -6,6 +6,12 @@ const list = asyncHandler(async (req, res) => {
   sendSuccess(res, rows);
 });
 
+const listFeatured = asyncHandler(async (req, res) => {
+  const limit = Math.min(24, Math.max(1, parseInt(req.query.limit, 10) || 6));
+  const rows = await coursesService.listFeaturedPublished(limit);
+  sendSuccess(res, rows);
+});
+
 const getById = asyncHandler(async (req, res) => {
   const course = await coursesService.getById(req.params.id);
   if (!course) throw new AppError('Course not found', 404);
@@ -100,6 +106,13 @@ const addMaterial = asyncHandler(async (req, res) => {
 
 const listAllInternal = asyncHandler(async (req, res) => {
   const rows = await coursesService.listAll();
+  sendSuccess(res, rows);
+});
+
+const listByIdsOrCatIds = asyncHandler(async (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+  const cat_ids = Array.isArray(req.body.cat_ids) ? req.body.cat_ids : [];
+  const rows = await coursesService.listByIdsOrCatIds({ ids, cat_ids });
   sendSuccess(res, rows);
 });
 
@@ -209,6 +222,7 @@ const removeBatchEnrollment = asyncHandler(async (req, res) => {
 
 module.exports = {
   list,
+  listFeatured,
   listByCategory,
   listCourseCatsPublic,
   getById,
@@ -243,4 +257,5 @@ module.exports = {
   getByIdInternal,
   getPageSettings,
   updatePageSetting,
+  listByIdsOrCatIds,
 };

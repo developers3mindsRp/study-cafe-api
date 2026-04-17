@@ -2,12 +2,18 @@ const authService = require('../services/auth.service');
 const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent } = require('../../../../shared');
 
 const register = asyncHandler(async (req, res) => {
-  const { email, password, name } = req.body;
-  const user = await authService.register({ email, password, name });
+  const { email, password, name, referralCode } = req.body;
+  const user = await authService.register({ email, password, name, referralCode });
   const accessToken = authService.signAccess({ userId: user.id, email: user.email, role: user.role });
   const refreshToken = authService.signRefresh({ userId: user.id });
   sendCreated(res, {
-    user: { id: user.id, email: user.email, name: user.name, role: user.role },
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      has_active_membership: !!user.has_active_membership,
+    },
     accessToken,
     refreshToken,
     expiresIn: 3600,
@@ -44,8 +50,19 @@ const me = asyncHandler(async (req, res) => {
     id: user.id || String(user.userId),
     email: user.email,
     name: user.name || '',
+    bio: user.bio != null ? String(user.bio) : null,
     role: user.role,
     permissions: user.permissions || [],
+    has_active_membership: !!user.has_active_membership,
+    referral_code: user.referral_code || null,
+    avatar: user.avatar || null,
+    phone: user.phone || null,
+    profession: user.profession || null,
+    company: user.company || null,
+    designation: user.designation || null,
+    city: user.city || null,
+    state: user.state || null,
+    country: user.country || null,
   });
 });
 
