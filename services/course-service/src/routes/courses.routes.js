@@ -27,6 +27,7 @@ function register(router) {
   router.put('/internal/courses/:id', internalAuth, validate(schemas.updateCourse), coursesController.updateCourse);
   router.post('/internal/courses/:id/batches', internalAuth, validate(schemas.createBatch), coursesController.createBatch);
   router.put('/internal/batches/:id', internalAuth, validate(schemas.updateBatch), coursesController.updateBatch);
+  router.post('/internal/batches/:id/sync', internalAuth, validate(schemas.idParam), coursesController.syncBatch);
   router.post('/internal/batches/:id/sessions', internalAuth, validate(schemas.createSession), coursesController.createSession);
   router.put('/internal/sessions/:id', internalAuth, validate(schemas.updateSession), coursesController.updateSession);
   router.post('/internal/sessions/:id/recordings', internalAuth, validate(schemas.addRecording), coursesController.addRecording);

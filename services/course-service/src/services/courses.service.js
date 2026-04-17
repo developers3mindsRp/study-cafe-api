@@ -295,7 +295,7 @@ const coursesService = {
     for (const b of batches) {
       const sessions = await Session.findAll({
         where: { batch_id: b.id },
-        order: [["day_number", "ASC"]],
+        order: [["day_number", "ASC"], ["section_index", "ASC"]],
         include: [
           {
             model: Recording,
@@ -316,7 +316,10 @@ const coursesService = {
           id: s.id,
           batch_id: s.batch_id,
           day_number: s.day_number,
+          section_index: s.section_index ?? 0,
           title: s.title,
+          section_title: s.section_title || null,
+          duration: s.duration || null,
           scheduled_at: s.scheduled_at,
           meet_link: s.meet_link,
           recordings: (s.Recordings || []).map((r) => ({
@@ -479,23 +482,38 @@ const coursesService = {
 
     // Create sessions + recordings from curriculum items
     for (let i = 0; i < curriculum.length; i++) {
-      const item = curriculum[i];
-      const session = await Session.create({
-        batch_id: batch.id,
-        day_number: i + 1,
-        title: item.title || `Day ${i + 1}`,
-        scheduled_at: null,
-        meet_link: null,
-      });
+      const day = curriculum[i];
+      const dayNumber = i + 1;
+      const dayTitle = day.title || `Day ${dayNumber}`;
 
-      // Create recording from curriculum video if present
-      if (item.video) {
-        await Recording.create({
-          session_id: session.id,
-          url: String(item.video),
-          source: "vimeo",
-          is_visible: false,
+      // New format: day.sections = [{ title, description, videoId, duration }, ...]
+      // Old format: flat { title, video, minutes, description }
+      const sections = Array.isArray(day.sections) && day.sections.length > 0
+        ? day.sections
+        : [{ title: dayTitle, description: day.description || '', videoId: day.video || '', duration: day.minutes || '' }];
+
+      for (let s = 0; s < sections.length; s++) {
+        const sec = sections[s];
+        const session = await Session.create({
+          batch_id: batch.id,
+          day_number: dayNumber,
+          section_index: s,
+          title: dayTitle,
+          section_title: sec.title || null,
+          duration: sec.duration ? parseInt(sec.duration, 10) || null : null,
+          scheduled_at: null,
+          meet_link: null,
         });
+
+        const videoId = sec.videoId || sec.video || '';
+        if (videoId) {
+          await Recording.create({
+            session_id: session.id,
+            url: String(videoId),
+            source: "vimeo",
+            is_visible: false,
+          });
+        }
       }
     }
 
@@ -505,6 +523,127 @@ const coursesService = {
     }).then(
       (batches) =>
         batches.find((b) => b.id === batch.id) || batch.get({ plain: true }),
+    );
+  },
+
+  /**
+   * Re-sync batch sessions from the course curriculum.
+   * Deletes existing sessions and re-creates them from current curriculum.
+   * Preserves recordings whose videoId matches a curriculum section.
+   */
+  async syncBatchSessions(batchId) {
+    const batch = await Batch.findByPk(batchId);
+    if (!batch) return null;
+
+    const course = await Course.findByPk(batch.course_id, {
+      attributes: ["id", "curriculum"],
+    });
+    if (!course) return null;
+
+    let curriculum = [];
+    try {
+      curriculum =
+        typeof course.curriculum === "string"
+          ? JSON.parse(course.curriculum)
+          : course.curriculum || [];
+    } catch {
+      curriculum = [];
+    }
+
+    if (!Array.isArray(curriculum) || curriculum.length === 0) {
+      const err = new Error(
+        "Course has no curriculum items. Add curriculum in the course editor first.",
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+
+    // Collect existing recordings keyed by (day_number, section_index)
+    const existingSessions = await Session.findAll({
+      where: { batch_id: batchId },
+      include: [{ model: Recording, as: "Recordings", required: false }],
+    });
+
+    const existingRecMap = new Map();
+    for (const s of existingSessions) {
+      const key = `${s.day_number}-${s.section_index}`;
+      existingRecMap.set(key, (s.Recordings || []).map((r) => ({
+        url: r.url,
+        source: r.source,
+        is_visible: r.is_visible,
+      })));
+    }
+
+    // Delete all existing sessions (cascades to recordings via DB or manual)
+    for (const s of existingSessions) {
+      await Recording.destroy({ where: { session_id: s.id } });
+      await s.destroy();
+    }
+
+    // Re-create sessions from curriculum
+    for (let i = 0; i < curriculum.length; i++) {
+      const day = curriculum[i];
+      const dayNumber = i + 1;
+      const dayTitle = day.title || `Day ${dayNumber}`;
+
+      const sections =
+        Array.isArray(day.sections) && day.sections.length > 0
+          ? day.sections
+          : [
+              {
+                title: dayTitle,
+                description: day.description || "",
+                videoId: day.video || "",
+                duration: day.minutes || "",
+              },
+            ];
+
+      for (let s = 0; s < sections.length; s++) {
+        const sec = sections[s];
+        const session = await Session.create({
+          batch_id: batchId,
+          day_number: dayNumber,
+          section_index: s,
+          title: dayTitle,
+          section_title: sec.title || null,
+          duration: sec.duration ? parseInt(sec.duration, 10) || null : null,
+          scheduled_at: null,
+          meet_link: null,
+        });
+
+        // Try to restore existing recordings for this slot
+        const key = `${dayNumber}-${s}`;
+        const oldRecs = existingRecMap.get(key);
+        if (oldRecs && oldRecs.length > 0) {
+          for (const r of oldRecs) {
+            await Recording.create({
+              session_id: session.id,
+              url: r.url,
+              source: r.source,
+              is_visible: r.is_visible,
+            });
+          }
+        } else {
+          // Seed from curriculum videoId if present
+          const videoId = sec.videoId || sec.video || "";
+          if (videoId) {
+            await Recording.create({
+              session_id: session.id,
+              url: String(videoId),
+              source: "vimeo",
+              is_visible: false,
+            });
+          }
+        }
+      }
+    }
+
+    // Return updated batch
+    return this._getBatchesSessionsRecordings(batch.course_id, {
+      visibleOnly: false,
+    }).then(
+      (batches) =>
+        batches.find((b) => b.id === batchId) || batch.get({ plain: true }),
     );
   },
 
@@ -535,11 +674,14 @@ const coursesService = {
   },
 
   async createSession(batchId, data) {
-    const { day_number, title, scheduled_at, meet_link } = data;
+    const { day_number, section_index, title, section_title, duration, scheduled_at, meet_link } = data;
     const row = await Session.create({
       batch_id: batchId,
       day_number: day_number ?? 1,
+      section_index: section_index ?? 0,
       title: title || null,
+      section_title: section_title || null,
+      duration: duration != null ? parseInt(duration, 10) || null : null,
       scheduled_at: scheduled_at || null,
       meet_link: meet_link || null,
     });
@@ -547,12 +689,15 @@ const coursesService = {
   },
 
   async updateSession(id, data) {
-    const { day_number, title, scheduled_at, meet_link } = data;
+    const { day_number, section_index, title, section_title, duration, scheduled_at, meet_link } = data;
     const row = await Session.findByPk(id);
     if (!row) return null;
     await row.update({
       ...(day_number !== undefined && { day_number }),
+      ...(section_index !== undefined && { section_index }),
       ...(title !== undefined && { title }),
+      ...(section_title !== undefined && { section_title }),
+      ...(duration !== undefined && { duration: duration != null ? parseInt(duration, 10) || null : null }),
       ...(scheduled_at !== undefined && { scheduled_at }),
       ...(meet_link !== undefined && { meet_link }),
     });
