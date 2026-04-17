@@ -30,6 +30,7 @@ function register(router) {
   router.put('/admin/courses/:id', requireAdmin, controller.updateCourse);
   router.post('/admin/courses/:id/batches', requireAdmin, controller.createBatch);
   router.put('/admin/batches/:id', requireAdmin, controller.updateBatch);
+  router.post('/admin/batches/:id/sync', requireAdmin, controller.syncBatch);
   router.post('/admin/batches/:id/sessions', requireAdmin, controller.createSession);
   router.put('/admin/sessions/:id', requireAdmin, controller.updateSession);
   router.post('/admin/sessions/:id/recordings', requireAdmin, controller.addRecording);

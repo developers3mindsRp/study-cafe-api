@@ -71,6 +71,12 @@ const updateBatch = asyncHandler(async (req, res) => {
   sendSuccess(res, batch);
 });
 
+const syncBatch = asyncHandler(async (req, res) => {
+  const result = await coursesService.syncBatchSessions(req.params.id);
+  if (!result) throw new AppError('Batch not found', 404);
+  sendSuccess(res, result);
+});
+
 const createSession = asyncHandler(async (req, res) => {
   const session = await coursesService.createSession(req.params.id, req.body);
   sendCreated(res, session);
@@ -229,6 +235,7 @@ module.exports = {
   updateCourse,
   createBatch,
   updateBatch,
+  syncBatch,
   createSession,
   updateSession,
   addRecording,

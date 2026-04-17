@@ -68,6 +68,13 @@ const updateBatch = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+const syncBatch = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await courseClient.post(`/internal/batches/${req.params.id}/sync`);
+  await adminLogsService.logAction(adminId, 'SYNC_BATCH', 'batch', req.params.id, {}, req.ip);
+  sendSuccess(res, data);
+});
+
 const createSession = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
   const { data } = await courseClient.post(`/internal/batches/${req.params.id}/sessions`, req.body);
@@ -396,6 +403,7 @@ module.exports = {
   updateCourse,
   createBatch,
   updateBatch,
+  syncBatch,
   createSession,
   updateSession,
   addRecording,
