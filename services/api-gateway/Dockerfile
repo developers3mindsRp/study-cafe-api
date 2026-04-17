@@ -1,8 +1,7 @@
 FROM node:20-alpine
 WORKDIR /app
-# Monorepo context: include shared/ and root package for file:../.. (studycafe-ms)
-COPY . .
-WORKDIR /app/services/api-gateway
+COPY package*.json ./
 RUN npm install --omit=dev
+COPY . .
 EXPOSE 3000
 CMD ["npm", "start"]
