@@ -1,5 +1,4 @@
 const SERVICE_NAME = process.env.SERVICE_NAME || 'app';
-
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const LOG_LEVEL = LEVELS[process.env.LOG_LEVEL] ?? LEVELS.debug;
 
