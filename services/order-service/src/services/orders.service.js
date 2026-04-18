@@ -7,6 +7,9 @@ const config = require('../config');
 const { getRazorpayInstance, getRazorpayConfig } = require('./payment.service');
 const { AppError, logger } = require('../../../../shared');
 
+// GST rate applied on top of the post-discount price before charging via Razorpay
+const GST_RATE = 0.18;
+
 function generateOrderId() {
   return 'ORD_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
 }
@@ -417,16 +420,21 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
   }
 
   const discountAmount = couponResult ? couponResult.discountAmount : 0;
-  const finalAmount = couponResult ? couponResult.finalAmount : originalAmount;
+  const afterDiscount = couponResult ? couponResult.finalAmount : originalAmount;
 
-  // 3. Guard: idempotency lock per (user, type, entity) — prevents race-created duplicates
+  // 3. Apply 18% GST on the post-discount amount
+  const gstAmount = Number((afterDiscount * GST_RATE).toFixed(2));
+  const grandTotal = Number((afterDiscount + gstAmount).toFixed(2));
+
+  // 4. Guard: idempotency lock per (user, type, entity) — prevents race-created duplicates
   const lockKey = `order:lock:${userId}:${typeUpper}:${entityId}`;
   const redis = await getRedis();
   const locked = await redis.set(lockKey, '1', { NX: true, EX: 30 });
   if (!locked) throw new AppError('Duplicate order in progress', 429);
 
   const orderId = generateOrderId();
-  const amountPaise = Math.round(finalAmount * 100);
+  // Razorpay expects amount in paise — use the GST-inclusive grand total
+  const amountPaise = Math.round(grandTotal * 100);
 
   // For course purchases, resolve + lock the batch the buyer will be enrolled into.
   // (upcoming > latest completed > newest) — so adding a new upcoming batch AFTER
@@ -446,13 +454,13 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
       original_amount: originalAmount,
       coupon_code: couponResult ? couponResult.coupon.code : null,
       coupon_discount: discountAmount,
-      amount: finalAmount,            // what we actually charge
+      amount: grandTotal,             // GST-inclusive grand total — what we actually charge
       currency,
       status: 'pending',
       affiliate: referralCode || null,
     });
 
-    // 4. Create Razorpay order using the server-derived amount
+    // 5. Create Razorpay order using the GST-inclusive server-derived amount
     const rpOrder = await razorpay.orders.create({
       amount: amountPaise,
       currency,
@@ -467,7 +475,7 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
 
     await order.update({ razorpay_order_id: rpOrder.id });
 
-    // 5. Record coupon usage atomically AFTER the order row exists
+    // 6. Record coupon usage atomically AFTER the order row exists
     if (couponResult) {
       await recordCouponUsage(couponResult.coupon.id, userId, orderId, null);
     }
@@ -480,9 +488,11 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
     return {
       orderId,
       razorpayOrderId: rpOrder.id,
-      amount: amountPaise,
-      originalAmount: Math.round(originalAmount * 100),
-      discountAmount: Math.round(discountAmount * 100),
+      amount: amountPaise,                                        // paise sent to Razorpay (GST-inclusive)
+      originalAmount: Math.round(originalAmount * 100),           // paise, pre-coupon price
+      discountAmount: Math.round(discountAmount * 100),           // paise, coupon saving
+      gstAmount: Math.round(gstAmount * 100),                     // paise, 18% GST
+      grandTotal: Math.round(grandTotal * 100),                   // paise, final charge
       currency,
       key: rpConfig?.key_id,
       prefill: {
@@ -566,8 +576,9 @@ async function listMyPurchases(userId) {
     }
   }
 
+  // Only return fully paid orders — pending/failed orders (incomplete payments) are excluded
   const rows = await Order.findAll({
-    where: { user_id: userId },
+    where: { user_id: userId, status: 'paid' },
     order: [['created_at', 'DESC']],
   });
   const out = [];
