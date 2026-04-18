@@ -536,11 +536,13 @@ async function verifyOrder(userId, { orderId, razorpay_order_id, razorpay_paymen
 // ─── Read-only query helpers ──────────────────────────────────────────────────
 
 async function listOrders(userId) {
+  console.log('USER ID:', userId);
   const rows = await Order.findAll({
     where: { user_id: userId },
     order: [['created_at', 'DESC']],
     attributes: ['order_id', 'type', 'entity_id', 'amount', 'currency', 'status', 'created_at'],
   });
+  console.log('ORDERS:', rows);
   return rows.map((r) => r.get({ plain: true }));
 }
 
@@ -665,12 +667,14 @@ async function listMyPurchases(userId) {
 }
 
 async function listAllOrders(limit = 100, offset = 0) {
+  console.log('LIST ALL ORDERS:', limit, offset);
   const rows = await Order.findAll({
     order: [['created_at', 'DESC']],
     attributes: ['id', 'order_id', 'user_id', 'type', 'entity_id', 'amount', 'currency', 'status', 'buyer_email', 'created_at'],
     limit: Math.min(Number(limit) || 100, 500),
     offset: Number(offset) || 0,
   });
+  console.log('LIST ALL ORDERS:', rows);
   return rows.map((r) => r.get({ plain: true }));
 }
 
