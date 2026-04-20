@@ -79,14 +79,49 @@ async function deleteAccount(userId) {
   await user.update({ is_active: false, status: 'deleted' });
 }
 
+async function fetchProgressSummary(userId, courseIds) {
+  if (!courseIds.length) return {};
+  try {
+    const { data } = await axios.post(
+      `${config.courseServiceUrl}/internal/progress/summary`,
+      { userId, courseIds },
+      {
+        timeout: 12000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200,
+      }
+    );
+    const payload = data.data !== undefined ? data.data : data;
+    return payload && typeof payload === 'object' ? payload : {};
+  } catch {
+    return {};
+  }
+}
+
 async function dashboardStats(userId) {
-  const totalCourses = await UserCourse.count({ where: { user_id: userId } });
+  const rows = await UserCourse.findAll({
+    where: { user_id: userId },
+    attributes: ['course_id'],
+  });
+  const courseIds = rows.map((r) => Number(r.course_id)).filter((n) => n > 0);
+  const totalCourses = courseIds.length;
+  const summary = await fetchProgressSummary(userId, courseIds);
+  let completedCourses = 0;
+  let sumProgress = 0;
+  for (const cid of courseIds) {
+    const s = summary[cid] || summary[String(cid)];
+    if (!s) continue;
+    sumProgress += Number(s.progress) || 0;
+    if (s.status === 'completed') completedCourses += 1;
+  }
+  const averageProgress = totalCourses > 0 ? Math.round(sumProgress / totalCourses) : 0;
+  const inProgressCourses = Math.max(0, totalCourses - completedCourses);
   return {
     totalCourses,
-    completedCourses: 0,
-    inProgressCourses: totalCourses,
+    completedCourses,
+    inProgressCourses,
     totalLearningHours: 0,
-    averageProgress: totalCourses > 0 ? 0 : 0,
+    averageProgress,
   };
 }
 
@@ -108,12 +143,19 @@ async function fetchCourseMeta(courseId) {
  */
 async function myCourses(userId) {
   const rows = await UserCourse.findAll({ where: { user_id: userId } });
+  const courseIds = rows.map((row) => Number(row.get({ plain: true }).course_id)).filter((n) => n > 0);
+  const summary = await fetchProgressSummary(userId, courseIds);
   const out = [];
   for (const row of rows) {
     const r = row.get({ plain: true });
     const meta = await fetchCourseMeta(r.course_id);
     const title = meta?.title || `Course #${r.course_id}`;
     const thumb = meta?.thumbnail_url ?? meta?.thumbnail ?? null;
+    const slug = meta?.slug ?? null;
+    const sum = summary[r.course_id] || summary[String(r.course_id)] || {};
+    const progress = Number(sum.progress) || 0;
+    const totalLessons = Number(sum.totalLessons) || 0;
+    const completedCount = Number(sum.completedLessons) || 0;
     out.push({
       id: `${r.user_id}-${r.course_id}`,
       userId: String(r.user_id),
@@ -121,16 +163,18 @@ async function myCourses(userId) {
       course: {
         id: String(r.course_id),
         title,
+        slug,
         thumbnail: thumb || '',
         thumbnail_url: thumb,
         price: meta?.price ?? 0,
         category: meta?.category || '',
+        totalLessons,
       },
       purchaseDate: new Date().toISOString(),
       price: 0,
       status: 'completed',
-      progress: 0,
-      completedLessons: [],
+      progress,
+      completedLessons: Array.from({ length: completedCount }, (_, i) => String(i)),
       lastAccessedAt: undefined,
     });
   }

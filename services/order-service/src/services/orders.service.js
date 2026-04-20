@@ -556,6 +556,27 @@ async function listOrders(userId) {
   return rows.map((r) => r.get({ plain: true }));
 }
 
+async function fetchProgressSummary(userId, courseIds) {
+  const ids = [...new Set((courseIds || []).map(Number).filter((n) => n > 0))];
+  if (!ids.length) return {};
+  try {
+    const { data } = await axios.post(
+      `${config.courseServiceUrl}/internal/progress/summary`,
+      { userId, courseIds: ids },
+      {
+        timeout: 12000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200,
+      }
+    );
+    const payload = parseApiResponse(data);
+    return payload && typeof payload === 'object' ? payload : {};
+  } catch (err) {
+    logger.warn(`[orders] progress summary failed: ${err.message}`);
+    return {};
+  }
+}
+
 async function listMyPurchases(userId) {
   const courseCache = new Map();
   async function fetchCourseForOrder(entityId) {
@@ -582,6 +603,7 @@ async function listMyPurchases(userId) {
     order: [['created_at', 'DESC']],
   });
   const out = [];
+  const courseEntityIds = [];
   for (const row of rows) {
     const o = row.get({ plain: true });
     const payment = await Payment.findOne({
@@ -590,6 +612,7 @@ async function listMyPurchases(userId) {
     });
     let course = null;
     if (o.type === 'course' && o.entity_id) {
+      courseEntityIds.push(Number(o.entity_id));
       const meta = await fetchCourseForOrder(o.entity_id);
       const cid = String(o.entity_id);
       course = {
@@ -674,6 +697,19 @@ async function listMyPurchases(userId) {
       lastAccessedAt: undefined,
     });
   }
+
+  const summary = await fetchProgressSummary(userId, courseEntityIds);
+  for (const item of out) {
+    const cid = Number(item.courseId);
+    const s = summary[cid] || summary[String(cid)];
+    if (!s) continue;
+    item.progress = Number(s.progress) || 0;
+    const done = Number(s.completedLessons) || 0;
+    item.completedLessons = Array.from({ length: done }, (_, i) => String(i));
+    if (item.course) item.course.totalLessons = Number(s.totalLessons) || 0;
+    if (s.status === 'completed') item.completedAt = new Date().toISOString();
+  }
+
   return out;
 }
 

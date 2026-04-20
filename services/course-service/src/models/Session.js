@@ -22,7 +22,7 @@ module.exports = (sequelize) => {
   );
   Session.associate = (models) => {
     Session.belongsTo(models.Batch, { foreignKey: 'batch_id' });
-    Session.hasMany(models.Recording, { foreignKey: 'session_id' });
+    Session.hasMany(models.Recording, { foreignKey: 'session_id', as: 'Recordings' });
   };
   return Session;
 };

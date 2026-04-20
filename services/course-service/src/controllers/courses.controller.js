@@ -13,13 +13,17 @@ const listFeatured = asyncHandler(async (req, res) => {
 });
 
 const getById = asyncHandler(async (req, res) => {
-  const course = await coursesService.getById(req.params.id);
+  const course = await coursesService.getById(req.params.id, {
+    authorization: req.headers.authorization,
+  });
   if (!course) throw new AppError('Course not found', 404);
   sendSuccess(res, course);
 });
 
 const getBySlug = asyncHandler(async (req, res) => {
-  const course = await coursesService.getBySlug(req.params.slug);
+  const course = await coursesService.getBySlug(req.params.slug, {
+    authorization: req.headers.authorization,
+  });
   if (!course) throw new AppError('Course not found', 404);
   sendSuccess(res, course);
 });

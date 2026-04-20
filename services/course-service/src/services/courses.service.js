@@ -10,6 +10,58 @@ const {
   BatchEnrollment,
 } = require("../models");
 const { QueryTypes } = require("sequelize");
+const { checkCourseAccess } = require("./accessClient");
+
+function stripCurriculumVideos(course) {
+  if (!course || course.curriculum == null) return course;
+  let cur = course.curriculum;
+  if (typeof cur === "string") {
+    try {
+      cur = JSON.parse(cur);
+    } catch {
+      return course;
+    }
+  }
+  if (!Array.isArray(cur)) return course;
+  const stripped = cur.map((day) => {
+    const d = { ...day };
+    delete d.video;
+    if (Array.isArray(d.sections)) {
+      d.sections = d.sections.map((sec) => {
+        const s = { ...sec };
+        delete s.videoId;
+        delete s.video;
+        delete s.videos;
+        delete s.recordings;
+        return s;
+      });
+    }
+    return d;
+  });
+  return { ...course, curriculum: stripped };
+}
+
+/** One curriculum section can have multiple recordings (videos[] / recordings[] / legacy videoId). */
+function collectVideoUrlsFromSection(sec) {
+  const out = [];
+  if (!sec || typeof sec !== "object") return out;
+  if (Array.isArray(sec.videos) && sec.videos.length) {
+    for (const v of sec.videos) {
+      if (v != null && String(v).trim()) out.push(String(v).trim());
+    }
+  }
+  if (Array.isArray(sec.recordings) && sec.recordings.length) {
+    for (const rec of sec.recordings) {
+      const u = rec && (rec.url || rec.videoId || rec.video);
+      if (u != null && String(u).trim()) out.push(String(u).trim());
+    }
+  }
+  if (out.length === 0) {
+    const single = sec.videoId || sec.video;
+    if (single != null && String(single).trim()) out.push(String(single).trim());
+  }
+  return [...new Set(out)];
+}
 
 function normalizeLanguage(value) {
   if (!value) return [];
@@ -263,20 +315,26 @@ const coursesService = {
     return rows.map((r) => r.get({ plain: true }));
   },
 
-  async getById(id) {
+  async getById(id, opts = {}) {
     const row = await Course.findOne({ where: { id, is_published: true } });
     if (!row) return null;
     const d = row.get({ plain: true });
     d.language = normalizeLanguage(d.language);
-    return this.enrichCourseWithAuthors(d);
+    const enriched = await this.enrichCourseWithAuthors(d);
+    const allowed = await checkCourseAccess(opts.authorization, id);
+    if (!allowed) return stripCurriculumVideos(enriched);
+    return enriched;
   },
 
-  async getBySlug(slug) {
+  async getBySlug(slug, opts = {}) {
     const row = await Course.findOne({ where: { slug, is_published: true } });
     if (!row) return null;
     const d = row.get({ plain: true });
     d.language = normalizeLanguage(d.language);
-    return this.enrichCourseWithAuthors(d);
+    const enriched = await this.enrichCourseWithAuthors(d);
+    const allowed = await checkCourseAccess(opts.authorization, d.id);
+    if (!allowed) return stripCurriculumVideos(enriched);
+    return enriched;
   },
 
   /**
@@ -641,13 +699,13 @@ const coursesService = {
           meet_link: null,
         });
 
-        const videoId = sec.videoId || sec.video || '';
-        if (videoId) {
+        const urls = collectVideoUrlsFromSection(sec);
+        for (const url of urls) {
           await Recording.create({
             session_id: session.id,
-            url: String(videoId),
+            url: String(url),
             source: "vimeo",
-            is_visible: false,
+            is_visible: true,
           });
         }
       }
@@ -760,14 +818,13 @@ const coursesService = {
             });
           }
         } else {
-          // Seed from curriculum videoId if present
-          const videoId = sec.videoId || sec.video || "";
-          if (videoId) {
+          const urls = collectVideoUrlsFromSection(sec);
+          for (const url of urls) {
             await Recording.create({
               session_id: session.id,
-              url: String(videoId),
+              url: String(url),
               source: "vimeo",
-              is_visible: false,
+              is_visible: true,
             });
           }
         }
@@ -846,7 +903,7 @@ const coursesService = {
       session_id: sessionId,
       url: url || "",
       source: source || null,
-      is_visible: is_visible ?? false,
+      is_visible: is_visible ?? true,
     });
     return row.get({ plain: true });
   },
