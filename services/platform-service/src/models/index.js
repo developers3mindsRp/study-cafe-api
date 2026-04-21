@@ -47,6 +47,8 @@ const SeoMetadata = require("./SeoMetadata")(sequelize);
 const MediaAsset = require("./MediaAsset")(sequelize);
 const ContactInquiry = require("./ContactInquiry")(sequelize);
 const UserMembership = require("./UserMembership")(sequelize);
+const NewsletterSubscriber = require("./NewsletterSubscriber")(sequelize);
+const NewsletterTemplate = require("./NewsletterTemplate")(sequelize);
 
 Article.associate({
   Comment,
@@ -85,6 +87,8 @@ const models = {
   MediaAsset,
   ContactInquiry,
   UserMembership,
+  NewsletterSubscriber,
+  NewsletterTemplate,
 };
 
 async function connect() {
