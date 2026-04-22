@@ -369,6 +369,15 @@ const platform = {
   getMediaAssets: platformProxy((c, req) => c.get('/internal/platform/media-assets', { params: req.query }).then((r) => ({ data: r.data }))),
   postMediaAsset: platformProxy((c, req) => c.post('/internal/platform/media-assets', req.body).then((r) => ({ data: r.data, status: 201 }))),
   deleteMediaAsset: platformProxy((c, req) => c.delete(`/internal/platform/media-assets/${req.params.id}`).then(() => ({ status: 204 }))),
+
+  // ── Newsletter ────────────────────────────────────────────────────
+  getNewsletterSubscribers: platformProxy((c) => c.get('/internal/platform/newsletter/subscribers').then((r) => ({ data: r.data }))),
+  deleteNewsletterSubscriber: platformProxy((c, req) => c.delete(`/internal/platform/newsletter/subscribers/${req.params.id}`).then(() => ({ status: 204 }))),
+  getNewsletterTemplates: platformProxy((c) => c.get('/internal/platform/newsletter/templates').then((r) => ({ data: r.data }))),
+  postNewsletterTemplate: platformProxy((c, req) => c.post('/internal/platform/newsletter/templates', req.body).then((r) => ({ data: r.data, status: 201 }))),
+  putNewsletterTemplate: platformProxy((c, req) => c.put(`/internal/platform/newsletter/templates/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
+  deleteNewsletterTemplate: platformProxy((c, req) => c.delete(`/internal/platform/newsletter/templates/${req.params.id}`).then(() => ({ status: 204 }))),
+  sendNewsletter: platformProxy((c, req) => c.post('/internal/platform/newsletter/send', req.body).then((r) => ({ data: r.data }))),
 };
 
 const uploadImage = asyncHandler(async (req, res) => {

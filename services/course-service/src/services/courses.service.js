@@ -2,6 +2,7 @@ const {
   Course,
   CourseAuthor,
   CourseCat,
+  CourseCategory,
   Batch,
   Session,
   Recording,
@@ -149,6 +150,32 @@ const coursesService = {
       author_bio: primaryAuthor?.bio ?? null,
       author_image: primaryAuthor?.image_url ?? null,
     };
+  },
+
+  /** Admin/internal: course_cats link ids for this course. */
+  async getCourseCatIdsForCourse(courseId) {
+    const links = await CourseCategory.findAll({
+      where: { course_id: courseId },
+      attributes: ["course_cat_id"],
+      raw: true,
+    });
+    return links.map((l) => Number(l.course_cat_id)).filter((n) => Number.isFinite(n));
+  },
+
+  async attachCourseCatIds(enrichedPlain) {
+    if (!enrichedPlain?.id) return enrichedPlain;
+    const course_cat_ids = await this.getCourseCatIdsForCourse(enrichedPlain.id);
+    let categories = [];
+    if (course_cat_ids.length > 0) {
+      const { Op } = require("sequelize");
+      categories = await CourseCat.findAll({
+        where: { id: { [Op.in]: course_cat_ids } },
+        attributes: ["id", "name", "slug"],
+        order: [["name", "ASC"]],
+        raw: true,
+      });
+    }
+    return { ...enrichedPlain, course_cat_ids, categories };
   },
 
   async upsertPrimaryAuthorProfile(courseId, data) {
@@ -322,8 +349,41 @@ const coursesService = {
     d.language = normalizeLanguage(d.language);
     const enriched = await this.enrichCourseWithAuthors(d);
     const allowed = await checkCourseAccess(opts.authorization, id);
-    if (!allowed) return stripCurriculumVideos(enriched);
-    return enriched;
+    const batchOpts = allowed
+      ? { visibleOnly: true }
+      : { visibleOnly: true, stripRecordings: true };
+    const batches = await this._getBatchesSessionsRecordings(id, batchOpts);
+
+    const materials = await Material.findAll({
+      where: { course_id: id },
+      order: [["id", "ASC"]],
+      attributes: ["id", "title", "url", "type"],
+    });
+
+    const catLinks = await CourseCategory.findAll({
+      where: { course_id: id },
+      attributes: ["course_cat_id"],
+      raw: true,
+    });
+    const catIds = catLinks.map((l) => l.course_cat_id);
+    let categories = [];
+    if (catIds.length > 0) {
+      const { Op } = require("sequelize");
+      categories = await CourseCat.findAll({
+        where: { id: { [Op.in]: catIds } },
+        attributes: ["id", "name", "slug"],
+        raw: true,
+      });
+    }
+
+    const result = {
+      ...enriched,
+      batches,
+      materials: materials.map((m) => m.get({ plain: true })),
+      categories,
+    };
+    if (!allowed) return stripCurriculumVideos(result);
+    return result;
   },
 
   async getBySlug(slug, opts = {}) {
@@ -333,8 +393,41 @@ const coursesService = {
     d.language = normalizeLanguage(d.language);
     const enriched = await this.enrichCourseWithAuthors(d);
     const allowed = await checkCourseAccess(opts.authorization, d.id);
-    if (!allowed) return stripCurriculumVideos(enriched);
-    return enriched;
+    const batchOpts = allowed
+      ? { visibleOnly: true }
+      : { visibleOnly: true, stripRecordings: true };
+    const batches = await this._getBatchesSessionsRecordings(d.id, batchOpts);
+
+    const materials = await Material.findAll({
+      where: { course_id: d.id },
+      order: [["id", "ASC"]],
+      attributes: ["id", "title", "url", "type"],
+    });
+
+    const catLinks = await CourseCategory.findAll({
+      where: { course_id: d.id },
+      attributes: ["course_cat_id"],
+      raw: true,
+    });
+    const catIds = catLinks.map((l) => l.course_cat_id);
+    let categories = [];
+    if (catIds.length > 0) {
+      const { Op } = require("sequelize");
+      categories = await CourseCat.findAll({
+        where: { id: { [Op.in]: catIds } },
+        attributes: ["id", "name", "slug"],
+        raw: true,
+      });
+    }
+
+    const result = {
+      ...enriched,
+      batches,
+      materials: materials.map((m) => m.get({ plain: true })),
+      categories,
+    };
+    if (!allowed) return stripCurriculumVideos(result);
+    return result;
   },
 
   /**
@@ -374,8 +467,8 @@ const coursesService = {
     const row = await Course.findByPk(id);
     if (!row) return null;
     const d = row.get({ plain: true });
-    // d.language = normalizeLanguage(d.language);
-    return this.enrichCourseWithAuthors(d);
+    const enriched = await this.enrichCourseWithAuthors(d);
+    return this.attachCourseCatIds(enriched);
   },
 
   async getSessionsByCourseId(courseId) {
@@ -543,6 +636,16 @@ const coursesService = {
   },
 
   async create(data) {
+    const course_cat_ids = Array.isArray(data.course_cat_ids)
+      ? [
+          ...new Set(
+            data.course_cat_ids
+              .map((n) => Number(n))
+              .filter((n) => Number.isFinite(n) && n > 0),
+          ),
+        ]
+      : [];
+
     const row = await Course.create({
       title: data.title || "",
       short_title: data.short_title || null,
@@ -573,7 +676,18 @@ const coursesService = {
     });
     const plain = row.get({ plain: true });
     await this.upsertPrimaryAuthorProfile(plain.id, data);
-    return this.enrichCourseWithAuthors(plain);
+
+    if (course_cat_ids.length) {
+      await CourseCategory.bulkCreate(
+        course_cat_ids.map((course_cat_id) => ({
+          course_id: plain.id,
+          course_cat_id,
+        })),
+      );
+    }
+
+    const enriched = await this.enrichCourseWithAuthors(plain);
+    return this.attachCourseCatIds(enriched);
   },
 
   async update(id, data) {
@@ -615,7 +729,27 @@ const coursesService = {
     }
     await row.update(updatePayload);
     await this.upsertPrimaryAuthorProfile(id, data);
-    return this.enrichCourseWithAuthors(row.get({ plain: true }));
+
+    if (data.course_cat_ids !== undefined) {
+      const ids = Array.isArray(data.course_cat_ids)
+        ? [
+            ...new Set(
+              data.course_cat_ids
+                .map((n) => Number(n))
+                .filter((n) => Number.isFinite(n) && n > 0),
+            ),
+          ]
+        : [];
+      await CourseCategory.destroy({ where: { course_id: id } });
+      if (ids.length) {
+        await CourseCategory.bulkCreate(
+          ids.map((course_cat_id) => ({ course_id: id, course_cat_id })),
+        );
+      }
+    }
+
+    const enriched = await this.enrichCourseWithAuthors(row.get({ plain: true }));
+    return this.attachCourseCatIds(enriched);
   },
 
   async createBatchFromCurriculum(courseId, data) {

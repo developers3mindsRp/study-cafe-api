@@ -111,6 +111,15 @@ function register(router) {
   router.post('/admin/platform/media-assets', requireAdmin, p.postMediaAsset);
   router.delete('/admin/platform/media-assets/:id', requireAdmin, p.deleteMediaAsset);
 
+  // ── Newsletter ──────────────────────────────────────────────────────
+  router.get('/admin/platform/newsletter/subscribers', requireAdmin, p.getNewsletterSubscribers);
+  router.delete('/admin/platform/newsletter/subscribers/:id', requireAdmin, p.deleteNewsletterSubscriber);
+  router.get('/admin/platform/newsletter/templates', requireAdmin, p.getNewsletterTemplates);
+  router.post('/admin/platform/newsletter/templates', requireAdmin, p.postNewsletterTemplate);
+  router.put('/admin/platform/newsletter/templates/:id', requireAdmin, p.putNewsletterTemplate);
+  router.delete('/admin/platform/newsletter/templates/:id', requireAdmin, p.deleteNewsletterTemplate);
+  router.post('/admin/platform/newsletter/send', requireAdmin, p.sendNewsletter);
+
   // ── Affiliate routes ───────────────────────────────────────────────
   router.get('/admin/affiliate/history', requireAdmin, controller.getAffiliateHistory);
   router.get('/admin/affiliate/withdrawals', requireAdmin, controller.getWithdrawalRequests);

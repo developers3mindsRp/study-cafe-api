@@ -317,6 +317,51 @@ const updateSeoMetadata = {
     }),
 };
 
+// ── Newsletter ──────────────────────────────────────────────────────
+
+const subscribeNewsletter = {
+    body: Joi.object({
+        email: Joi.string().email().max(255).required(),
+    }),
+};
+
+const unsubscribeNewsletter = {
+    query: Joi.object({
+        token: Joi.string().max(64).required(),
+    }),
+};
+
+const createNewsletterTemplate = {
+    body: Joi.object({
+        name: Joi.string().max(255).required(),
+        subject: Joi.string().max(500).required(),
+        html_content: Joi.string().required(),
+    }),
+};
+
+const updateNewsletterTemplate = {
+    params: idParam.params,
+    body: Joi.object({
+        name: Joi.string().max(255),
+        subject: Joi.string().max(500),
+        html_content: Joi.string(),
+    }),
+};
+
+const sendNewsletter = {
+    body: Joi.object({
+        template_id: Joi.number().integer().positive().required(),
+        custom_subject: Joi.string().max(500).allow('', null),
+        custom_content: Joi.string().allow('', null),
+        send_to: Joi.alternatives()
+            .try(
+                Joi.string().valid('all'),
+                Joi.array().items(Joi.string().email()).min(1),
+            )
+            .default('all'),
+    }),
+};
+
 module.exports = {
     idParam,
     slugParam,
@@ -340,4 +385,9 @@ module.exports = {
     upsertCmsPage,
     createSeoMetadata,
     updateSeoMetadata,
+    subscribeNewsletter,
+    unsubscribeNewsletter,
+    createNewsletterTemplate,
+    updateNewsletterTemplate,
+    sendNewsletter,
 };
