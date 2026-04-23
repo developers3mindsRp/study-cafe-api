@@ -1,6 +1,7 @@
 module.exports = {
   port: parseInt(process.env.PORT || '4002', 10),
   serviceName: 'course-service',
+  /** Must reach auth-service (e.g. http://auth-service:4001 in Docker; not 127.0.0.1 inside a container). */
   authServiceUrl: process.env.AUTH_SERVICE_URL || 'http://127.0.0.1:4001',
   /** Public site origin for certificate verification links (e.g. https://studycafe.in) */
   publicSiteUrl: process.env.PUBLIC_SITE_URL || 'http://localhost:3000',

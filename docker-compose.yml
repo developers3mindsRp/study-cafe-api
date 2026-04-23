@@ -96,9 +96,12 @@ services:
       MYSQL_PASSWORD: studycafe_pass
       MYSQL_DATABASE: studycafe_db
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-studycafe-internal-key}
+      AUTH_SERVICE_URL: ${AUTH_SERVICE_URL:-http://auth-service:4001}
     depends_on:
       mysql:
         condition: service_healthy
+      # Intentionally no depends_on auth-service: auth-service already depends on course-service;
+      # adding both would create a cycle. AUTH_SERVICE_URL resolves once auth is up.
 
   order-service:
     build:
