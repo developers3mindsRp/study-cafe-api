@@ -37,6 +37,8 @@ const BatchEnrollment = require('./BatchEnrollment')(sequelize);
 const AffiliateHistory = require('./AffiliateHistory')(sequelize);
 const WithdrawalRequest = require('./WithdrawalRequest')(sequelize);
 const AffiliateBalance = require('./AffiliateBalance')(sequelize);
+const UserCourseProgress = require('./UserCourseProgress')(sequelize);
+const Certificate = require('./Certificate')(sequelize);
 
 Course.associate({ Batch, Material, CourseCat, CourseCategory, CourseAuthor, Enrollment });
 Batch.associate({ Course, Session });
@@ -60,7 +62,9 @@ const models = {
   BatchEnrollment,
   AffiliateHistory,
   WithdrawalRequest,
-  AffiliateBalance
+  AffiliateBalance,
+  UserCourseProgress,
+  Certificate,
 };
 
 async function connect() {

@@ -7,6 +7,9 @@ const config = require('../config');
 const { getRazorpayInstance, getRazorpayConfig } = require('./payment.service');
 const { AppError, logger } = require('../../../../shared');
 
+// GST rate applied on top of the post-discount price before charging via Razorpay
+const GST_RATE = 0.18;
+
 function generateOrderId() {
   return 'ORD_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
 }
@@ -111,6 +114,55 @@ async function fetchCourseAmount(entityId) {
   const price = salePrice || parseAmount(payload?.price);
   if (!price) throw new AppError('Course price unavailable', 400);
   return price;
+}
+
+/**
+ * Ask course-service which batch this course purchase should enroll the user into.
+ * Resolves synchronously at purchase creation so a batch lock-in decision is made BEFORE
+ * new batches (added after purchase) are available. Returns null if the course has no batches yet.
+ */
+async function fetchPurchaseBatchId(courseId) {
+  try {
+    const { data } = await axios.get(
+      `${config.courseServiceUrl}/internal/courses/${courseId}/select-purchase-batch`,
+      {
+        timeout: 8000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200,
+      }
+    );
+    const payload = parseApiResponse(data);
+    return payload?.id ? Number(payload.id) : null;
+  } catch (err) {
+    logger.warn(`[orders] failed to resolve purchase batch for course ${courseId}: ${err.message}`);
+    return null;
+  }
+}
+
+/** Course-service batch row (GET /internal/batches/:id) for my-purchases enrichment. */
+async function fetchBatchById(batchId) {
+  try {
+    const { data } = await axios.get(`${config.courseServiceUrl}/internal/batches/${batchId}`, {
+      timeout: 8000,
+      headers: { 'x-internal-api-key': config.internalApiKey },
+      validateStatus: (s) => s === 200,
+    });
+    return parseApiResponse(data);
+  } catch (err) {
+    logger.warn(`[orders] failed to load batch ${batchId}: ${err.message}`);
+    return null;
+  }
+}
+
+/** DATEONLY compare in UTC — upcoming live batch vs in-progress vs ended. */
+function computeLiveBatchPhase(batch) {
+  if (!batch) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const sd = batch.start_date ? String(batch.start_date).slice(0, 10) : null;
+  const ed = batch.end_date ? String(batch.end_date).slice(0, 10) : null;
+  if (sd && sd > today) return 'upcoming';
+  if (ed && ed < today) return 'completed';
+  return 'live';
 }
 
 async function fetchMembershipAmount(entityId) {
@@ -295,7 +347,13 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
           aggregate_type: 'order',
           aggregate_id: orderId,
           event_type: 'COURSE_PURCHASED',
-          payload: { userId: locked.user_id, orderId, courseId: locked.entity_id },
+          payload: {
+            userId: locked.user_id,
+            orderId,
+            courseId: locked.entity_id,
+            // batch_id is resolved at createOrder time and locked onto the order row.
+            batchId: locked.batch_id ? Number(locked.batch_id) : null,
+          },
         },
         { transaction: t }
       );
@@ -362,16 +420,29 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
   }
 
   const discountAmount = couponResult ? couponResult.discountAmount : 0;
-  const finalAmount = couponResult ? couponResult.finalAmount : originalAmount;
+  const afterDiscount = couponResult ? couponResult.finalAmount : originalAmount;
 
-  // 3. Guard: idempotency lock per (user, type, entity) — prevents race-created duplicates
+  // 3. Apply 18% GST on the post-discount amount
+  const gstAmount = Number((afterDiscount * GST_RATE).toFixed(2));
+  const grandTotal = Number((afterDiscount + gstAmount).toFixed(2));
+
+  // 4. Guard: idempotency lock per (user, type, entity) — prevents race-created duplicates
   const lockKey = `order:lock:${userId}:${typeUpper}:${entityId}`;
   const redis = await getRedis();
   const locked = await redis.set(lockKey, '1', { NX: true, EX: 30 });
   if (!locked) throw new AppError('Duplicate order in progress', 429);
 
   const orderId = generateOrderId();
-  const amountPaise = Math.round(finalAmount * 100);
+  // Razorpay expects amount in paise — use the GST-inclusive grand total
+  const amountPaise = Math.round(grandTotal * 100);
+
+  // For course purchases, resolve + lock the batch the buyer will be enrolled into.
+  // (upcoming > latest completed > newest) — so adding a new upcoming batch AFTER
+  // this order is placed does NOT retroactively move the learner to a different cohort.
+  let resolvedBatchId = null;
+  if (typeUpper === 'COURSE') {
+    resolvedBatchId = await fetchPurchaseBatchId(entityId);
+  }
 
   try {
     const order = await Order.create({
@@ -379,16 +450,17 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
       user_id: userId,
       type: typeUpper.toLowerCase(),
       entity_id: String(entityId),
+      batch_id: resolvedBatchId,
       original_amount: originalAmount,
       coupon_code: couponResult ? couponResult.coupon.code : null,
       coupon_discount: discountAmount,
-      amount: finalAmount,            // what we actually charge
+      amount: grandTotal,             // GST-inclusive grand total — what we actually charge
       currency,
       status: 'pending',
       affiliate: referralCode || null,
     });
 
-    // 4. Create Razorpay order using the server-derived amount
+    // 5. Create Razorpay order using the GST-inclusive server-derived amount
     const rpOrder = await razorpay.orders.create({
       amount: amountPaise,
       currency,
@@ -403,7 +475,7 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
 
     await order.update({ razorpay_order_id: rpOrder.id });
 
-    // 5. Record coupon usage atomically AFTER the order row exists
+    // 6. Record coupon usage atomically AFTER the order row exists
     if (couponResult) {
       await recordCouponUsage(couponResult.coupon.id, userId, orderId, null);
     }
@@ -416,9 +488,11 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
     return {
       orderId,
       razorpayOrderId: rpOrder.id,
-      amount: amountPaise,
-      originalAmount: Math.round(originalAmount * 100),
-      discountAmount: Math.round(discountAmount * 100),
+      amount: amountPaise,                                        // paise sent to Razorpay (GST-inclusive)
+      originalAmount: Math.round(originalAmount * 100),           // paise, pre-coupon price
+      discountAmount: Math.round(discountAmount * 100),           // paise, coupon saving
+      gstAmount: Math.round(gstAmount * 100),                     // paise, 18% GST
+      grandTotal: Math.round(grandTotal * 100),                   // paise, final charge
       currency,
       key: rpConfig?.key_id,
       prefill: {
@@ -472,12 +546,35 @@ async function verifyOrder(userId, { orderId, razorpay_order_id, razorpay_paymen
 // ─── Read-only query helpers ──────────────────────────────────────────────────
 
 async function listOrders(userId) {
+  console.log('USER ID:', userId);
   const rows = await Order.findAll({
     where: { user_id: userId },
     order: [['created_at', 'DESC']],
     attributes: ['order_id', 'type', 'entity_id', 'amount', 'currency', 'status', 'created_at'],
   });
+  console.log('ORDERS:', rows);
   return rows.map((r) => r.get({ plain: true }));
+}
+
+async function fetchProgressSummary(userId, courseIds) {
+  const ids = [...new Set((courseIds || []).map(Number).filter((n) => n > 0))];
+  if (!ids.length) return {};
+  try {
+    const { data } = await axios.post(
+      `${config.courseServiceUrl}/internal/progress/summary`,
+      { userId, courseIds: ids },
+      {
+        timeout: 12000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200,
+      }
+    );
+    const payload = parseApiResponse(data);
+    return payload && typeof payload === 'object' ? payload : {};
+  } catch (err) {
+    logger.warn(`[orders] progress summary failed: ${err.message}`);
+    return {};
+  }
 }
 
 async function listMyPurchases(userId) {
@@ -500,11 +597,13 @@ async function listMyPurchases(userId) {
     }
   }
 
+  // Only return fully paid orders — pending/failed orders (incomplete payments) are excluded
   const rows = await Order.findAll({
-    where: { user_id: userId },
+    where: { user_id: userId, status: 'paid' },
     order: [['created_at', 'DESC']],
   });
   const out = [];
+  const courseEntityIds = [];
   for (const row of rows) {
     const o = row.get({ plain: true });
     const payment = await Payment.findOne({
@@ -513,11 +612,13 @@ async function listMyPurchases(userId) {
     });
     let course = null;
     if (o.type === 'course' && o.entity_id) {
+      courseEntityIds.push(Number(o.entity_id));
       const meta = await fetchCourseForOrder(o.entity_id);
       const cid = String(o.entity_id);
       course = {
         id: cid,
         title: meta?.title || `Course ${cid}`,
+        slug: meta?.slug ?? null,
         description: meta?.brief_description || meta?.description || '',
         thumbnail: meta?.thumbnail_url || '',
         thumbnail_url: meta?.thumbnail_url || null,
@@ -558,11 +659,33 @@ async function listMyPurchases(userId) {
     const purchaseStatus =
       o.status === 'paid' ? 'completed' : o.status === 'pending' ? 'pending' : 'failed';
 
+    let enrolledBatch = null;
+    if (o.type === 'course' && o.batch_id && course) {
+      const batchRow = await fetchBatchById(o.batch_id);
+      if (batchRow) {
+        const phase = computeLiveBatchPhase(batchRow);
+        enrolledBatch = {
+          batchId: batchRow.id,
+          name: batchRow.name,
+          startDate: batchRow.start_date,
+          endDate: batchRow.end_date,
+          meetLink: batchRow.meet_link || null,
+          phase,
+        };
+        if (batchRow.course_slug && !course.slug) {
+          course.slug = batchRow.course_slug;
+        }
+      }
+    }
+
     out.push({
       id: String(o.id),
       userId: String(o.user_id),
       courseId: o.entity_id ? String(o.entity_id) : String(o.id),
       course,
+      // Batch this purchase was locked to (nullable — e.g. courses without batches yet).
+      batchId: o.batch_id || null,
+      enrolledBatch,
       purchaseDate: o.created_at,
       price: Number(o.amount) || 0,
       paymentMethod: payment ? 'Razorpay' : o.gateway || 'Razorpay',
@@ -574,16 +697,31 @@ async function listMyPurchases(userId) {
       lastAccessedAt: undefined,
     });
   }
+
+  const summary = await fetchProgressSummary(userId, courseEntityIds);
+  for (const item of out) {
+    const cid = Number(item.courseId);
+    const s = summary[cid] || summary[String(cid)];
+    if (!s) continue;
+    item.progress = Number(s.progress) || 0;
+    const done = Number(s.completedLessons) || 0;
+    item.completedLessons = Array.from({ length: done }, (_, i) => String(i));
+    if (item.course) item.course.totalLessons = Number(s.totalLessons) || 0;
+    if (s.status === 'completed') item.completedAt = new Date().toISOString();
+  }
+
   return out;
 }
 
 async function listAllOrders(limit = 100, offset = 0) {
+  console.log('LIST ALL ORDERS:', limit, offset);
   const rows = await Order.findAll({
     order: [['created_at', 'DESC']],
     attributes: ['id', 'order_id', 'user_id', 'type', 'entity_id', 'amount', 'currency', 'status', 'buyer_email', 'created_at'],
     limit: Math.min(Number(limit) || 100, 500),
     offset: Number(offset) || 0,
   });
+  console.log('LIST ALL ORDERS:', rows);
   return rows.map((r) => r.get({ plain: true }));
 }
 

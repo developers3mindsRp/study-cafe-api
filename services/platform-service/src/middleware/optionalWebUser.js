@@ -33,8 +33,14 @@ async function optionalWebUser(req, res, next) {
       role: decoded.role || 'user',
       hasActiveMembership: !!m,
     };
-  } catch (_) {
+  } catch (err) {
     req.viewer = null;
+    if (process.env.NODE_ENV !== 'production') {
+      // Surface common misconfigurations (mismatched JWT_SECRET, expired tokens, etc.)
+      // so premium-article gating doesn't silently treat real members as guests.
+      // eslint-disable-next-line no-console
+      console.warn('[optionalWebUser] token verify failed:', err?.name || err?.message || err);
+    }
   }
   return next();
 }

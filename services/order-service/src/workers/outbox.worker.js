@@ -30,6 +30,9 @@ async function processEvent(record) {
           `${config.courseServiceUrl}/internal/courses/${data.courseId}/auto-enroll`,
           {
             user_id: data.userId,
+            // batch_id was resolved at order creation; enrollment reuses it if valid,
+            // otherwise course-service falls back to its own "select purchase batch" rule.
+            batch_id: data.batchId || null,
           },
           { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
         ).catch(err => {

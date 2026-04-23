@@ -206,6 +206,43 @@ async function createAllTables(tgt) {
       PRIMARY KEY (user_id, course_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+    -- Per-session learning progress (course-service)
+    CREATE TABLE IF NOT EXISTS user_course_progress (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      user_id BIGINT UNSIGNED NOT NULL,
+      course_id BIGINT UNSIGNED NOT NULL,
+      session_id BIGINT UNSIGNED NOT NULL,
+      batch_id BIGINT UNSIGNED NOT NULL,
+      status ENUM('in_progress','completed') NOT NULL DEFAULT 'in_progress',
+      watch_seconds INT UNSIGNED NOT NULL DEFAULT 0,
+      duration_seconds INT UNSIGNED NULL,
+      completed_at DATETIME NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_user_course_progress_user_session (user_id, session_id),
+      KEY idx_ucp_user (user_id),
+      KEY idx_ucp_course (course_id),
+      KEY idx_ucp_session (session_id),
+      KEY idx_ucp_user_course (user_id, course_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    -- Course completion certificates (course-service)
+    CREATE TABLE IF NOT EXISTS certificates (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      user_id BIGINT UNSIGNED NOT NULL,
+      course_id BIGINT UNSIGNED NOT NULL,
+      certificate_number VARCHAR(32) NOT NULL,
+      issued_at DATETIME NOT NULL,
+      pdf_url VARCHAR(512) NULL,
+      verification_token VARCHAR(64) NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_cert_number (certificate_number),
+      UNIQUE KEY uq_cert_verify (verification_token),
+      UNIQUE KEY uq_cert_user_course (user_id, course_id),
+      KEY idx_cert_user (user_id),
+      KEY idx_cert_course (course_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
     -- User Memberships (auth-service)
     CREATE TABLE IF NOT EXISTS user_memberships (
       id INT AUTO_INCREMENT PRIMARY KEY,
@@ -506,7 +543,10 @@ async function createAllTables(tgt) {
       id INT AUTO_INCREMENT PRIMARY KEY,
       batch_id INT NOT NULL,
       day_number INT NOT NULL DEFAULT 1,
+      section_index INT NOT NULL DEFAULT 0,
       title VARCHAR(255),
+      section_title VARCHAR(255),
+      duration INT,
       scheduled_at DATETIME,
       meet_link VARCHAR(512)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -11,6 +11,58 @@ const {
   BatchEnrollment,
 } = require("../models");
 const { QueryTypes } = require("sequelize");
+const { checkCourseAccess } = require("./accessClient");
+
+function stripCurriculumVideos(course) {
+  if (!course || course.curriculum == null) return course;
+  let cur = course.curriculum;
+  if (typeof cur === "string") {
+    try {
+      cur = JSON.parse(cur);
+    } catch {
+      return course;
+    }
+  }
+  if (!Array.isArray(cur)) return course;
+  const stripped = cur.map((day) => {
+    const d = { ...day };
+    delete d.video;
+    if (Array.isArray(d.sections)) {
+      d.sections = d.sections.map((sec) => {
+        const s = { ...sec };
+        delete s.videoId;
+        delete s.video;
+        delete s.videos;
+        delete s.recordings;
+        return s;
+      });
+    }
+    return d;
+  });
+  return { ...course, curriculum: stripped };
+}
+
+/** One curriculum section can have multiple recordings (videos[] / recordings[] / legacy videoId). */
+function collectVideoUrlsFromSection(sec) {
+  const out = [];
+  if (!sec || typeof sec !== "object") return out;
+  if (Array.isArray(sec.videos) && sec.videos.length) {
+    for (const v of sec.videos) {
+      if (v != null && String(v).trim()) out.push(String(v).trim());
+    }
+  }
+  if (Array.isArray(sec.recordings) && sec.recordings.length) {
+    for (const rec of sec.recordings) {
+      const u = rec && (rec.url || rec.videoId || rec.video);
+      if (u != null && String(u).trim()) out.push(String(u).trim());
+    }
+  }
+  if (out.length === 0) {
+    const single = sec.videoId || sec.video;
+    if (single != null && String(single).trim()) out.push(String(single).trim());
+  }
+  return [...new Set(out)];
+}
 
 function normalizeLanguage(value) {
   if (!value) return [];
@@ -306,99 +358,125 @@ const coursesService = {
     return rows.map((r) => r.get({ plain: true }));
   },
 
-  async getById(id) {
+  async getById(id, opts = {}) {
     const row = await Course.findOne({ where: { id, is_published: true } });
     if (!row) return null;
     const d = row.get({ plain: true });
     d.language = normalizeLanguage(d.language);
     const enriched = await this.enrichCourseWithAuthors(d);
+    const allowed = await checkCourseAccess(opts.authorization, id);
+    const batchOpts = allowed
+      ? { visibleOnly: true }
+      : { visibleOnly: true, stripRecordings: true };
+    const batches = await this._getBatchesSessionsRecordings(id, batchOpts);
 
-    // Fetch batches with sessions & recordings
-    const batches = await this._getBatchesSessionsRecordings(id, { visibleOnly: true });
-
-    // Fetch materials
     const materials = await Material.findAll({
       where: { course_id: id },
-      order: [['id', 'ASC']],
-      attributes: ['id', 'title', 'url', 'type'],
+      order: [["id", "ASC"]],
+      attributes: ["id", "title", "url", "type"],
     });
 
-    // Fetch categories
-    const { CourseCategory } = require('../models');
     const catLinks = await CourseCategory.findAll({
       where: { course_id: id },
-      attributes: ['course_cat_id'],
+      attributes: ["course_cat_id"],
       raw: true,
     });
     const catIds = catLinks.map((l) => l.course_cat_id);
     let categories = [];
     if (catIds.length > 0) {
-      const { Op } = require('sequelize');
+      const { Op } = require("sequelize");
       categories = await CourseCat.findAll({
         where: { id: { [Op.in]: catIds } },
-        attributes: ['id', 'name', 'slug'],
+        attributes: ["id", "name", "slug"],
         raw: true,
       });
     }
 
-    return {
+    const result = {
       ...enriched,
       batches,
       materials: materials.map((m) => m.get({ plain: true })),
       categories,
     };
+    if (!allowed) return stripCurriculumVideos(result);
+    return result;
   },
 
-  async getBySlug(slug) {
+  async getBySlug(slug, opts = {}) {
     const row = await Course.findOne({ where: { slug, is_published: true } });
     if (!row) return null;
     const d = row.get({ plain: true });
     d.language = normalizeLanguage(d.language);
     const enriched = await this.enrichCourseWithAuthors(d);
+    const allowed = await checkCourseAccess(opts.authorization, d.id);
+    const batchOpts = allowed
+      ? { visibleOnly: true }
+      : { visibleOnly: true, stripRecordings: true };
+    const batches = await this._getBatchesSessionsRecordings(d.id, batchOpts);
 
-    // Fetch batches with sessions & recordings
-    const batches = await this._getBatchesSessionsRecordings(d.id, { visibleOnly: true });
-
-    // Fetch materials
     const materials = await Material.findAll({
       where: { course_id: d.id },
-      order: [['id', 'ASC']],
-      attributes: ['id', 'title', 'url', 'type'],
+      order: [["id", "ASC"]],
+      attributes: ["id", "title", "url", "type"],
     });
 
-    // Fetch categories
-    const { CourseCategory } = require('../models');
     const catLinks = await CourseCategory.findAll({
       where: { course_id: d.id },
-      attributes: ['course_cat_id'],
+      attributes: ["course_cat_id"],
       raw: true,
     });
     const catIds = catLinks.map((l) => l.course_cat_id);
     let categories = [];
     if (catIds.length > 0) {
-      const { Op } = require('sequelize');
+      const { Op } = require("sequelize");
       categories = await CourseCat.findAll({
         where: { id: { [Op.in]: catIds } },
-        attributes: ['id', 'name', 'slug'],
+        attributes: ["id", "name", "slug"],
         raw: true,
       });
     }
 
-    return {
+    const result = {
       ...enriched,
       batches,
       materials: materials.map((m) => m.get({ plain: true })),
       categories,
     };
+    if (!allowed) return stripCurriculumVideos(result);
+    return result;
   },
 
-  async getSessionsBySlug(slug) {
+  /**
+   * Public slug sessions endpoint.
+   * - Anonymous / non-purchaser: returns ALL batches with meta (so banner can show upcoming date)
+   *   but recordings are stripped (only visible ones passed through).
+   * - If userId is provided (purchaser): returns only the batch they are enrolled into,
+   *   with visible recordings attached.
+   *
+   * This guarantees a learner sees ONLY recordings of their own batch cohort.
+   */
+  async getSessionsBySlug(slug, { userId = null } = {}) {
     const course = await Course.findOne({
       where: { slug, is_published: true },
       attributes: ["id"],
     });
     if (!course) return null;
-    return this._getBatchesSessionsRecordings(course.id, { visibleOnly: true });
+
+    if (userId) {
+      const userBatch = await this.getUserBatchForCourse(course.id, userId);
+      if (userBatch) {
+        return this._getBatchesSessionsRecordings(course.id, {
+          visibleOnly: true,
+          onlyBatchId: userBatch.id,
+        });
+      }
+    }
+
+    // Not purchased (or anonymous) → return batch schedule without recordings.
+    return this._getBatchesSessionsRecordings(course.id, {
+      visibleOnly: true,
+      stripRecordings: true,
+    });
   },
 
   async getByIdInternal(id) {
@@ -425,9 +503,14 @@ const coursesService = {
     return this._getBatchesSessionsRecordings(courseId, { visibleOnly: false });
   },
 
-  async _getBatchesSessionsRecordings(courseId, { visibleOnly = false } = {}) {
+  async _getBatchesSessionsRecordings(
+    courseId,
+    { visibleOnly = false, onlyBatchId = null, stripRecordings = false } = {}
+  ) {
+    const where = { course_id: courseId };
+    if (onlyBatchId) where.id = onlyBatchId;
     const batches = await Batch.findAll({
-      where: { course_id: courseId },
+      where,
       order: [["created_at", "ASC"]],
     });
 
@@ -462,16 +545,96 @@ const coursesService = {
           duration: s.duration || null,
           scheduled_at: s.scheduled_at,
           meet_link: s.meet_link,
-          recordings: (s.Recordings || []).map((r) => ({
-            id: r.id,
-            url: r.url,
-            source: r.source,
-            is_visible: r.is_visible,
-          })),
+          recordings: stripRecordings
+            ? []
+            : (s.Recordings || []).map((r) => ({
+                id: r.id,
+                url: r.url,
+                source: r.source,
+                is_visible: r.is_visible,
+              })),
         })),
       });
     }
     return result;
+  },
+
+  /**
+   * Admin: paginated batches across all courses (or one course), with full sessions + recordings.
+   */
+  async listBatchesAdminPaginated({ courseId = null, page = 1, limit = 10 } = {}) {
+    const safeLimit = Math.min(50, Math.max(1, parseInt(String(limit), 10) || 10));
+    const safePage = Math.max(1, parseInt(String(page), 10) || 1);
+    const offset = (safePage - 1) * safeLimit;
+
+    const where = {};
+    const cid = courseId != null && courseId !== "" ? Number(courseId) : NaN;
+    if (Number.isFinite(cid) && cid > 0) {
+      where.course_id = cid;
+    }
+
+    const { count: total, rows } = await Batch.findAndCountAll({
+      where,
+      order: [["created_at", "DESC"]],
+      limit: safeLimit,
+      offset,
+      include: [{ model: Course, attributes: ["id", "title"] }],
+    });
+
+    const data = [];
+    for (const b of rows) {
+      const plain = b.get({ plain: true });
+      const courseTitle = plain.Course?.title ?? "";
+      const full = await this._getBatchesSessionsRecordings(plain.course_id, {
+        visibleOnly: false,
+        onlyBatchId: plain.id,
+      });
+      const batchPayload = full[0] || {
+        id: plain.id,
+        name: plain.name,
+        start_date: plain.start_date,
+        end_date: plain.end_date,
+        meet_link: plain.meet_link,
+        created_at: plain.created_at,
+        sessions: [],
+      };
+      data.push({
+        ...batchPayload,
+        course_id: plain.course_id,
+        course_title: courseTitle,
+      });
+    }
+
+    const totalPages = total === 0 ? 0 : Math.ceil(total / safeLimit);
+    const meta = {
+      total,
+      page: safePage,
+      limit: safeLimit,
+      totalPages,
+      hasNextPage: totalPages > 0 && safePage < totalPages,
+      hasPreviousPage: safePage > 1,
+    };
+    return { data, meta };
+  },
+
+  /** Admin / internal: single batch with owning course slug (for order-service enrichment). */
+  async getBatchByIdInternal(batchId) {
+    const row = await Batch.findByPk(batchId, {
+      include: [{ model: Course, attributes: ["id", "title", "slug"] }],
+    });
+    if (!row) return null;
+    const plain = row.get({ plain: true });
+    return {
+      id: plain.id,
+      course_id: plain.course_id,
+      name: plain.name,
+      start_date: plain.start_date,
+      end_date: plain.end_date,
+      meet_link: plain.meet_link,
+      created_at: plain.created_at,
+      course_slug: plain.Course?.slug ?? null,
+      course_title: plain.Course?.title ?? null,
+    };
   },
 
   async getMaterialsByCourseId(courseId) {
@@ -686,13 +849,13 @@ const coursesService = {
           meet_link: null,
         });
 
-        const videoId = sec.videoId || sec.video || '';
-        if (videoId) {
+        const urls = collectVideoUrlsFromSection(sec);
+        for (const url of urls) {
           await Recording.create({
             session_id: session.id,
-            url: String(videoId),
+            url: String(url),
             source: "vimeo",
-            is_visible: false,
+            is_visible: true,
           });
         }
       }
@@ -805,14 +968,13 @@ const coursesService = {
             });
           }
         } else {
-          // Seed from curriculum videoId if present
-          const videoId = sec.videoId || sec.video || "";
-          if (videoId) {
+          const urls = collectVideoUrlsFromSection(sec);
+          for (const url of urls) {
             await Recording.create({
               session_id: session.id,
-              url: String(videoId),
+              url: String(url),
               source: "vimeo",
-              is_visible: false,
+              is_visible: true,
             });
           }
         }
@@ -891,7 +1053,7 @@ const coursesService = {
       session_id: sessionId,
       url: url || "",
       source: source || null,
-      is_visible: is_visible ?? false,
+      is_visible: is_visible ?? true,
     });
     return row.get({ plain: true });
   },
@@ -971,6 +1133,7 @@ const coursesService = {
     return true;
   },
 
+<<<<<<< HEAD
   async getEnrollmentsByUser(userId) {
     const rows = await BatchEnrollment.findAll({
       where: { user_id: userId },
@@ -1039,18 +1202,86 @@ const coursesService = {
   },
 
   async autoEnrollInBatch(courseId, userId) {
+=======
+  /**
+   * Pick the batch a new buyer should be enrolled into for this course.
+   * Rule (matches product spec):
+   *   1. If any batch has start_date >= today → pick the earliest such batch (upcoming).
+   *   2. Else if any batch has ended (end_date < today) → pick the most recently ended (latest completed).
+   *   3. Else fall back to the most-recently-created batch.
+   *   4. If the course has no batches, return null.
+   */
+  async selectPurchaseBatch(courseId) {
+>>>>>>> origin/main
     const batches = await Batch.findAll({
       where: { course_id: courseId },
       order: [["created_at", "DESC"]],
+      raw: true,
     });
     if (batches.length === 0) return null;
 
-    const activeBatch = batches[0];
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    const upcoming = batches
+      .filter((b) => b.start_date && String(b.start_date) >= todayStr)
+      .sort((a, b) => String(a.start_date).localeCompare(String(b.start_date)));
+    if (upcoming.length > 0) return upcoming[0];
+
+    const completed = batches
+      .filter((b) => b.end_date && String(b.end_date) < todayStr)
+      .sort((a, b) => String(b.end_date).localeCompare(String(a.end_date)));
+    if (completed.length > 0) return completed[0];
+
+    return batches[0];
+  },
+
+  /**
+   * Enroll a buyer into a specific batch (or auto-resolve if batchId not given).
+   * Called by order-service outbox worker after a successful COURSE_PURCHASED event.
+   */
+  async autoEnrollInBatch(courseId, userId, batchId = null) {
+    let targetBatchId = batchId ? Number(batchId) : null;
+
+    if (targetBatchId) {
+      // Confirm the batch still exists and belongs to this course.
+      const confirmed = await Batch.findOne({
+        where: { id: targetBatchId, course_id: courseId },
+        attributes: ["id"],
+      });
+      if (!confirmed) targetBatchId = null;
+    }
+
+    if (!targetBatchId) {
+      const picked = await this.selectPurchaseBatch(courseId);
+      if (!picked) return null;
+      targetBatchId = picked.id;
+    }
+
     const [row, created] = await BatchEnrollment.findOrCreate({
-      where: { batch_id: activeBatch.id, user_id: userId },
-      defaults: { batch_id: activeBatch.id, user_id: userId },
+      where: { batch_id: targetBatchId, user_id: userId },
+      defaults: { batch_id: targetBatchId, user_id: userId },
     });
     return { ...row.get({ plain: true }), created };
+  },
+
+  /**
+   * Look up which batch (if any) a specific user is enrolled into for a course.
+   * Returns the batch row (plain) + basic status info, or null.
+   */
+  async getUserBatchForCourse(courseId, userId) {
+    const row = await BatchEnrollment.findOne({
+      where: { user_id: userId },
+      include: [
+        {
+          model: Batch,
+          required: true,
+          where: { course_id: courseId },
+        },
+      ],
+    });
+    if (!row) return null;
+    const plain = row.get({ plain: true });
+    return plain.Batch || null;
   },
 
   async addMaterial(courseId, data) {

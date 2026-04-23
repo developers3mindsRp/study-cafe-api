@@ -12,6 +12,7 @@ function register(router) {
   router.get('/admin/courses', requireAdmin, controller.getCourses);
   router.get('/admin/courses/:id', requireAdmin, controller.getCourse);
   router.get('/admin/courses/:id/sessions', requireAdmin, controller.getCourseSessions);
+  router.get('/admin/batches', requireAdmin, controller.listBatches);
   router.get('/admin/course-cats', requireAdmin, controller.getCourseCats);
   router.post('/admin/course-cats', requireAdmin, controller.createCourseCat);
   router.put('/admin/course-cats/:id', requireAdmin, controller.updateCourseCat);
