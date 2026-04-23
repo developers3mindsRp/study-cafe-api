@@ -1133,7 +1133,6 @@ const coursesService = {
     return true;
   },
 
-<<<<<<< HEAD
   async getEnrollmentsByUser(userId) {
     const rows = await BatchEnrollment.findAll({
       where: { user_id: userId },
@@ -1201,8 +1200,6 @@ const coursesService = {
     };
   },
 
-  async autoEnrollInBatch(courseId, userId) {
-=======
   /**
    * Pick the batch a new buyer should be enrolled into for this course.
    * Rule (matches product spec):
@@ -1212,7 +1209,6 @@ const coursesService = {
    *   4. If the course has no batches, return null.
    */
   async selectPurchaseBatch(courseId) {
->>>>>>> origin/main
     const batches = await Batch.findAll({
       where: { course_id: courseId },
       order: [["created_at", "DESC"]],
