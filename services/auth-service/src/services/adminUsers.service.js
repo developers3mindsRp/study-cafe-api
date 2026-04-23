@@ -76,10 +76,11 @@ async function createAdminUser({ email, password, name, role_id, permission_over
     throw new Error('Only super_admin can create admin or super_admin users');
   }
   const overrides = Array.isArray(permission_overrides) ? permission_overrides : [];
-  if (role.name !== 'super_admin' && overrides.length === 0) {
+  const isFullAccess = ['super_admin', 'admin'].includes(role.name);
+  if (!isFullAccess && overrides.length === 0) {
     throw new Error('Select at least one permission to grant to this user');
   }
-  if (role.name !== 'super_admin' && !overrides.includes('admin:access')) {
+  if (!isFullAccess && !overrides.includes('admin:access')) {
     throw new Error('Permission "admin:access" is required so the user can open the admin panel');
   }
   const expanded = expandPermissionHierarchy(overrides);

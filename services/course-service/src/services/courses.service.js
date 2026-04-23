@@ -273,11 +273,27 @@ const coursesService = {
         "created_at",
         "language",
       ],
+      include: [
+        {
+          model: CourseCat,
+          attributes: ["id", "name", "slug"],
+          through: { attributes: [] },
+          required: false,
+        },
+      ],
     });
 
     return rows.map((r) => {
       const d = r.get({ plain: true });
       d.language = normalizeLanguage(d.language);
+      const cats = d.CourseCats ?? [];
+      delete d.CourseCats;
+      d.categories = cats.map((c) => ({
+        id: c.id,
+        name: c.name,
+        slug: c.slug ?? null,
+      }));
+      d.course_cat_ids = cats.map((c) => c.id);
       return d;
     });
   },
@@ -953,6 +969,73 @@ const coursesService = {
     if (!row) return false;
     await row.destroy();
     return true;
+  },
+
+  async getEnrollmentsByUser(userId) {
+    const rows = await BatchEnrollment.findAll({
+      where: { user_id: userId },
+      include: [
+        {
+          model: Batch,
+          as: 'Batch',
+          required: true,
+          include: [
+            {
+              model: Course,
+              as: 'Course',
+              required: true,
+              attributes: ['id', 'title'],
+            },
+          ],
+          attributes: ['id', 'name', 'course_id'],
+        },
+      ],
+      order: [['enrolled_at', 'DESC']],
+    });
+    return rows.map((r) => {
+      const e = r.get({ plain: true });
+      return {
+        enrollment_id: e.id,
+        batch_id: e.batch_id,
+        batch_name: e.Batch?.name ?? null,
+        course_id: e.Batch?.course_id ?? null,
+        course_title: e.Batch?.Course?.title ?? null,
+        enrolled_at: e.enrolled_at,
+      };
+    });
+  },
+
+  async listBatchesByCourse(courseId) {
+    const rows = await Batch.findAll({
+      where: { course_id: courseId },
+      order: [['created_at', 'DESC']],
+      attributes: ['id', 'name', 'course_id', 'start_date', 'end_date', 'created_at'],
+    });
+    return rows.map((r) => r.get({ plain: true }));
+  },
+
+  async listAllBatches({ courseId, page = 1, limit = 100 } = {}) {
+    const where = courseId ? { course_id: courseId } : {};
+    const offset = (page - 1) * limit;
+    const { count, rows } = await Batch.findAndCountAll({
+      where,
+      include: [{ model: Course, as: 'Course', required: true, attributes: ['id', 'title'] }],
+      order: [['created_at', 'DESC']],
+      limit,
+      offset,
+    });
+    return {
+      data: rows.map((r) => {
+        const b = r.get({ plain: true });
+        return { ...b, course_title: b.Course?.title ?? null };
+      }),
+      total: count,
+      page,
+      limit,
+      totalPages: Math.ceil(count / limit),
+      hasNextPage: offset + rows.length < count,
+      hasPreviousPage: page > 1,
+    };
   },
 
   async autoEnrollInBatch(courseId, userId) {

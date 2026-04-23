@@ -48,6 +48,11 @@ function register(router) {
   router.post('/internal/batches/:id/enrollments', internalAuth, validate(schemas.addBatchEnrollment), coursesController.addBatchEnrollment);
   router.delete('/internal/batch-enrollments/:id', internalAuth, validate(schemas.idParam), coursesController.removeBatchEnrollment);
   router.post('/internal/courses/:id/auto-enroll', internalAuth, validate(schemas.addBatchEnrollment), coursesController.autoEnrollBatch);
+  router.get('/internal/users/:userId/enrollments', internalAuth, coursesController.getUserEnrollments);
+
+  // Batch list
+  router.get('/internal/batches', internalAuth, coursesController.listAllBatches);
+  router.get('/internal/courses/:id/batches', internalAuth, validate(schemas.idParam), coursesController.listBatchesByCourse);
 
   // Course Page Settings
   router.get('/internal/course-page-settings', internalAuth, coursesController.getPageSettings);

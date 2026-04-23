@@ -220,6 +220,26 @@ const removeBatchEnrollment = asyncHandler(async (req, res) => {
   sendSuccess(res, { deleted: true });
 });
 
+const getUserEnrollments = asyncHandler(async (req, res) => {
+  const userId = parseInt(req.params.userId, 10);
+  if (!userId) throw new AppError('Invalid user id', 400);
+  const rows = await coursesService.getEnrollmentsByUser(userId);
+  sendSuccess(res, rows);
+});
+
+const listBatchesByCourse = asyncHandler(async (req, res) => {
+  const rows = await coursesService.listBatchesByCourse(req.params.id);
+  sendSuccess(res, rows);
+});
+
+const listAllBatches = asyncHandler(async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(Math.max(1, parseInt(req.query.limit, 10) || 100), 500);
+  const courseId = req.query.course_id ? parseInt(req.query.course_id, 10) : undefined;
+  const result = await coursesService.listAllBatches({ courseId, page, limit });
+  sendSuccess(res, result);
+});
+
 module.exports = {
   list,
   listFeatured,
@@ -248,6 +268,9 @@ module.exports = {
   addBatchEnrollment,
   removeBatchEnrollment,
   autoEnrollBatch,
+  getUserEnrollments,
+  listBatchesByCourse,
+  listAllBatches,
   addMaterial,
   listAllInternal,
   listCourseCatsInternal,

@@ -39,9 +39,12 @@ function register(router) {
   router.delete('/admin/recordings/:id', requireAdmin, controller.deleteRecording);
   router.delete('/admin/sessions/:id', requireAdmin, controller.deleteSession);
   router.delete('/admin/batches/:id', requireAdmin, controller.deleteBatch);
+  router.get('/admin/batches', requireAdmin, controller.getBatches);
   router.get('/admin/batches/:id/enrollments', requireAdmin, controller.getBatchEnrollments);
   router.post('/admin/batches/:id/enrollments', requireAdmin, controller.addBatchEnrollment);
   router.delete('/admin/batch-enrollments/:id', requireAdmin, controller.removeBatchEnrollment);
+  router.get('/admin/users/:id/enrollments', requireAdmin, controller.getUserEnrollments);
+  router.get('/admin/users/:id/memberships', requireAdmin, controller.getUserMemberships);
   router.post('/admin/courses/:id/materials', requireAdmin, controller.addMaterial);
   router.get('/admin/course-page-settings', requireAdmin, controller.getCoursePageSettings);
   router.put('/admin/course-page-settings/:key', requireAdmin, controller.updateCoursePageSetting);

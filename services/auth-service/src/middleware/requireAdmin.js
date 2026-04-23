@@ -1,8 +1,8 @@
 const authService = require('../services/auth.service');
 const { User, Role } = require('../models');
-const { getPermissionsForRole } = require('../config/permissions');
+const { getEffectivePermissions } = require('../config/permissions');
 
-const ADMIN_ROLES = ['admin', 'super_admin'];
+const ADMIN_ROLES = ['super_admin'];
 
 async function requireAdmin(req, res, next) {
   const auth = req.headers.authorization;
@@ -15,12 +15,13 @@ async function requireAdmin(req, res, next) {
     const user = await User.findByPk(decoded.userId, {
       where: { is_active: true },
       include: [{ model: Role, as: 'Role', attributes: ['name'] }],
-      attributes: ['id', 'email', 'name', 'role_id'],
+      attributes: ['id', 'email', 'name', 'role_id', 'permission_overrides'],
     });
     if (!user) return res.status(401).json({ error: 'User not found or inactive' });
     const roleName = user.Role?.name || 'user';
-    const permissions = getPermissionsForRole(roleName);
-    const hasAdminAccess = ADMIN_ROLES.includes(roleName) || permissions.includes('admin:access');
+    // Use same logic as login: super_admin/admin → ALL_PERMISSIONS, others → their overrides
+    const permissions = getEffectivePermissions(roleName, user.permission_overrides ?? []);
+    const hasAdminAccess = permissions.includes('admin:access');
     if (!hasAdminAccess) {
       return res.status(403).json({ error: 'Admin access required' });
     }
@@ -34,8 +35,7 @@ async function requireAdmin(req, res, next) {
 function requirePermission(...permissionKeys) {
   return async (req, res, next) => {
     if (!req.adminUser) return res.status(401).json({ error: 'Unauthorized' });
-    const { role, permissions } = req.adminUser;
-    if (ADMIN_ROLES.includes(role)) return next();
+    const { permissions } = req.adminUser;
     const has = permissionKeys.some((p) => permissions.includes(p));
     if (!has) return res.status(403).json({ error: 'Insufficient permissions' });
     next();

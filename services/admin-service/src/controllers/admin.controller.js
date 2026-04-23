@@ -2,6 +2,7 @@ const FormData = require('form-data');
 const courseClient = require('../clients/courseClient');
 const orderClient = require('../clients/orderClient');
 const platformClient = require('../clients/platformClient');
+const authClient = require('../clients/authClient');
 const adminLogsService = require('../services/adminLogs.service');
 const paymentConfigService = require('../services/paymentConfig.service');
 const { Coupon } = require('../models');
@@ -156,6 +157,21 @@ const deleteBatch = asyncHandler(async (req, res) => {
 const getBatchEnrollments = asyncHandler(async (req, res) => {
   const { data } = await courseClient.get(`/internal/batches/${req.params.id}/enrollments`);
   sendSuccess(res, Array.isArray(data) ? data : data || []);
+});
+
+const getUserEnrollments = asyncHandler(async (req, res) => {
+  const { data } = await courseClient.get(`/internal/users/${req.params.id}/enrollments`);
+  sendSuccess(res, Array.isArray(data) ? data : data || []);
+});
+
+const getUserMemberships = asyncHandler(async (req, res) => {
+  const { data } = await authClient.get(`/internal/users/${req.params.id}/memberships`);
+  sendSuccess(res, Array.isArray(data) ? data : data || []);
+});
+
+const getBatches = asyncHandler(async (req, res) => {
+  const { data } = await courseClient.get('/internal/batches', { params: req.query });
+  sendSuccess(res, data);
 });
 
 const addBatchEnrollment = asyncHandler(async (req, res) => {
@@ -424,6 +440,9 @@ module.exports = {
   getBatchEnrollments,
   addBatchEnrollment,
   removeBatchEnrollment,
+  getUserEnrollments,
+  getUserMemberships,
+  getBatches,
   addMaterial,
   getCourses,
   getCourse,

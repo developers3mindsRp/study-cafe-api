@@ -26,6 +26,30 @@ function register(router) {
     if (!user) throw new AppError('User not found', 404);
     sendSuccess(res, user.get({ plain: true }));
   }));
+
+  router.get('/internal/users/:id/memberships', requireGrantAuth, asyncHandler(async (req, res) => {
+    const { UserMembership } = require('../models');
+    const { Op } = require('sequelize');
+
+    // Resolve the user so we can look up by BOTH internal id and wp_user_id.
+    // Historical memberships (migrated from WP) may use wp_user_id as the user_id,
+    // while newer memberships use the internal users.id.
+    const user = await User.findByPk(req.params.id, {
+      attributes: ['id', 'wp_user_id'],
+    });
+
+    const lookupIds = [req.params.id];
+    if (user && user.wp_user_id != null) {
+      lookupIds.push(String(user.wp_user_id));
+    }
+
+    const rows = await UserMembership.findAll({
+      where: { user_id: { [Op.in]: lookupIds } },
+      order: [['starts_at', 'DESC']],
+      raw: true,
+    });
+    sendSuccess(res, rows);
+  }));
 }
 
 module.exports = { register };

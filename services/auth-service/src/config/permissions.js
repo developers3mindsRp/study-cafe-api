@@ -5,6 +5,12 @@ const ALL_PERMISSIONS = [
   'memberships:list', 'memberships:view', 'memberships:create', 'memberships:edit', 'memberships:delete',
   'testimonials:list', 'testimonials:view', 'testimonials:create', 'testimonials:edit', 'testimonials:delete',
   'faq:list', 'faq:view', 'faq:create', 'faq:edit', 'faq:delete',
+  'courses:list', 'courses:view', 'courses:create', 'courses:edit', 'courses:delete',
+  'orders:list', 'orders:view',
+  'coupons:list', 'coupons:view', 'coupons:create', 'coupons:edit', 'coupons:delete',
+  'live_sessions:list', 'live_sessions:view',
+  'contact_inquiries:list', 'contact_inquiries:view',
+  'affiliate:list', 'affiliate:view',
   'admin:access',
   'admin_users:list', 'admin_users:view', 'admin_users:create', 'admin_users:edit', 'admin_users:delete',
 ];
@@ -42,6 +48,30 @@ const MODULE_HIERARCHY = {
     ['faq:edit'],
     ['faq:create'],
     ['faq:delete'],
+  ],
+  courses: [
+    ['courses:list', 'courses:view'],
+    ['courses:edit'],
+    ['courses:create'],
+    ['courses:delete'],
+  ],
+  orders: [
+    ['orders:list', 'orders:view'],
+  ],
+  coupons: [
+    ['coupons:list', 'coupons:view'],
+    ['coupons:edit'],
+    ['coupons:create'],
+    ['coupons:delete'],
+  ],
+  live_sessions: [
+    ['live_sessions:list', 'live_sessions:view'],
+  ],
+  contact_inquiries: [
+    ['contact_inquiries:list', 'contact_inquiries:view'],
+  ],
+  affiliate: [
+    ['affiliate:list', 'affiliate:view'],
   ],
   admin_users: [
     ['admin_users:list', 'admin_users:view'],
@@ -112,7 +142,8 @@ function mergePermissions(roleName, permissionOverrides) {
 function getEffectivePermissions(roleName, permissionOverrides) {
   if (roleName === 'super_admin') return ALL_PERMISSIONS;
   const list = Array.isArray(permissionOverrides) ? permissionOverrides : [];
-  return list;
+  // admin (and other roles) use only what is stored; expand module ladders for consistency
+  return expandPermissionHierarchy(list);
 }
 
 function isAdminRole(roleName) {
