@@ -570,9 +570,15 @@ async function updatePlan(id, data) {
   if (data.sort_order !== undefined) updates.sort_order = data.sort_order;
   if (data.is_active !== undefined) updates.is_active = !!data.is_active;
   if (data.is_popular !== undefined) {
-    // If marking this plan popular, clear the flag on any other plan first
+    // If marking this plan popular, clear the flag on other plans only — never clear this
+    // row in the DB first. Otherwise Sequelize still thinks is_popular is true on the
+    // instance and may skip writing it back, leaving the column false after save.
     if (data.is_popular) {
-      await PremiumPlan.update({ is_popular: false }, { where: { is_popular: true } });
+      const planId = Number(id);
+      await PremiumPlan.update(
+        { is_popular: false },
+        { where: { is_popular: true, id: { [Op.ne]: planId } } }
+      );
     }
     updates.is_popular = !!data.is_popular;
   }
@@ -597,8 +603,12 @@ async function updatePlan(id, data) {
 async function togglePopular(id, is_popular) {
   const row = await PremiumPlan.findByPk(id);
   if (!row) return null;
+  const planId = Number(id);
   if (is_popular) {
-    await PremiumPlan.update({ is_popular: false }, { where: { is_popular: true } });
+    await PremiumPlan.update(
+      { is_popular: false },
+      { where: { is_popular: true, id: { [Op.ne]: planId } } }
+    );
   }
   await row.update({ is_popular: !!is_popular });
   return row.get({ plain: true });

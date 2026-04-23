@@ -323,6 +323,8 @@ const coursesService = {
         "thumbnail_url",
         "is_published",
         "created_at",
+        "updated_at",
+        "enrolled_count",
         "language",
       ],
       include: [
