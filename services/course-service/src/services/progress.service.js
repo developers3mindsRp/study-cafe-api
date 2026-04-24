@@ -231,10 +231,19 @@ async function completeSession(sessionId, userId, authHeader) {
 
 async function getOverallProgress(userId, authHeader) {
   const rows = await sequelize.query(
-    `SELECT DISTINCT course_id FROM user_course_progress WHERE user_id = :userId`,
+    `SELECT course_id AS course_id FROM (
+        SELECT DISTINCT course_id
+        FROM user_course_progress
+        WHERE user_id = :userId
+        UNION
+        SELECT DISTINCT b.course_id
+        FROM batch_enrollments be
+        INNER JOIN batches b ON b.id = be.batch_id
+        WHERE be.user_id = :userId
+     ) AS enrolled_courses`,
     { replacements: { userId }, type: QueryTypes.SELECT }
   );
-  const courseIds = rows.map((r) => r.course_id);
+  const courseIds = [...new Set(rows.map((r) => r.course_id).filter((id) => id != null))];
   const out = [];
   for (const cid of courseIds) {
     try {

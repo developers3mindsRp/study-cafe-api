@@ -15,7 +15,7 @@ module.exports = (sequelize) => {
       last_name: { type: DataTypes.STRING(100), allowNull: true },
       user_nicename: { type: DataTypes.STRING(50), allowNull: true },
       user_url: { type: DataTypes.STRING(500), allowNull: true },
-      phone: { type: DataTypes.STRING(20), allowNull: true },
+      phone: { type: DataTypes.STRING(20), allowNull: true, unique: true },
       profession: { type: DataTypes.STRING(200), allowNull: true },
       designation: { type: DataTypes.STRING(200), allowNull: true },
       company: { type: DataTypes.STRING(200), allowNull: true },

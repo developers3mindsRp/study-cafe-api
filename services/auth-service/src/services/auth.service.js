@@ -77,7 +77,25 @@ async function hasActiveMembershipForUserId(userId) {
   return !!row;
 }
 
-async function register({ email, password, name, referralCode }) {
+function emptyToNull(s) {
+  if (s == null) return null;
+  const t = String(s).trim();
+  return t === '' ? null : t;
+}
+
+async function register({
+  email,
+  password,
+  name,
+  referralCode,
+  phone,
+  profession,
+  company,
+  designation,
+  city,
+  state,
+  country,
+}) {
   const userRole = await Role.findOne({
     where: { name: 'user' },
     attributes: ['id'],
@@ -92,12 +110,33 @@ async function register({ email, password, name, referralCode }) {
     if (referrer) referredBy = referrer.id;
   }
 
+  const emailNorm = String(email).trim().toLowerCase();
+  const phoneNorm = phone ? String(phone).trim() : null;
+
+  const [emailTaken, phoneTaken] = await Promise.all([
+    User.findOne({ where: { email: emailNorm }, attributes: ['id'] }),
+    phoneNorm ? User.findOne({ where: { phone: phoneNorm }, attributes: ['id'] }) : Promise.resolve(null),
+  ]);
+  if (emailTaken) {
+    throw new AppError('This email is already registered. Try signing in or use a different email.', 409);
+  }
+  if (phoneTaken) {
+    throw new AppError('This phone number is already registered. Sign in or use a different number.', 409);
+  }
+
   const password_hash = await bcrypt.hash(password, 10);
   const newReferralCode = generateReferralCode();
   const user = await User.scope('withPassword').create({
-    email,
+    email: emailNorm,
     password_hash,
-    name: name || null,
+    name: name ? String(name).trim() : null,
+    phone: phoneNorm,
+    profession: profession ? String(profession).trim() : null,
+    company: emptyToNull(company),
+    designation: emptyToNull(designation),
+    city: city ? String(city).trim() : null,
+    state: state ? String(state).trim() : null,
+    country: country ? String(country).trim() : null,
     role_id: userRole.id,
     referral_code: newReferralCode,
     referred_by: referredBy,
@@ -105,7 +144,9 @@ async function register({ email, password, name, referralCode }) {
   });
   const withRole = await User.findByPk(user.id, {
     include: [{ model: Role, as: 'Role', attributes: ['name'] }],
-    attributes: ['id', 'email', 'name', 'referral_code'],
+    attributes: [
+      'id', 'email', 'name', 'referral_code', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country',
+    ],
   });
   const r = withRole.get({ plain: true });
   return {
@@ -115,6 +156,13 @@ async function register({ email, password, name, referralCode }) {
     role: r.Role?.name || 'user',
     referral_code: r.referral_code,
     has_active_membership: false,
+    phone: r.phone,
+    profession: r.profession,
+    company: r.company,
+    designation: r.designation,
+    city: r.city,
+    state: r.state,
+    country: r.country,
   };
 }
 

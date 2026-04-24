@@ -2,11 +2,23 @@ const Joi = require('joi');
 
 // ── Auth ────────────────────────────────────────────────────────────
 
+// E.164 (react-phone-number-input) — + and up to 15 digits after country code
+const e164Phone = Joi.string()
+    .pattern(/^\+[1-9]\d{1,14}$/)
+    .message('phone must be a valid international number (E.164)');
+
 const register = {
     body: Joi.object({
         email: Joi.string().email().required(),
         password: Joi.string().min(6).max(128).required(),
-        name: Joi.string().max(255).allow('', null),
+        name: Joi.string().trim().min(1).max(255).required(),
+        phone: e164Phone.required(),
+        profession: Joi.string().trim().min(1).max(200).required(),
+        company: Joi.string().trim().max(200).allow('', null),
+        designation: Joi.string().trim().max(200).allow('', null),
+        city: Joi.string().trim().min(1).max(100).required(),
+        state: Joi.string().trim().min(1).max(100).required(),
+        country: Joi.string().trim().min(1).max(100).required(),
         referralCode: Joi.string().max(32).allow('', null),
     }),
 };

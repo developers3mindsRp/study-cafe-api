@@ -2,8 +2,32 @@ const authService = require('../services/auth.service');
 const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent } = require('../../../../shared');
 
 const register = asyncHandler(async (req, res) => {
-  const { email, password, name, referralCode } = req.body;
-  const user = await authService.register({ email, password, name, referralCode });
+  const {
+    email,
+    password,
+    name,
+    referralCode,
+    phone,
+    profession,
+    company,
+    designation,
+    city,
+    state,
+    country,
+  } = req.body;
+  const user = await authService.register({
+    email,
+    password,
+    name,
+    referralCode,
+    phone,
+    profession,
+    company,
+    designation,
+    city,
+    state,
+    country,
+  });
   const accessToken = authService.signAccess({ userId: user.id, email: user.email, role: user.role });
   const refreshToken = authService.signRefresh({ userId: user.id });
   sendCreated(res, {
@@ -13,6 +37,14 @@ const register = asyncHandler(async (req, res) => {
       name: user.name,
       role: user.role,
       has_active_membership: !!user.has_active_membership,
+      phone: user.phone,
+      profession: user.profession,
+      company: user.company,
+      designation: user.designation,
+      city: user.city,
+      state: user.state,
+      country: user.country,
+      referral_code: user.referral_code,
     },
     accessToken,
     refreshToken,
