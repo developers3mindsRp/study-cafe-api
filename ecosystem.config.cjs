@@ -9,10 +9,13 @@
  * Environment: loads ./.env via dotenv. You can also export variables before `pm2 start`.
  * Override inter-service URLs with AUTH_SERVICE_URL, etc., or set INTERNAL_SERVICE_HOST=127.0.0.1
  * to default all service base URLs at once.
+ *
+ * `override: true` — dotenv normally does not override variables already in the process (e.g. MYSQL_USER=root
+ * left in the PM2/shell environment). The repo .env should win so production uses the intended DB user and host.
  */
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '.env') });
+require('dotenv').config({ path: path.join(__dirname, '.env'), override: true });
 
 const root = __dirname;
 const logsDir = path.join(root, 'logs');
