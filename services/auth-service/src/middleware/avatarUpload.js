@@ -1,9 +1,10 @@
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const { getYearMonthParts } = require('../../../../shared/mediaUrl');
 const { useHostPersistentPath, userUploadsPath } = require('../../../../shared/persistentDataRoot');
 
-// Precedence: USER_UPLOADS_DIR (override) → hardcoded /var/.../user-uploads in production → <auth-service>/src/uploads in dev
+// Precedence: USER_UPLOADS_DIR (override) → /var/www/.../study-cafe-media/uploads in production → <auth-service>/src/uploads in dev
 const uploadDir = process.env.USER_UPLOADS_DIR
   ? path.resolve(process.env.USER_UPLOADS_DIR)
   : useHostPersistentPath()
@@ -12,7 +13,12 @@ const uploadDir = process.env.USER_UPLOADS_DIR
 fs.mkdirSync(uploadDir, { recursive: true });
 
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
+  destination: (_req, _file, cb) => {
+    const { year, month } = getYearMonthParts();
+    const dest = path.join(uploadDir, year, month);
+    fs.mkdirSync(dest, { recursive: true });
+    cb(null, dest);
+  },
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname || '') || '.jpg';
     cb(null, `avatar-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`);

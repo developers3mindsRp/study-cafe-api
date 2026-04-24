@@ -1,5 +1,7 @@
 const accountService = require('../services/account.service');
 const { asyncHandler, sendSuccess, sendNoContent, AppError } = require('../../../../shared');
+const { uploadDir } = require('../middleware/avatarUpload');
+const { relativePathFromFile, publicMediaUrl } = require('../../../../shared/mediaUrl');
 
 const getProfile = asyncHandler(async (req, res) => {
   const data = await accountService.getProfile(req.user.userId);
@@ -29,7 +31,8 @@ const myCourses = asyncHandler(async (req, res) => {
 /** After multer — req.file */
 const uploadAvatar = asyncHandler(async (req, res) => {
   if (!req.file) throw new AppError('No file uploaded', 400);
-  const url = `/api/user-uploads/${req.file.filename}`;
+  const rel = relativePathFromFile(uploadDir, req.file.path);
+  const url = publicMediaUrl(rel, 'user');
   await accountService.updateAvatarUrl(req.user.userId, url);
   sendSuccess(res, { url });
 });

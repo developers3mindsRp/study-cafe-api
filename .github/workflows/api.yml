@@ -17,6 +17,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
+            set -e
             cd /var/www/html/study-cafe-api
 
             git pull origin main
@@ -24,9 +25,11 @@ jobs:
             npm install
             npm run install:all
 
-            # Redeploy Node services (use your process manager on the host). Examples:
-            #   pm2 restart studycafe-ms
-            #   systemctl restart studycafe-api
+            # One PM2 app per microservice (see ecosystem.config.cjs). First deploy: pm2 start; later: pm2 reload.
             if command -v pm2 >/dev/null 2>&1; then
-              pm2 restart studycafe-ms 2>/dev/null || pm2 start npm --name studycafe-ms -- run start
+              if pm2 list 2>/dev/null | grep -q studycafe-gateway; then
+                pm2 reload ecosystem.config.cjs --update-env
+              else
+                pm2 start ecosystem.config.cjs
+              fi
             fi

@@ -90,19 +90,19 @@ The root `dev:*` and `start:*` scripts default to `MYSQL_USER=root` and `MYSQL_P
    - `MYSQL_HOST`, `MYSQL_PORT` (default `3306`), `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`
    - `REDIS_URL` (e.g. `redis://127.0.0.1:6379`)
    - Inter-service URLs if not all on one host: `AUTH_SERVICE_URL`, `COURSE_SERVICE_URL`, `ORDER_SERVICE_URL`, `ADMIN_SERVICE_URL`, `PLATFORM_SERVICE_URL`
-   - **`NODE_ENV=production`** (set by the `start:*` scripts) so uploads use the **hardcoded** host data root in `shared/persistentDataRoot.js` (default `/var/lib/studycafe-ms/...`, outside the app clone) — see step 3.
+   - **`NODE_ENV=production`** (set by the `start:*` scripts) so uploads use the **hardcoded** paths in `shared/persistentDataRoot.js` and `shared/mediaUrl.js` (platform and user media under `/var/www/html/study-cafe-media/uploads/YYYY/MM/`, public URLs on `https://assets.studycafe.in`) — see step 3.
 
    The **`start:*` scripts in `package.json`** embed `127.0.0.1` service URLs, `NODE_ENV=production`, and dev-style DB/JWT for a single-machine layout. For real production, use a **PM2 ecosystem file**, **systemd `EnvironmentFile`**, or a **wrapper** for secrets, not the embedded defaults in git.
 
 3. **Persistent upload directory (required for production, once per server)**  
-   With `NODE_ENV=production`, the app always stores files under the path in **`shared/persistentDataRoot.js`** (not environment variables). By default that is `/var/lib/studycafe-ms` with `platform-uploads`, `user-uploads`, and `certificates` subfolders. Create them and fix ownership (the app also `mkdir`s when it can write):
+   With `NODE_ENV=production`, **images** (admin CMS uploads and user avatars) are stored under **`/var/www/html/study-cafe-media/uploads/YYYY/MM/`** (WordPress-style), served publicly as **`https://assets.studycafe.in/uploads/...`** (configurable with `ASSETS_BASE_URL`). **Certificates** remain under `/var/lib/studycafe-ms/certificates`. Create dirs and fix ownership (the app also `mkdir`s year/month on upload when it can write):
 
    ```bash
    sudo bash scripts/ensure-persistent-dirs.sh
-   sudo chown -R mynodeuser: /var/lib/studycafe-ms   # user that runs `npm start` or PM2
+   sudo chown -R mynodeuser: /var/lib/studycafe-ms /var/www/html/study-cafe-media
    ```
 
-   To use a different root, edit `PERSISTENT_DATA_ROOT` in that file. Only if needed, override a single service with `UPLOADS_DIR`, `USER_UPLOADS_DIR`, or `CERTIFICATES_UPLOAD_DIR` (see `.env.example`). **Migrating** from old in-repo `uploads`: copy into the subfolders under `/var/lib/studycafe-ms`, then restart.
+   To override storage paths, use `UPLOADS_DIR` or `USER_UPLOADS_DIR` in `.env` (see `.env.example`). For certificates only, you can set `CERTIFICATES_UPLOAD_DIR` or keep the default under `PERSISTENT_DATA_ROOT` in `shared/persistentDataRoot.js`. **Migrating** older flat files: copy into `uploads/YYYY/MM/` on the new tree or keep `UPLOADS_DIR` until URLs are updated.
 
 4. **Deploy code** to the server, then from repo root:
 
@@ -117,11 +117,13 @@ The root `dev:*` and `start:*` scripts default to `MYSQL_USER=root` and `MYSQL_P
    npm start
    ```
 
-   For a long-running process, use a process manager, for example:
+   For a long-running process, use **PM2** with the repo **ecosystem** file (one process per service; set secrets in `.env` first):
 
    ```bash
-   pm2 start npm --name studycafe-ms -- run start
-   # later: pm2 restart studycafe-ms
+   npm run pm2:start
+   # pm2 status | npm run pm2:logs
+   # npm run pm2:reload   # zero-downtime reload after deploy
+   # npm run pm2:stop
    ```
 
 6. Put your **reverse proxy** (e.g. nginx) and **TLS** in front of **port 3000** (api-gateway) for public traffic.
