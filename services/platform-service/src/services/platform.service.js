@@ -155,16 +155,16 @@ const defaultHero = {
 
 function buildHomeData(page) {
   const m = (page && page.meta && typeof page.meta === 'object') ? page.meta : {};
-
   const hero = (m.hero && typeof m.hero === 'object')
     ? {
       title: m.hero.title ?? defaultHero.title,
-      subtitle: m.hero.subtitle ?? defaultHero.subtitle,
+      // subtitle: m.hero.subtitle ?? defaultHero.subtitle,
       ctaText: m.hero.ctaText ?? defaultHero.ctaText,
+      description: m.hero.description ?? defaultHero.description,
       ctaLink: m.hero.ctaLink ?? defaultHero.ctaLink,
       imageUrl:  m.hero.backgroundImageUrl ?? null,
       backgroundImageUrl: m.hero.imageUrl ?? null,
-      badge: m.hero.badge ?? defaultHero.badge,
+      badge: m.hero.subtitle ?? defaultHero.subtitle,
     }
     : { ...defaultHero };
 
