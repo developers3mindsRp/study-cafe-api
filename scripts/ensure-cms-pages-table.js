@@ -27,7 +27,7 @@ try {
     host: process.env.MYSQL_HOST || '127.0.0.1',
     port: parseInt(process.env.MYSQL_PORT || '3306', 10),
     user: process.env.MYSQL_USER || 'studycafe_user',
-    password: process.env.MYSQL_PASSWORD || 'studycafe_pass',
+    password: process.env.MYSQL_PASSWORD || 'GDZ@p84i-F2X',
     database: process.env.MYSQL_DATABASE || 'studycafe_db',
   };
 }

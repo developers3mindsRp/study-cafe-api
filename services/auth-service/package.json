@@ -7,7 +7,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "seed": "node src/scripts/seed.js",
-    "seed:dev": "MYSQL_HOST=127.0.0.1 MYSQL_PORT=3307 node src/scripts/seed.js",
+    "seed:dev": "MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 node src/scripts/seed.js",
     "seed:admin": "node scripts/seed-admin.js",
     "migrate:bio": "node scripts/add-users-bio-column.js"
   },

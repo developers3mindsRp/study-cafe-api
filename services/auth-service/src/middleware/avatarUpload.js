@@ -1,8 +1,14 @@
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const { useHostPersistentPath, userUploadsPath } = require('../../../../shared/persistentDataRoot');
 
-const uploadDir = path.join(__dirname, '../uploads');
+// Precedence: USER_UPLOADS_DIR (override) → hardcoded /var/.../user-uploads in production → <auth-service>/src/uploads in dev
+const uploadDir = process.env.USER_UPLOADS_DIR
+  ? path.resolve(process.env.USER_UPLOADS_DIR)
+  : useHostPersistentPath()
+    ? userUploadsPath()
+    : path.join(__dirname, '../uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
 
 const storage = multer.diskStorage({

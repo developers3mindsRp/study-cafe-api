@@ -19,17 +19,14 @@ jobs:
           script: |
             cd /var/www/html/study-cafe-api
 
-            # Pull latest code
             git pull origin main
 
-            # Stop existing containers
-            docker-compose down
+            npm install
+            npm run install:all
 
-            # Rebuild images
-            docker-compose build
-
-            # Start containers in detached mode
-            docker-compose up -d
-
-            # Clean unused images (optional but recommended)
-            docker system prune -f
+            # Redeploy Node services (use your process manager on the host). Examples:
+            #   pm2 restart studycafe-ms
+            #   systemctl restart studycafe-api
+            if command -v pm2 >/dev/null 2>&1; then
+              pm2 restart studycafe-ms 2>/dev/null || pm2 start npm --name studycafe-ms -- run start
+            fi

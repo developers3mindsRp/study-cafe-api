@@ -3,7 +3,7 @@
  * migrate-wp-to-ms.js
  *
  * Sync data from source DB (sc_* / users on port 3306) into the
- * microservices DB (port 3307). Re-runnable and safe:
+ * microservices DB (port 3306 by default). Re-runnable and safe:
  *   - Source-synced tables (users, articles, courses, orders, etc.)
  *     are refreshed from source on every run.
  *   - Admin-managed tables (home_sections, faqs, testimonials, cms_pages,
@@ -38,9 +38,9 @@ const SRC_CONFIG = {
 // ──── Target DB (microservices) — override with MIGRATION_TGT_* env ────
 const TGT_CONFIG = {
     host: process.env.MIGRATION_TGT_HOST || '127.0.0.1',
-    port: parseInt(process.env.MIGRATION_TGT_PORT || '3307', 10),
+    port: parseInt(process.env.MIGRATION_TGT_PORT || '3306', 10),
     user: process.env.MIGRATION_TGT_USER || 'studycafe_user',
-    password: process.env.MIGRATION_TGT_PASSWORD || 'studycafe_pass',
+    password: process.env.MIGRATION_TGT_PASSWORD || 'GDZ@p84i-F2X',
     database: process.env.MIGRATION_TGT_DATABASE || 'studycafe_db',
 };
 
@@ -79,7 +79,7 @@ async function main() {
     await createAllTables(tgt);
     console.log('✅ All tables created / synced.\n');
 
-    // ──────────── Clear existing data on target (3307) ────────────
+    // ──────────── Clear existing data on target DB ────────────
     console.log('🗑️  Clearing existing data on target DB...');
     await clearTargetDatabase(tgt);
     console.log('✅ Target DB cleared.\n');
@@ -934,7 +934,7 @@ const ADMIN_MANAGED_TABLES = new Set([
     // 'batches', 'sessions', 'recordings',
 ]);
 
-/** Truncate only source-synced tables on target (3307). Admin-managed tables are preserved. */
+/** Truncate only source-synced tables on target DB. Admin-managed tables are preserved. */
 async function clearTargetDatabase(tgt) {
     const tables = [
         'withdrawal_requests', 'affiliate_balances', 'affiliate_history',

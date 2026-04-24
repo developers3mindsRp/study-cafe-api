@@ -2,12 +2,20 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { logger } = require('../../../../shared');
+const { useHostPersistentPath, platformUploadsPath } = require('../../../../shared/persistentDataRoot');
 
-// UPLOADS_DIR env var lets Docker map a persistent volume (e.g. /app/uploads).
-// Falls back to <project-root>/uploads so local dev keeps working without any env setup.
-const uploadsDir = process.env.UPLOADS_DIR
-  ? path.resolve(process.env.UPLOADS_DIR)
-  : path.join(__dirname, '../../../../uploads');
+// Precedence: UPLOADS_DIR (override) → hardcoded /var/.../platform-uploads in production → <repo>/uploads in dev
+function resolveUploadsDir() {
+  if (process.env.UPLOADS_DIR) {
+    return path.resolve(process.env.UPLOADS_DIR);
+  }
+  if (useHostPersistentPath()) {
+    return platformUploadsPath();
+  }
+  return path.join(__dirname, '../../../../uploads');
+}
+
+const uploadsDir = resolveUploadsDir();
 
 try {
   fs.mkdirSync(uploadsDir, { recursive: true });

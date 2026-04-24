@@ -25,9 +25,9 @@ try {
 } catch (_) {
   mysqlConfig = {
     host: process.env.MYSQL_HOST || '127.0.0.1',
-    port: parseInt(process.env.MYSQL_PORT || '3307', 10),
+    port: parseInt(process.env.MYSQL_PORT || '3306', 10),
     user: process.env.MYSQL_USER || 'studycafe_user',
-    password: process.env.MYSQL_PASSWORD || 'studycafe_pass',
+    password: process.env.MYSQL_PASSWORD || 'GDZ@p84i-F2X',
     database: process.env.MYSQL_DATABASE || 'studycafe_db',
   };
 }
@@ -53,7 +53,7 @@ async function main() {
     if (e.original && e.original.code === 'ER_DUP_FIELDNAME') {
       console.log('✅ home_sections.meta column already exists');
     } else if (e.original && e.original.code === 'ER_NO_SUCH_TABLE') {
-      console.log('⏭️  home_sections table does not exist in this DB; run migrate:wp-to-ms or ensure you are connected to studycafe_db (e.g. MYSQL_PORT=3307 MYSQL_DATABASE=studycafe_db).');
+      console.log('⏭️  home_sections table does not exist in this DB; run migrate:wp-to-ms or ensure you are connected to studycafe_db (e.g. MYSQL_PORT=3306 MYSQL_DATABASE=studycafe_db).');
       process.exit(0);
     } else {
       throw e;

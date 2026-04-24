@@ -8,8 +8,6 @@ MySQL (single instance, separate schema per service)
 
 Redis
 
-Docker + Docker Compose
-
 JWT Authentication
 
 Razorpay (configurable from admin)
@@ -25,32 +23,108 @@ course-service	4002	course_schema	Courses, batches, sessions, materials
 order-service	4003	order_schema	Orders, payments, Razorpay, outbox
 admin-service	4004	admin_schema	Admin panel, audit, payment config
 
-Quick Start
+Run the backend
 
-setup .env
-run -> docker compose up -d
+### Prerequisites (development and production)
 
-Development
-Start Infrastructure
-docker compose up -d mysql redis
+- **MySQL 8+** on `127.0.0.1` **port 3306**, with database `studycafe_db` (and schemas as created by your migrations/seed process).
+- **Redis** on `127.0.0.1` **port 6379**.
 
-Install Dependencies
+### One-time: install dependencies
+
+From the `studycafe-ms` root:
+
+```bash
 npm install
 npm run install:all
+```
 
-Seed super admin (auth-service)
-After MySQL and auth-service DB/schema are ready, create roles and a super_admin user for the admin panel:
-cd services/auth-service && npm run seed
-Default login: admin@studycafe.in / SuperAdmin@123 (override with SEED_SUPER_ADMIN_EMAIL and SEED_SUPER_ADMIN_PASSWORD).
+The root `dev:*` and `start:*` scripts default to `MYSQL_USER=root` and `MYSQL_PASSWORD=rootpassword` for local use. In production, use a dedicated app user and strong passwords (see below).
 
-Granting permissions to admin users (admin panel)
-- In the admin app go to **Admin Users** → create or edit a user.
-- **Role** sets base permissions (Super Admin / Admin = full access; Editor / Viewer = limited).
-- Use **Additional permissions** to grant specific permissions on top of the role (e.g. give an Editor one extra permission).
-If you added this feature to an existing DB, run once from auth-service: `node scripts/add-permission-overrides-column.js` (with same env as the app) to add the `permission_overrides` column.
+### Development
 
-Start All Services
-npm run dev
+1. **Start MySQL and Redis** on the machine (services must be listening before the next step).
+2. From the repo root, run:
+
+   ```bash
+   npm run dev
+   ```
+
+   This will:
+
+   - Wait until `3306` and `6379` are open (up to 60s).
+   - Run **`dev:fix-db`**: apply `scripts/fix-mysql-localhost-users.sql` via `mysql2` (creates / grants `studycafe_user` as needed; requires **MySQL root** with the password the script uses—see `package.json` `dev:fix-db`).
+   - Start **all six** processes in one terminal with **`node --watch`**: api-gateway (3000), auth (4001), course (4002), order (4003), admin (4004), platform (4005).
+
+3. **API entry point** for clients: `http://localhost:3000` (api-gateway).
+4. If you see “port already in use”, free the app ports and retry:
+
+   ```bash
+   npm run dev:kill-ports
+   npm run dev
+   ```
+
+5. If MySQL/Redis are already up and you only want the same “wait → fix-db → all services” flow without changing anything, `npm run dev:up` is equivalent to the middle part of `dev`.
+
+**After the stack is up — seed and admin (first time)**
+
+- Create roles and a super admin (when auth DB/schema is ready):
+
+  ```bash
+  cd services/auth-service && npm run seed
+  ```
+
+  Default login: `admin@studycafe.in` / `SuperAdmin@123` (override with `SEED_SUPER_ADMIN_EMAIL` and `SEED_SUPER_ADMIN_PASSWORD`).
+
+**Granting permissions to admin users (admin panel)**
+
+- **Admin Users** → create or edit a user. **Role** sets base access; **Additional permissions** add extras on top.
+- If you added this to an existing DB, run once from auth-service: `node scripts/add-permission-overrides-column.js` with the same env as the app.
+
+### Production
+
+1. On the **server**, install and run **MySQL (3306)** and **Redis (6379)**. Create the `studycafe_db` database and a least-privilege MySQL user (not necessarily root).
+2. **Set environment variables** for real secrets; do not rely on the example passwords in `package.json`. At minimum, set (names match what the services read):
+
+   - `JWT_SECRET`, `JWT_REFRESH_SECRET`, `INTERNAL_API_KEY`
+   - `MYSQL_HOST`, `MYSQL_PORT` (default `3306`), `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`
+   - `REDIS_URL` (e.g. `redis://127.0.0.1:6379`)
+   - Inter-service URLs if not all on one host: `AUTH_SERVICE_URL`, `COURSE_SERVICE_URL`, `ORDER_SERVICE_URL`, `ADMIN_SERVICE_URL`, `PLATFORM_SERVICE_URL`
+   - **`NODE_ENV=production`** (set by the `start:*` scripts) so uploads use the **hardcoded** host data root in `shared/persistentDataRoot.js` (default `/var/lib/studycafe-ms/...`, outside the app clone) — see step 3.
+
+   The **`start:*` scripts in `package.json`** embed `127.0.0.1` service URLs, `NODE_ENV=production`, and dev-style DB/JWT for a single-machine layout. For real production, use a **PM2 ecosystem file**, **systemd `EnvironmentFile`**, or a **wrapper** for secrets, not the embedded defaults in git.
+
+3. **Persistent upload directory (required for production, once per server)**  
+   With `NODE_ENV=production`, the app always stores files under the path in **`shared/persistentDataRoot.js`** (not environment variables). By default that is `/var/lib/studycafe-ms` with `platform-uploads`, `user-uploads`, and `certificates` subfolders. Create them and fix ownership (the app also `mkdir`s when it can write):
+
+   ```bash
+   sudo bash scripts/ensure-persistent-dirs.sh
+   sudo chown -R mynodeuser: /var/lib/studycafe-ms   # user that runs `npm start` or PM2
+   ```
+
+   To use a different root, edit `PERSISTENT_DATA_ROOT` in that file. Only if needed, override a single service with `UPLOADS_DIR`, `USER_UPLOADS_DIR`, or `CERTIFICATES_UPLOAD_DIR` (see `.env.example`). **Migrating** from old in-repo `uploads`: copy into the subfolders under `/var/lib/studycafe-ms`, then restart.
+
+4. **Deploy code** to the server, then from repo root:
+
+   ```bash
+   npm install
+   npm run install:all
+   ```
+
+5. **Start the stack** (no file watching; the `start:*` scripts set `NODE_ENV=production` so the hardcoded data paths apply):
+
+   ```bash
+   npm start
+   ```
+
+   For a long-running process, use a process manager, for example:
+
+   ```bash
+   pm2 start npm --name studycafe-ms -- run start
+   # later: pm2 restart studycafe-ms
+   ```
+
+6. Put your **reverse proxy** (e.g. nginx) and **TLS** in front of **port 3000** (api-gateway) for public traffic.
 
 ## API Endpoints
 
@@ -172,40 +246,26 @@ For admin routes, use the admin-service base URL and pass a valid admin JWT in `
 - `PUT /admin/platform/promo-codes/:id`
 - `DELETE /admin/platform/promo-codes/:id`
 
-Runs all services on ports 3000, 4001–4004.
+Runs all services on ports 3000, 4001–4005.
 
 Common Issues
 
-**Docker not running / “Cannot connect to the Docker daemon”**
+**MySQL or Redis not reachable**
 
-You need Docker Desktop running for `npm run dev` (MySQL and Redis run in Docker).
+Ensure MySQL is listening on 127.0.0.1:3306 and Redis on 127.0.0.1:6379, then `npm run dev` (it waits for those ports). Adjust credentials in the npm `dev:*` / `start:*` scripts or export env vars in your process manager for production.
 
-1. **Install Docker Desktop** (if needed): https://www.docker.com/products/docker-desktop/
-2. **Start Docker Desktop** from Applications (or the menu bar) and wait until it’s fully up.
-3. From the **studycafe-ms** directory run:
-   - `npm run dev` — tries to start Docker, then infra + fix-db + all services
-   - or, if Docker is already running: `npm run dev:up` — infra + fix-db + all services
+**Upload errors in production (`EACCES` on `/var/lib/studycafe-ms`)**
+
+`NODE_ENV=production` writes uploads under the path in `shared/persistentDataRoot.js`. Create that directory and ensure the process user can write to it (see the production steps and `scripts/ensure-persistent-dirs.sh`).
 
 Ports in use (EADDRINUSE)
-Kill any process using ports 3000, 4001–4005 (e.g. leftover Node from a previous run), then start again:
+Kill any process using ports 3000, 4001–4005, then start again:
 npm run dev:kill-ports
 npm run dev
-If you ran full Docker stack before, also: npm run dev:free-ports then npm run dev:infra
 
-MySQL “Access denied” for platform_user / auth_user / etc.
-The MySQL container needs schemas and users. Either:
-- Fresh start: remove the MySQL volume and run again so init runs: docker compose down -v then docker compose up -d mysql redis then npm run dev
-- Existing DB: apply the fix script (creates schemas and users): npm run dev:fix-db
-Then run npm run dev again.
+MySQL “Access denied” for studycafe_user / app users
+Apply the user grant once (as root): npm run dev:fix-db, then `npm run dev` again. Set `MYSQL_USER` / `MYSQL_PASSWORD` to match your server in production; do not use the dev password there.
 
+Production deploy
 
-Docker network error
-
-docker compose down --remove-orphans
-docker network prune -f
-docker compose up -d mysql redis
-
-
-Local MySQL conflict
-
-Docker MySQL runs on port 3307
+Deploy updates code on the host and can restart the stack with PM2 if installed (see `.github/workflows/api.yml`). Configure stronger `JWT_SECRET`, DB passwords, and `INTERNAL_API_KEY` in the host environment, not the dev values embedded in the npm scripts.
