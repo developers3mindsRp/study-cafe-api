@@ -1,7 +1,7 @@
 const controller = require('../controllers/platform.controller');
 const { internalAuth } = require('../middleware');
 const { optionalWebUser } = require('../middleware/optionalWebUser');
-const { uploadImage: uploadImageMw } = require('../middleware/upload');
+const { uploadImage: uploadImageMw, uploadFile: uploadFileMw } = require('../middleware/upload');
 const schemas = require('../validations/schemas');
 const { validate } = require('../../../../shared');
 
@@ -83,6 +83,7 @@ function register(router) {
   router.get('/internal/platform/cms-pages/:slug', internalAuth, validate(schemas.slugParam), controller.getCmsPageBySlugInternal);
   router.put('/internal/platform/cms-pages/:slug', internalAuth, validate(schemas.upsertCmsPage), controller.putCmsPageBySlug);
   router.post('/internal/platform/upload/image', internalAuth, uploadImageMw, controller.uploadImage);
+  router.post('/internal/platform/upload/file', internalAuth, uploadFileMw, controller.uploadFile);
 
   // ── Media assets (icons library) ────────────────────────────────────
   router.get('/internal/platform/media-assets', internalAuth, controller.getMediaAssets);

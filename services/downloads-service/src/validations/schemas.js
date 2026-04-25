@@ -75,6 +75,13 @@ const slugParam = {
   }),
 };
 
+const idOrSlugParam = {
+  params: Joi.object({
+    // files.slug column is VARCHAR(200); allow headroom for encoded IDs
+    idOrSlug: Joi.string().min(1).max(500).required(),
+  }),
+};
+
 const categoryFilesQuery = {
   params: Joi.object({
     slug: Joi.string().required(),
@@ -82,6 +89,7 @@ const categoryFilesQuery = {
   query: Joi.object({
     page: Joi.number().integer().positive().default(1),
     limit: Joi.number().integer().positive().max(100).default(10),
+    search: Joi.string().max(200).allow('', null),
   }),
 };
 
@@ -93,5 +101,6 @@ module.exports = {
   createCategory,
   updateCategory,
   slugParam,
+  idOrSlugParam,
   categoryFilesQuery,
 };

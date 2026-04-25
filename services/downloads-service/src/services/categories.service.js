@@ -1,13 +1,16 @@
-const { QueryTypes } = require('sequelize');
+const { QueryTypes, Op } = require('sequelize');
 const { FileCat, File, FileCategory, sequelize } = require('../models');
 const { AppError, paginate } = require('../../../../shared');
 const { slugify } = require('../utils/slugify');
+const { PUBLIC_FILE_ATTRS } = require('./files.service');
 
 const categoriesService = {
   async list() {
     const rows = await sequelize.query(
       `SELECT fc.id, fc.wp_term_id, fc.name, fc.slug,
-              (SELECT COUNT(*) FROM file_categories x WHERE x.file_cat_id = fc.id) AS file_count
+              (SELECT COUNT(*) FROM file_categories x
+               INNER JOIN files f ON f.id = x.file_id AND f.status = 'publish'
+               WHERE x.file_cat_id = fc.id) AS file_count
        FROM file_cats fc
        ORDER BY fc.name ASC`,
       { type: QueryTypes.SELECT }
@@ -43,7 +46,9 @@ const categoriesService = {
 
     const rows = await sequelize.query(
       `SELECT fc.id, fc.wp_term_id, fc.name, fc.slug,
-              (SELECT COUNT(*) FROM file_categories x WHERE x.file_cat_id = fc.id) AS file_count
+              (SELECT COUNT(*) FROM file_categories x
+               INNER JOIN files f ON f.id = x.file_id AND f.status = 'publish'
+               WHERE x.file_cat_id = fc.id) AS file_count
        FROM file_cats fc
        WHERE 1=1 ${searchClause}
        ORDER BY ${orderCol} ${orderDir}
@@ -78,14 +83,20 @@ const categoriesService = {
     };
   },
 
-  async listFilesBySlug(slug, { page = 1, limit = 10 } = {}) {
+  async listFilesBySlug(slug, { page = 1, limit = 10, search } = {}) {
     const cat = await FileCat.findOne({ where: { slug } });
     if (!cat) throw new AppError('Category not found', 404);
+
+    const where = { status: 'publish' };
+    if (search && String(search).trim()) {
+      where.title = { [Op.like]: `%${String(search).trim()}%` };
+    }
 
     const result = await paginate(File, {
       page,
       limit,
-      where: { status: 'publish' },
+      where,
+      attributes: PUBLIC_FILE_ATTRS,
       include: [
         {
           model: FileCat,
