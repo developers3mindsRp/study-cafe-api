@@ -90,12 +90,12 @@ The root `dev:*` and `start:*` scripts default to `MYSQL_USER=root` and `MYSQL_P
    - `MYSQL_HOST`, `MYSQL_PORT` (default `3306`), `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`
    - `REDIS_URL` (e.g. `redis://127.0.0.1:6379`)
    - Inter-service URLs if not all on one host: `AUTH_SERVICE_URL`, `COURSE_SERVICE_URL`, `ORDER_SERVICE_URL`, `ADMIN_SERVICE_URL`, `PLATFORM_SERVICE_URL`
-   - **`NODE_ENV=production`** (set by the `start:*` scripts) so uploads use the **hardcoded** paths in `shared/persistentDataRoot.js` and `shared/mediaUrl.js` (platform and user media under `/var/www/html/study-cafe-media/uploads/YYYY/MM/`, public URLs on `https://assets.studycafe.in`) — see step 3.
+   - **`NODE_ENV=production`** (set by the `start:*` scripts) so uploads use the **hardcoded** disk paths in `shared/persistentDataRoot.js` (platform and user media under `/var/www/html/study-cafe-media/uploads/YYYY/MM/`) — see step 3. Note that the public URL persisted in the DB is **always absolute** (`https://assets.studycafe.in/uploads/...` by default, override with `ASSETS_BASE_URL`) regardless of `NODE_ENV`, so the value stored is exactly what the frontend renders.
 
    The **`start:*` scripts in `package.json`** embed `127.0.0.1` service URLs, `NODE_ENV=production`, and dev-style DB/JWT for a single-machine layout. For real production, use a **PM2 ecosystem file**, **systemd `EnvironmentFile`**, or a **wrapper** for secrets, not the embedded defaults in git.
 
 3. **Persistent upload directory (required for production, once per server)**  
-   With `NODE_ENV=production`, **images** (admin CMS uploads and user avatars) are stored under **`/var/www/html/study-cafe-media/uploads/YYYY/MM/`** (WordPress-style), served publicly as **`https://assets.studycafe.in/uploads/...`** (configurable with `ASSETS_BASE_URL`). **Certificates** remain under `/var/lib/studycafe-ms/certificates`. Create dirs and fix ownership (the app also `mkdir`s year/month on upload when it can write):
+   With `NODE_ENV=production`, **images** (admin CMS uploads and user avatars) are stored under **`/var/www/html/study-cafe-media/uploads/YYYY/MM/`** (WordPress-style). The public URL persisted in the DB is **always absolute** — defaulting to **`https://assets.studycafe.in/uploads/...`** (configurable with `ASSETS_BASE_URL`) — in every environment, so the frontend never has to reconstruct a relative path. **Certificates** remain under `/var/lib/studycafe-ms/certificates`. Create dirs and fix ownership (the app also `mkdir`s year/month on upload when it can write):
 
    ```bash
    sudo bash scripts/ensure-persistent-dirs.sh

@@ -13,6 +13,12 @@ const { createCrudController } = require('./baseController');
 const { paginate } = require('./pagination/paginate');
 const { validate } = require('./validate');
 const { sendSuccess, sendCreated, sendNoContent, sendPaginated } = require('./responseHelper');
+const {
+    getYearMonthParts,
+    relativePathFromFile,
+    publicMediaUrl,
+    DEFAULT_PRODUCTION_ASSETS_ORIGIN,
+} = require('./mediaUrl');
 
 module.exports = {
     logger,
@@ -26,4 +32,8 @@ module.exports = {
     sendCreated,
     sendNoContent,
     sendPaginated,
+    getYearMonthParts,
+    relativePathFromFile,
+    publicMediaUrl,
+    DEFAULT_PRODUCTION_ASSETS_ORIGIN,
 };
