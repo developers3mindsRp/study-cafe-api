@@ -31,6 +31,7 @@ const course = process.env.COURSE_SERVICE_URL || `http://${h}:4002`;
 const order = process.env.ORDER_SERVICE_URL || `http://${h}:4003`;
 const admin = process.env.ADMIN_SERVICE_URL || `http://${h}:4004`;
 const platform = process.env.PLATFORM_SERVICE_URL || `http://${h}:4005`;
+const downloads = process.env.DOWNLOADS_SERVICE_URL || `http://${h}:4006`;
 
 const mysql = {
   MYSQL_HOST: process.env.MYSQL_HOST || '127.0.0.1',
@@ -154,6 +155,19 @@ const apps = [
     }),
   },
   {
+    name: 'studycafe-downloads',
+    cwd: path.join(root, 'services/downloads-service'),
+    script: 'src/server.js',
+    ...proc,
+    ...logFiles('downloads'),
+    env: stripUndefined({
+      ...prod,
+      ...mysql,
+      PORT: '4006',
+      INTERNAL_API_KEY: process.env.INTERNAL_API_KEY,
+    }),
+  },
+  {
     name: 'studycafe-gateway',
     cwd: path.join(root, 'services/api-gateway'),
     script: 'src/server.js',
@@ -168,6 +182,8 @@ const apps = [
       ORDER_SERVICE_URL: order,
       ADMIN_SERVICE_URL: admin,
       PLATFORM_SERVICE_URL: platform,
+      DOWNLOADS_SERVICE_URL: downloads,
+      INTERNAL_API_KEY: process.env.INTERNAL_API_KEY,
     }),
   },
 ];
