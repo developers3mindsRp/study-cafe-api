@@ -136,6 +136,30 @@ function register(app) {
   }, adminProxy);
   app.use('/api/platform', platformProxy);
   app.use('/api/uploads', uploadsProxy);
+
+  const downloadsProxy = createProxyMiddleware({
+    target: config.downloadsServiceUrl,
+    changeOrigin: true,
+  });
+  app.use('/api/downloads', downloadsProxy);
+
+  /** Admin panel → downloads-service internal APIs (JWT + server-side internal key). */
+  const downloadsInternalProxy = createProxyMiddleware({
+    target: config.downloadsServiceUrl,
+    changeOrigin: true,
+    pathRewrite: { '^/api/internal/downloads': '/internal/downloads' },
+    onProxyReq: (proxyReq) => {
+      if (config.internalApiKey) {
+        proxyReq.setHeader('x-internal-api-key', config.internalApiKey);
+      }
+    },
+  });
+  app.use('/api/internal/downloads', validateJWT, (req, _res, next) => {
+    const uid = req.user?.userId ?? req.user?.id;
+    if (uid != null && uid !== '') req.headers['x-user-id'] = String(uid);
+    if (req.user?.role) req.headers['x-user-role'] = req.user.role;
+    next();
+  }, downloadsInternalProxy);
 }
 
 module.exports = { register };

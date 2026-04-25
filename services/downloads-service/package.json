@@ -1,0 +1,19 @@
+{
+  "name": "downloads-service",
+  "version": "1.0.0",
+  "description": "StudyCafe Downloads Service",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "joi": "^18.0.2",
+    "morgan": "^1.10.0",
+    "mysql2": "^3.6.5",
+    "sequelize": "^6.35.2",
+    "studycafe-ms": "file:../.."
+  }
+}
