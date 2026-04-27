@@ -104,16 +104,21 @@ function parseApiResponse(response) {
 }
 
 async function fetchCourseAmount(entityId) {
-  const { data } = await axios.get(`${config.courseServiceUrl}/internal/courses/${entityId}`, {
+  const { data, status } = await axios.get(`${config.courseServiceUrl}/internal/courses/${entityId}`, {
     timeout: 8000,
     headers: { 'x-internal-api-key': config.internalApiKey },
-    validateStatus: (status) => status === 200,
+    validateStatus: (s) => s === 200,
   });
+  if (status !== 200) throw new AppError('Course not found or price unavailable', 400);
   const payload = parseApiResponse(data);
-  const salePrice = parseAmount(payload?.sale_price);
-  const price = salePrice || parseAmount(payload?.price);
-  if (!price) throw new AppError('Course price unavailable', 400);
-  return price;
+  if (payload == null) throw new AppError('Course not found or price unavailable', 400);
+  const rawSale = payload.sale_price;
+  const hasSale = rawSale != null && rawSale !== '';
+  const saleNum = hasSale ? parseAmount(rawSale) : null;
+  const listNum = parseAmount(payload.price);
+  const effective = hasSale && saleNum != null && Number.isFinite(saleNum) ? saleNum : listNum;
+  if (!Number.isFinite(effective) || effective < 0) throw new AppError('Course price unavailable', 400);
+  return effective;
 }
 
 /**
@@ -166,14 +171,16 @@ function computeLiveBatchPhase(batch) {
 }
 
 async function fetchMembershipAmount(entityId) {
-  const { data } = await axios.get(`${config.platformServiceUrl}/internal/platform/plans/${entityId}`, {
+  const { data, status } = await axios.get(`${config.platformServiceUrl}/internal/platform/plans/${entityId}`, {
     timeout: 8000,
     headers: { 'x-internal-api-key': config.internalApiKey },
-    validateStatus: (status) => status === 200,
+    validateStatus: (s) => s === 200,
   });
+  if (status !== 200) throw new AppError('Membership plan not found or price unavailable', 400);
   const payload = parseApiResponse(data);
+  if (payload == null) throw new AppError('Membership plan not found or price unavailable', 400);
   const price = parseAmount(payload?.price);
-  if (!price) throw new AppError('Membership price unavailable', 400);
+  if (!Number.isFinite(price) || price < 0) throw new AppError('Membership price unavailable', 400);
   return price;
 }
 
@@ -203,10 +210,12 @@ function isDiscountOnAllowedForType(discountOn, typeUpper) {
 }
 
 function calculateDiscount(coupon, amount) {
-  const value = parseAmount(coupon.value);
+  const isPct = String(coupon.type || '').trim().toLowerCase() === 'percentage';
+  let value = Math.max(0, parseAmount(coupon.value));
+  if (isPct) value = Math.min(100, value);
   const maxDiscount = parseAmount(coupon.max_discount);
   let discount = 0;
-  if (String(coupon.type || '').trim().toLowerCase() === 'percentage') {
+  if (isPct) {
     discount = (amount * value) / 100;
   } else {
     discount = value;
@@ -305,96 +314,95 @@ async function recordCouponUsage(couponId, userId, orderId, transaction) {
   );
 }
 
+/** Outbox: enrollment / membership + affiliate (only when order amount &gt; 0). */
+async function emitPurchaseOutbox(locked, t) {
+  const oid = locked.order_id;
+  if (locked.type === 'course') {
+    await OutboxEvent.create(
+      {
+        aggregate_type: 'order',
+        aggregate_id: oid,
+        event_type: 'COURSE_PURCHASED',
+        payload: {
+          userId: locked.user_id,
+          orderId: oid,
+          courseId: locked.entity_id,
+          batchId: locked.batch_id ? Number(locked.batch_id) : null,
+        },
+      },
+      { transaction: t }
+    );
+  } else if (locked.type === 'membership') {
+    const plan = await fetchPlanDetails(locked.entity_id);
+    const payload = buildMembershipPayload(locked, plan);
+    await OutboxEvent.create(
+      {
+        aggregate_type: 'order',
+        aggregate_id: oid,
+        event_type: 'MEMBERSHIP_ACTIVATED',
+        payload,
+      },
+      { transaction: t }
+    );
+  }
+
+  const orderAmt = parseFloat(locked.amount);
+  if (locked.affiliate && Number.isFinite(orderAmt) && orderAmt > 0) {
+    await OutboxEvent.create(
+      {
+        aggregate_type: 'order',
+        aggregate_id: oid,
+        event_type: 'AFFILIATE_COMMISSION',
+        payload: {
+          userId: locked.user_id,
+          orderId: oid,
+          type: locked.type,
+          entityId: locked.entity_id,
+          amount: orderAmt,
+          referralCode: locked.affiliate,
+        },
+      },
+      { transaction: t }
+    );
+  }
+}
+
 // ─── completePayment ──────────────────────────────────────────────────────────
 // Called by both checkout verify and webhook. Uses SELECT … FOR UPDATE to
 // prevent a double-payment race when verify + webhook arrive simultaneously.
 
 async function completePayment(order, razorpayPaymentId, { signature = null, source = 'checkout' } = {}) {
-  const t = await sequelize.transaction();
   try {
-    // Lock the row so concurrent calls wait instead of both proceeding
-    const locked = await Order.findOne({
-      where: { id: order.id },
-      lock: t.LOCK.UPDATE,
-      transaction: t,
+    return await sequelize.transaction(async (t) => {
+      const locked = await Order.findOne({
+        where: { id: order.id },
+        lock: t.LOCK.UPDATE,
+        transaction: t,
+      });
+
+      if (!locked || locked.status === 'paid') {
+        return { alreadyPaid: true, message: 'Already paid' };
+      }
+
+      await locked.update({ status: 'paid' }, { transaction: t });
+
+      await Payment.findOrCreate({
+        where: { razorpay_payment_id: razorpayPaymentId, status: 'captured' },
+        defaults: {
+          order_id: locked.id,
+          razorpay_payment_id: razorpayPaymentId,
+          razorpay_signature: signature,
+          amount: locked.amount,
+          status: 'captured',
+          source,
+        },
+        transaction: t,
+      });
+
+      await emitPurchaseOutbox(locked, t);
+      return { verified: true };
     });
-
-    if (!locked || locked.status === 'paid') {
-      await t.rollback();
-      return { alreadyPaid: true, message: 'Already paid' };
-    }
-
-    await locked.update({ status: 'paid' }, { transaction: t });
-
-    // Use findOrCreate so concurrent webhook + checkout calls don't double-insert
-    await Payment.findOrCreate({
-      where: { razorpay_payment_id: razorpayPaymentId, status: 'captured' },
-      defaults: {
-        order_id: locked.id,
-        razorpay_payment_id: razorpayPaymentId,
-        razorpay_signature: signature,
-        amount: locked.amount,
-        status: 'captured',
-        source,
-      },
-      transaction: t,
-    });
-
-    const orderId = locked.order_id;
-    if (locked.type === 'course') {
-      await OutboxEvent.create(
-        {
-          aggregate_type: 'order',
-          aggregate_id: orderId,
-          event_type: 'COURSE_PURCHASED',
-          payload: {
-            userId: locked.user_id,
-            orderId,
-            courseId: locked.entity_id,
-            // batch_id is resolved at createOrder time and locked onto the order row.
-            batchId: locked.batch_id ? Number(locked.batch_id) : null,
-          },
-        },
-        { transaction: t }
-      );
-    } else if (locked.type === 'membership') {
-      const plan = await fetchPlanDetails(locked.entity_id);
-      const payload = buildMembershipPayload(locked, plan);
-      await OutboxEvent.create(
-        {
-          aggregate_type: 'order',
-          aggregate_id: orderId,
-          event_type: 'MEMBERSHIP_ACTIVATED',
-          payload,
-        },
-        { transaction: t }
-      );
-    }
-
-    if (locked.affiliate) {
-      await OutboxEvent.create(
-        {
-          aggregate_type: 'order',
-          aggregate_id: orderId,
-          event_type: 'AFFILIATE_COMMISSION',
-          payload: {
-            userId: locked.user_id,
-            orderId,
-            type: locked.type,
-            entityId: locked.entity_id,
-            amount: parseFloat(locked.amount),
-            referralCode: locked.affiliate,
-          },
-        },
-        { transaction: t }
-      );
-    }
-
-    await t.commit();
-    return { verified: true };
   } catch (err) {
-    await t.rollback();
-    // Unique constraint on razorpay_payment_id — already recorded, treat as success
     if (err.name === 'SequelizeUniqueConstraintError') return { verified: true, alreadyPaid: true };
     throw err;
   }
@@ -405,9 +413,6 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
 // Coupon is validated server-side and discount recorded on the order row.
 
 async function createOrder(userId, { type, entityId, couponCode, referralCode, currency = 'INR' }) {
-  const razorpay = await getRazorpayInstance();
-  if (!razorpay) throw new AppError('Payment not configured', 503);
-
   const typeUpper = normalizeOrderType(type);
 
   // 1. Fetch canonical price from the owning service — never trust client
@@ -429,22 +434,88 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
   // 4. Guard: idempotency lock per (user, type, entity) — prevents race-created duplicates
   const lockKey = `order:lock:${userId}:${typeUpper}:${entityId}`;
   const redis = await getRedis();
-  const locked = await redis.set(lockKey, '1', { NX: true, EX: 30 });
-  if (!locked) throw new AppError('Duplicate order in progress', 429);
+  const gotLock = await redis.set(lockKey, '1', { NX: true, EX: 30 });
+  if (!gotLock) throw new AppError('Duplicate order in progress', 429);
 
   const orderId = generateOrderId();
-  // Razorpay expects amount in paise — use the GST-inclusive grand total
   const amountPaise = Math.round(grandTotal * 100);
 
-  // For course purchases, resolve + lock the batch the buyer will be enrolled into.
-  // (upcoming > latest completed > newest) — so adding a new upcoming batch AFTER
-  // this order is placed does NOT retroactively move the learner to a different cohort.
   let resolvedBatchId = null;
   if (typeUpper === 'COURSE') {
     resolvedBatchId = await fetchPurchaseBatchId(entityId);
   }
 
   try {
+    if (grandTotal <= 0) {
+      const contact = await fetchUserContact(userId);
+      await sequelize.transaction(async (t) => {
+        const created = await Order.create(
+          {
+            order_id: orderId,
+            user_id: userId,
+            type: typeUpper.toLowerCase(),
+            entity_id: String(entityId),
+            batch_id: resolvedBatchId,
+            original_amount: originalAmount,
+            coupon_code: couponResult ? couponResult.coupon.code : null,
+            coupon_discount: discountAmount,
+            amount: grandTotal,
+            currency,
+            status: 'pending',
+            affiliate: referralCode || null,
+            gateway: 'free',
+          },
+          { transaction: t }
+        );
+        const locked = await Order.findOne({
+          where: { id: created.id },
+          lock: t.LOCK.UPDATE,
+          transaction: t,
+        });
+        if (!locked) throw new AppError('Order not found after create', 500);
+        await locked.update({ status: 'paid' }, { transaction: t });
+        const freeRef = `free:${orderId}`;
+        await Payment.findOrCreate({
+          where: { order_id: locked.id, source: 'free' },
+          defaults: {
+            order_id: locked.id,
+            razorpay_payment_id: freeRef,
+            razorpay_signature: null,
+            amount: locked.amount,
+            status: 'captured',
+            source: 'free',
+          },
+          transaction: t,
+        });
+        await emitPurchaseOutbox(locked, t);
+        if (couponResult) {
+          await recordCouponUsage(couponResult.coupon.id, userId, orderId, t);
+        }
+      });
+      await redis.del(lockKey);
+      return {
+        orderId,
+        free: true,
+        paid: true,
+        razorpayOrderId: null,
+        amount: 0,
+        originalAmount: Math.round(originalAmount * 100),
+        discountAmount: Math.round(discountAmount * 100),
+        gstAmount: Math.round(gstAmount * 100),
+        grandTotal: 0,
+        currency,
+        key: null,
+        prefill: {
+          name: contact?.name || '',
+          email: contact?.email || '',
+          contact: contact?.phone || '',
+        },
+      };
+    }
+
+    const razorpay = await getRazorpayInstance();
+    if (!razorpay) throw new AppError('Payment not configured', 503);
+
     const order = await Order.create({
       order_id: orderId,
       user_id: userId,
@@ -454,13 +525,12 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
       original_amount: originalAmount,
       coupon_code: couponResult ? couponResult.coupon.code : null,
       coupon_discount: discountAmount,
-      amount: grandTotal,             // GST-inclusive grand total — what we actually charge
+      amount: grandTotal,
       currency,
       status: 'pending',
       affiliate: referralCode || null,
     });
 
-    // 5. Create Razorpay order using the GST-inclusive server-derived amount
     const rpOrder = await razorpay.orders.create({
       amount: amountPaise,
       currency,
@@ -475,7 +545,6 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
 
     await order.update({ razorpay_order_id: rpOrder.id });
 
-    // 6. Record coupon usage atomically AFTER the order row exists
     if (couponResult) {
       await recordCouponUsage(couponResult.coupon.id, userId, orderId, null);
     }
@@ -487,12 +556,14 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
 
     return {
       orderId,
+      free: false,
+      paid: false,
       razorpayOrderId: rpOrder.id,
-      amount: amountPaise,                                        // paise sent to Razorpay (GST-inclusive)
-      originalAmount: Math.round(originalAmount * 100),           // paise, pre-coupon price
-      discountAmount: Math.round(discountAmount * 100),           // paise, coupon saving
-      gstAmount: Math.round(gstAmount * 100),                     // paise, 18% GST
-      grandTotal: Math.round(grandTotal * 100),                   // paise, final charge
+      amount: amountPaise,
+      originalAmount: Math.round(originalAmount * 100),
+      discountAmount: Math.round(discountAmount * 100),
+      gstAmount: Math.round(gstAmount * 100),
+      grandTotal: Math.round(grandTotal * 100),
       currency,
       key: rpConfig?.key_id,
       prefill: {
@@ -688,7 +759,12 @@ async function listMyPurchases(userId) {
       enrolledBatch,
       purchaseDate: o.created_at,
       price: Number(o.amount) || 0,
-      paymentMethod: payment ? 'Razorpay' : o.gateway || 'Razorpay',
+      paymentMethod:
+        o.gateway === 'free' || Number(o.amount) === 0
+          ? 'Free'
+          : payment
+            ? 'Razorpay'
+            : o.gateway || 'Razorpay',
       transactionId: o.order_id || String(o.id),
       status: purchaseStatus,
       progress: 0,
@@ -762,6 +838,7 @@ async function getInvoice(userId, orderId) {
     }
   } catch { /* use defaults */ }
 
+  const isFree = p.gateway === 'free' || Number(p.amount) === 0;
   return {
     orderId: p.order_id,
     type: p.type,
@@ -775,7 +852,8 @@ async function getInvoice(userId, orderId) {
     currency: p.currency,
     status: p.status,
     paidAt: p.created_at,
-    paymentId: payment ? payment.razorpay_payment_id : null,
+    paymentId: payment && !isFree ? payment.razorpay_payment_id : null,
+    paymentMethod: isFree ? 'Free' : 'Razorpay',
   };
 }
 
