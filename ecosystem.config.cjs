@@ -164,6 +164,7 @@ const apps = [
       ...prod,
       ...mysql,
       PORT: '4006',
+      AUTH_SERVICE_URL: auth,
       INTERNAL_API_KEY: process.env.INTERNAL_API_KEY,
     }),
   },

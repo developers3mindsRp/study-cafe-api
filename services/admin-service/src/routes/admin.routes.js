@@ -1,6 +1,6 @@
 const controller = require('../controllers/admin.controller');
 const { requireAdmin, internalAuth } = require('../middleware');
-const { uploadImage: uploadImageMw } = require('../middleware/upload');
+const { uploadImage: uploadImageMw, uploadFile: uploadFileMw } = require('../middleware/upload');
 
 function register(router) {
   router.get('/admin/me', requireAdmin, controller.me);
@@ -107,6 +107,7 @@ function register(router) {
   router.get('/admin/platform/cms-pages/:slug', requireAdmin, p.getCmsPageBySlug);
   router.put('/admin/platform/cms-pages/:slug', requireAdmin, p.putCmsPage);
   router.post('/admin/upload', requireAdmin, uploadImageMw, controller.uploadImage);
+  router.post('/admin/upload-file', requireAdmin, uploadFileMw, controller.uploadFile);
 
   // ── Media assets (icons library) ────────────────────────────────────
   router.get('/admin/platform/contact-inquiries', requireAdmin, p.contactInquiries);

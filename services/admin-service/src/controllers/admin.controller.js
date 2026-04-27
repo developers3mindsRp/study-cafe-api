@@ -410,6 +410,22 @@ const uploadImage = asyncHandler(async (req, res) => {
   sendSuccess(res, payload);
 });
 
+const uploadFile = asyncHandler(async (req, res) => {
+  if (!req.file || !req.file.buffer) throw new AppError('No file uploaded', 400);
+  const form = new FormData();
+  form.append('file', req.file.buffer, {
+    filename: req.file.originalname || 'file.pdf',
+    contentType: req.file.mimetype,
+  });
+  const { data } = await platformClient.post('/internal/platform/upload/file', form, {
+    headers: form.getHeaders(),
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity,
+  });
+  const payload = data?.success === true && data?.data !== undefined ? data.data : data;
+  sendSuccess(res, payload);
+});
+
 // ── Affiliate proxy handlers ───────────────────────────────────────
 
 const getAffiliateHistory = asyncHandler(async (req, res) => {
@@ -487,6 +503,7 @@ module.exports = {
   checkCouponCodeExists,
   platform,
   uploadImage,
+  uploadFile,
   getAffiliateHistory,
   getWithdrawalRequests,
   getAffiliateBalance,
