@@ -77,6 +77,12 @@ function register(app) {
     changeOrigin: true,
     pathRewrite: { '^/api/certificates': '/certificates' },
   });
+  /** Learner course reviews (POST /reviews, GET /reviews/me/course/:courseId) */
+  const courseReviewsUserProxy = createProxyMiddleware({
+    target: config.courseServiceUrl,
+    changeOrigin: true,
+    pathRewrite: { '^/api/reviews': '/reviews' },
+  });
 
   const injectUserId = (req, _res, next) => {
     const uid = req.user?.userId ?? req.user?.id;
@@ -102,17 +108,14 @@ function register(app) {
   app.get('/api/courses/slug/:slug', optionalJWT, injectOptionalUserId, courseProxy);
   app.get('/api/courses/slug/:slug/sessions', optionalJWT, injectOptionalUserId, courseProxy);
   app.get('/api/courses', optionalJWT, injectOptionalUserId, courseProxy);
+  app.get('/api/courses/:courseId/reviews', optionalJWT, injectOptionalUserId, courseProxy);
   app.get('/api/courses/:id', optionalJWT, injectOptionalUserId, courseProxy);
   app.get('/api/courses/:id/sessions', validateJWT, requireCourseAccess, courseProxy);
     app.get('/api/courses/:id/materials', validateJWT, requireCourseAccess, courseProxy);
-  app.get('/api/certificates/verify/:token', certificateProxy);
-  app.get(
-    '/api/certificates/course/:courseId/download',
-    validateJWT,
-    injectUserId,
-    certificateProxy
-  );
+  /** Certificate metadata for client-rendered certificates (courseTitle, studentName, completionDate). */
+  app.get('/api/certificates/course/:courseId', validateJWT, injectUserId, certificateProxy);
   app.use('/api/progress', validateJWT, injectUserId, progressProxy);
+  app.use('/api/reviews', validateJWT, injectUserId, courseReviewsUserProxy);
   app.post('/api/orders/webhook/razorpay', orderProxy);
   app.get('/api/coupons', orderProxy);
   const injectOrderUserId = (req, _res, next) => {
