@@ -408,11 +408,35 @@ async function getFooterInternal() {
   return rows.map((r) => r.get({ plain: true }));
 }
 
+/**
+ * Footer dynamic keys (footer_data.data_key) — public GET /platform/footer returns
+ * flat { [key]: data_value } plus optional [key]_meta for row.meta.
+ *
+ * copyright       — plain text (e.g. legal line)
+ * tagline         — plain text under logo
+ * social_links    — JSON string { twitter, instagram, linkedin, facebook, youtube, telegram }
+ * app_links       — JSON string { googlePlay, appStore }
+ * important_links — JSON string [{ title, url, column: 1|2 }, ...]
+ */
+function normalizeFooterDataValue(v) {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  if (typeof v === 'string') return v;
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
 async function upsertFooter(key, data) {
-  const { data_value, meta } = data;
+  let { data_value, meta } = data;
+  if (data_value !== undefined) {
+    data_value = normalizeFooterDataValue(data_value);
+  }
   const [row, created] = await FooterData.findOrCreate({
     where: { data_key: key },
-    defaults: { data_value: data_value ?? null, meta: meta || null },
+    defaults: {
+      data_value: data_value ?? null,
+      meta: meta !== undefined ? meta : null,
+    },
   });
   if (!created) {
     await row.update({

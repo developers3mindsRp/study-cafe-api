@@ -215,7 +215,7 @@ For admin routes, use the admin-service base URL and pass a valid admin JWT in `
 - `PUT /admin/platform/seo-metadata/:id`
 - `DELETE /admin/platform/seo-metadata/:id`
 - `GET /admin/platform/footer`
-- `PUT /admin/platform/footer/:key`
+- `PUT /admin/platform/footer/:key` — body: `{ "data_value": string | object | array, "meta"?: object }`. Objects/arrays are JSON-stringified for the `footer_data.data_value` TEXT column. Common `data_key` values: `copyright`, `tagline`, `social_links` (JSON object with `twitter`, `instagram`, `linkedin`, `facebook`, `youtube`, `telegram`), `app_links` (`googlePlay`, `appStore`), `important_links` (array of `{ title, url, column: 1|2 }`). Public: `GET /platform/footer` returns a flat map of keys to stored string values.
 - `GET /admin/platform/plans`
 - `GET /admin/platform/plans/:id`
 - `POST /admin/platform/plans`

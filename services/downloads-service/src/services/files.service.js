@@ -70,6 +70,8 @@ const filesService = {
       sortBy: resolvedSortBy,
       sortOrder: resolvedSortOrder,
       include: includeOptions,
+      distinct: true,
+      col: 'id',
     });
   },
 
@@ -114,6 +116,8 @@ const filesService = {
       sortOrder,
       attributes: PUBLIC_FILE_ATTRS,
       include: includeOptions,
+      distinct: true,
+      col: 'id',
     });
   },
 
