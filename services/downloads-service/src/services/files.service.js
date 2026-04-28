@@ -51,6 +51,8 @@ const filesService = {
       sortBy: resolvedSortBy,
       sortOrder: resolvedSortOrder,
       include: includeOptions,
+      distinct: true,
+      col: 'id',
     });
   },
 
@@ -94,6 +96,8 @@ const filesService = {
       sortBy,
       sortOrder,
       include: includeOptions,
+      distinct: true,
+      col: 'id',
     });
   },
 

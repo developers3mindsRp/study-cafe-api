@@ -23,6 +23,9 @@ async function paginate(model, options = {}) {
     sortOrder = 'DESC',
     attributes,
     include,
+    distinct,
+    col,
+    subQuery,
   } = options;
 
   const safePage = Math.max(1, parseInt(String(page), 10) || 1);
@@ -43,6 +46,9 @@ async function paginate(model, options = {}) {
     order: order.length ? order : undefined,
     ...(attributes && { attributes }),
     ...(include && { include }),
+    ...(typeof distinct === 'boolean' && { distinct }),
+    ...(col && { col }),
+    ...(typeof subQuery === 'boolean' && { subQuery }),
   };
 
   const { count, rows } = await model.findAndCountAll(findOptions);

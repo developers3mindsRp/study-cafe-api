@@ -156,8 +156,11 @@ const updateArticleCategory = {
 const upsertFooter = {
     params: keyParam.params,
     body: Joi.object({
-        value: Joi.alternatives().try(Joi.string(), Joi.object(), Joi.array()).required(),
-    }),
+        data_value: Joi.alternatives().try(Joi.string(), Joi.object(), Joi.array()).allow(null),
+        meta: Joi.object().unknown(true).allow(null),
+    })
+        .min(1)
+        .messages({ 'object.min': 'body must include at least one of data_value, meta' }),
 };
 
 // ── Plans ───────────────────────────────────────────────────────────
