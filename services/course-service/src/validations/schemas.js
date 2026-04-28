@@ -209,8 +209,52 @@ const updatePageSetting = {
     }),
 };
 
+const courseIdParamCourseReviews = {
+    params: Joi.object({
+        courseId: Joi.number().integer().positive().required(),
+    }),
+};
+
+const submitCourseReviewBody = {
+    body: Joi.object({
+        courseId: Joi.number().integer().positive().required(),
+        rating: Joi.number().integer().min(1).max(5).required(),
+        body: Joi.string().max(8000).allow('', null),
+    }),
+};
+
+const listCourseReviewsQuery = {
+    query: Joi.object({
+        page: Joi.number().integer().min(1).optional(),
+        limit: Joi.number().integer().min(1).max(100).optional(),
+        course_id: Joi.number().integer().positive().optional(),
+    }),
+};
+
+const updateCourseReview = {
+    params: Joi.object({
+        id: Joi.number().integer().positive().required(),
+    }),
+    body: Joi.object({
+        rating: Joi.number().integer().min(1).max(5),
+        body: Joi.string().max(8000).allow('', null),
+    }).min(1),
+};
+
+/** GET /certificates/course/:courseId */
+const certificateCourseIdParam = {
+    params: Joi.object({
+        courseId: Joi.number().integer().positive().required(),
+    }),
+};
+
 module.exports = {
     idParam,
+    certificateCourseIdParam,
+    courseIdParamCourseReviews,
+    submitCourseReviewBody,
+    listCourseReviewsQuery,
+    updateCourseReview,
     createCourse,
     updateCourse,
     createBatch,

@@ -3,6 +3,7 @@ const { createApp } = require('./app');
 const { connect } = require('./models');
 
 const app = createApp();
+
 connect()
   .then(() => {
     app.listen(config.port, () =>

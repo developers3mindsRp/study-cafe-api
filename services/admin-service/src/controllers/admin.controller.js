@@ -480,6 +480,42 @@ const uploadFile = asyncHandler(async (req, res) => {
   sendSuccess(res, payload);
 });
 
+// ── Course reviews (course-service) ─────────────────────────────────
+
+const getCourseReviews = asyncHandler(async (req, res) => {
+  const p = (await courseClient.get('/internal/course-reviews', { params: req.query })).data;
+  sendPaginated(res, {
+    data: p.data,
+    meta: {
+      total: p.total,
+      page: p.page,
+      limit: p.limit,
+      totalPages: p.totalPages,
+      hasNextPage: p.hasNextPage,
+      hasPreviousPage: p.hasPreviousPage,
+    },
+  });
+});
+
+const getCourseReviewById = asyncHandler(async (req, res) => {
+  const { data } = await courseClient.get(`/internal/course-reviews/${req.params.id}`);
+  sendSuccess(res, data);
+});
+
+const patchCourseReview = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await courseClient.patch(`/internal/course-reviews/${req.params.id}`, req.body);
+  await adminLogsService.logAction(adminId, 'UPDATE_COURSE_REVIEW', 'course_review', req.params.id, {}, req.ip);
+  sendSuccess(res, data);
+});
+
+const deleteCourseReview = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  await courseClient.delete(`/internal/course-reviews/${req.params.id}`);
+  await adminLogsService.logAction(adminId, 'DELETE_COURSE_REVIEW', 'course_review', req.params.id, {}, req.ip);
+  sendNoContent(res);
+});
+
 // ── Affiliate proxy handlers ───────────────────────────────────────
 
 const getAffiliateHistory = asyncHandler(async (req, res) => {
@@ -563,4 +599,8 @@ module.exports = {
   getAffiliateBalance,
   createWithdrawalRequest,
   updateWithdrawalStatus,
+  getCourseReviews,
+  getCourseReviewById,
+  patchCourseReview,
+  deleteCourseReview,
 };

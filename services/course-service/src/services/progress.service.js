@@ -3,7 +3,6 @@ const { QueryTypes } = require('sequelize');
 const { UserCourseProgress, Session, Recording, Batch, sequelize } = require('../models');
 const coursesService = require('./courses.service');
 const { checkCourseAccess } = require('./accessClient');
-const certificateService = require('./certificate.service');
 
 async function ensureAccessAndBatch(courseId, userId, authHeader) {
   const allowed = await checkCourseAccess(authHeader, courseId);
@@ -211,21 +210,9 @@ async function completeSession(sessionId, userId, authHeader) {
     },
   });
 
-  let certificate = null;
-  if (total > 0 && completedRows >= total) {
-    const course = await coursesService.getByIdInternal(courseId);
-    const title = course?.title || 'Course';
-    certificate = await certificateService.issueCertificateIfEligible({
-      userId,
-      courseId,
-      courseTitle: title,
-    });
-  }
-
   return {
     progress: row.get({ plain: true }),
     courseCompleted: total > 0 && completedRows >= total,
-    certificate,
   };
 }
 
