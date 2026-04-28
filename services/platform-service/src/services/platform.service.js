@@ -85,7 +85,7 @@ function normalizeStructuredFeatures(raw) {
   return { mrp: 0, included: lines, excluded: [] };
 }
 
-const { paginate } = require('../../../../shared');
+const { paginate, AppError } = require('../../../../shared');
 const {
   sequelize,
   CmsPage,
@@ -109,6 +109,7 @@ const {
   Court,
   MediaAsset,
   ContactInquiry,
+  SeoMetadata,
 } = require('../models');
 
 /** Get display_name for one author from users table (same DB). */
@@ -1736,6 +1737,47 @@ async function getContactInquiry() {
 }
 // ── SEO Metadata ───────────────────────────────────────────────────
 
+function normalizeSlugCandidates(slug) {
+  const raw = String(slug || '').trim();
+  if (!raw) return [];
+  const withSlash = raw.startsWith('/') ? raw : `/${raw}`;
+  const withoutSlash = withSlash.slice(1);
+  return [...new Set([raw, withSlash, withoutSlash].filter(Boolean))];
+}
+
+function canonicalSlug(slug) {
+  const raw = String(slug || '').trim();
+  if (!raw) return '';
+  return raw.startsWith('/') ? raw : `/${raw}`;
+}
+
+async function checkSlugNotUsedByModule(slug) {
+  const candidates = normalizeSlugCandidates(slug);
+  if (!candidates.length) return { conflict: false };
+
+  const articleMatch = await Article.findOne({
+    where: { slug: { [Op.in]: candidates } },
+    attributes: ['slug'],
+    raw: true,
+  });
+  if (articleMatch?.slug) {
+    return { conflict: true, type: 'article', slug: articleMatch.slug };
+  }
+
+  const courseRows = await sequelize.query(
+    'SELECT slug FROM courses WHERE slug IN (:slugs) LIMIT 1',
+    {
+      replacements: { slugs: candidates },
+      type: QueryTypes.SELECT,
+    }
+  );
+  if (courseRows?.length) {
+    return { conflict: true, type: 'course', slug: courseRows[0].slug };
+  }
+
+  return { conflict: false };
+}
+
 async function getSeoMetadataInternal() {
   const rows = await SeoMetadata.findAll({ order: [['id', 'DESC']] });
   return rows.map((r) => r.get({ plain: true }));
@@ -1747,11 +1789,26 @@ async function getSeoMetadataByIdInternal(id) {
 }
 
 async function getSeoMetadataBySlugPublic(slug) {
-  const row = await SeoMetadata.findOne({ where: { page_slug: slug } });
+  // Normalize: try exact match first, then with leading slash, then without
+  const candidates = [
+    slug,
+    slug.startsWith('/') ? slug : `/${slug}`,
+    slug.startsWith('/') ? slug.slice(1) : slug,
+  ];
+  const { Op } = require('sequelize');
+  const row = await SeoMetadata.findOne({ where: { page_slug: { [Op.in]: candidates } } });
   return row ? row.get({ plain: true }) : null;
 }
 
 async function createSeoMetadata(data) {
+  const conflict = await checkSlugNotUsedByModule(data.page_slug);
+  if (conflict.conflict) {
+    throw new AppError(
+      `Slug '${conflict.slug}' is already used by a ${conflict.type}. Use the ${conflict.type}'s own SEO meta fields instead.`,
+      409
+    );
+  }
+
   const row = await SeoMetadata.create({
     page_name: data.page_name,
     page_slug: data.page_slug,
@@ -1770,6 +1827,21 @@ async function createSeoMetadata(data) {
 async function updateSeoMetadata(id, data) {
   const row = await SeoMetadata.findByPk(id);
   if (!row) return null;
+
+  if (data.page_slug !== undefined) {
+    const existingSlug = row.get('page_slug');
+    const slugUnchanged = canonicalSlug(existingSlug) === canonicalSlug(data.page_slug);
+    if (!slugUnchanged) {
+      const conflict = await checkSlugNotUsedByModule(data.page_slug);
+      if (conflict.conflict) {
+        throw new AppError(
+          `Slug '${conflict.slug}' is already used by a ${conflict.type}. Use the ${conflict.type}'s own SEO meta fields instead.`,
+          409
+        );
+      }
+    }
+  }
+
   await row.update({
     ...(data.page_name !== undefined && { page_name: data.page_name }),
     ...(data.page_slug !== undefined && { page_slug: data.page_slug }),

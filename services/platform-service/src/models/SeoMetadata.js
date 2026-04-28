@@ -24,6 +24,26 @@ module.exports = (sequelize) => {
             type: DataTypes.TEXT,
             allowNull: true,
         },
+        meta_keywords: {
+            type: DataTypes.STRING(500),
+            allowNull: true,
+        },
+        canonical_url: {
+            type: DataTypes.STRING(1000),
+            allowNull: true,
+        },
+        og_title: {
+            type: DataTypes.STRING(255),
+            allowNull: true,
+        },
+        og_description: {
+            type: DataTypes.TEXT,
+            allowNull: true,
+        },
+        og_image_url: {
+            type: DataTypes.STRING(1000),
+            allowNull: true,
+        },
         robots: {
             type: DataTypes.STRING(255),
             allowNull: true,
@@ -32,6 +52,8 @@ module.exports = (sequelize) => {
     }, {
         tableName: 'seo_metadata',
         timestamps: true,
+        createdAt: 'created_at',
+        updatedAt: 'updated_at',
     });
 
     return SeoMetadata;
