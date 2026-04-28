@@ -42,6 +42,40 @@ function stripCurriculumVideos(course) {
   return { ...course, curriculum: stripped };
 }
 
+function withCourseMetaDetail(course) {
+  const title = (course?.title || "").trim();
+  const fallbackDescription =
+    typeof course?.brief_description === "string" && course.brief_description.trim()
+      ? course.brief_description.trim()
+      : typeof course?.description === "string"
+      ? course.description
+      : "";
+
+  const metaTitle =
+    typeof course?.meta_title === "string" && course.meta_title.trim()
+      ? course.meta_title.trim()
+      : title;
+  const metaDescription =
+    typeof course?.meta_description === "string" && course.meta_description.trim()
+      ? course.meta_description.trim()
+      : fallbackDescription;
+  const metaKeywords =
+    typeof course?.meta_keywords === "string" && course.meta_keywords.trim()
+      ? course.meta_keywords.trim()
+      : typeof course?.keywords === "string" && course.keywords.trim()
+      ? course.keywords.trim()
+      : "";
+
+  return {
+    ...course,
+    meta_detail: {
+      meta_title: metaTitle,
+      meta_description: metaDescription,
+      meta_keywords: metaKeywords,
+    },
+  };
+}
+
 /** One curriculum section can have multiple recordings (videos[] / recordings[] / legacy videoId). */
 function collectVideoUrlsFromSection(sec) {
   const out = [];
@@ -394,12 +428,12 @@ const coursesService = {
       });
     }
 
-    const result = {
+    const result = withCourseMetaDetail({
       ...enriched,
       batches,
       materials: materials.map((m) => m.get({ plain: true })),
       categories,
-    };
+    });
     if (!allowed) return stripCurriculumVideos(result);
     return result;
   },
@@ -438,12 +472,12 @@ const coursesService = {
       });
     }
 
-    const result = {
+    const result = withCourseMetaDetail({
       ...enriched,
       batches,
       materials: materials.map((m) => m.get({ plain: true })),
       categories,
-    };
+    });
     if (!allowed) return stripCurriculumVideos(result);
     return result;
   },
