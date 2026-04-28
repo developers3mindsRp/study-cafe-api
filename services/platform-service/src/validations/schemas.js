@@ -367,10 +367,18 @@ const sendNewsletter = {
     }),
 };
 
+/** Full URL path SEO lookup (?path=/blogs/foo), avoids single-segment :slug limitation */
+const seoByPathQuery = {
+    query: Joi.object({
+        path: Joi.string().max(500).default('/'),
+    }),
+};
+
 module.exports = {
     idParam,
     slugParam,
     keyParam,
+    seoByPathQuery,
     upsertHomePage,
     createState,
     updateState,
