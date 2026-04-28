@@ -69,6 +69,13 @@ const createMyWithdrawal = asyncHandler(async (req, res) => {
   sendCreated(res, request);
 });
 
+const getMyWithdrawals = asyncHandler(async (req, res) => {
+  const userId = req.headers['x-user-id'];
+  if (!userId) throw new AppError('Authentication required', 401);
+  const data = await affiliateService.getMyWithdrawals(userId);
+  sendSuccess(res, data);
+});
+
 module.exports = {
   getHistory,
   getWithdrawals,
@@ -80,4 +87,5 @@ module.exports = {
   getMyCommissionOrders,
   getMyReferralLinks,
   createMyWithdrawal,
+  getMyWithdrawals,
 };

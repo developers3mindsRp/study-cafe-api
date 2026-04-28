@@ -6,8 +6,22 @@ const {
   sequelize 
 } = require("../models");
 const { QueryTypes, Op } = require("sequelize");
+const { logger } = require("../../../../shared");
 
-const MEMBERSHIP_COMMISSION_PERCENT = 10;
+/** Match order-service normalization: trim + uppercase (referral hex codes are stored uppercase). */
+function normalizeReferralCodeInput(code) {
+  if (code == null) return "";
+  const s = String(code).trim();
+  if (!s) return "";
+  return s.toUpperCase();
+}
+
+async function sumPendingWithdrawals(affiliateNumericId) {
+  const raw = await WithdrawalRequest.sum("amount", {
+    where: { affiliate_id: affiliateNumericId, status: "pending" },
+  });
+  return Math.round((parseFloat(raw || 0) || 0) * 100) / 100;
+}
 
 const affiliateService = {
   /**
@@ -97,23 +111,47 @@ const affiliateService = {
    * Get balance for an affiliate.
    */
   async getBalance(affiliateId) {
+    const id = Number(affiliateId);
+    if (!Number.isFinite(id)) {
+      const err = new Error('Invalid affiliate id');
+      err.statusCode = 400;
+      throw err;
+    }
     const [balance] = await AffiliateBalance.findOrCreate({
-      where: { affiliate_id: affiliateId },
-      defaults: { affiliate_id: affiliateId, total_earned: 0, total_withdrawn: 0, current_balance: 0 }
+      where: { affiliate_id: id },
+      defaults: { affiliate_id: id, total_earned: 0, total_withdrawn: 0, current_balance: 0 }
     });
     return balance;
   },
 
   /**
-   * Create a withdrawal request.
+   * Create a withdrawal request (user or admin).
+   * Reserves against pending requests so available = current_balance − sum(pending).
    */
   async createWithdrawal(data) {
-    const { affiliate_id, amount } = data;
-    
-    // Check balance
+    const affiliate_id = Number(data.affiliate_id);
+    const amount = parseFloat(data.amount);
+    if (!Number.isFinite(affiliate_id)) {
+      const err = new Error("Invalid affiliate");
+      err.statusCode = 400;
+      throw err;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      const err = new Error("Amount must be greater than zero");
+      err.statusCode = 400;
+      throw err;
+    }
+
     const balance = await this.getBalance(affiliate_id);
-    if (parseFloat(balance.current_balance) < parseFloat(amount)) {
-      const err = new Error('Insufficient balance');
+    const pendingTotal = await sumPendingWithdrawals(affiliate_id);
+    const current = parseFloat(balance.current_balance);
+    const available = Math.round((current - pendingTotal) * 100) / 100;
+    if (amount > available + 1e-6) {
+      const err = new Error(
+        available <= 0
+          ? "No balance available (funds may be reserved for pending withdrawals)"
+          : `Maximum you can request now is ₹${available.toFixed(2)}`
+      );
       err.statusCode = 400;
       throw err;
     }
@@ -121,10 +159,24 @@ const affiliateService = {
     const request = await WithdrawalRequest.create({
       affiliate_id,
       amount,
-      status: 'pending'
+      status: "pending",
     });
 
     return request;
+  },
+
+  /**
+   * User-facing: withdrawal requests for one affiliate (newest first).
+   */
+  async getMyWithdrawals(affiliateId) {
+    const uid = Number(affiliateId);
+    if (!Number.isFinite(uid)) return [];
+    const rows = await WithdrawalRequest.findAll({
+      where: { affiliate_id: uid },
+      order: [["created_at", "DESC"]],
+      limit: 200,
+    });
+    return rows.map((r) => r.get({ plain: true }));
   },
 
   /**
@@ -162,31 +214,96 @@ const affiliateService = {
    * Idempotent — skips if order_id already has a commission entry.
    */
   async recordCommission({ userId, orderId, type, entityId, amount, referralCode }) {
-    const existing = await AffiliateHistory.findOne({ where: { order_id: orderId } });
+    const buyerId = Number(userId);
+    if (!Number.isFinite(buyerId)) {
+      logger.warn(`[recordCommission] skip invalid userId=${userId}`);
+      return null;
+    }
+
+    const orderKey = orderId != null ? String(orderId) : "";
+    const existing = orderKey
+      ? await AffiliateHistory.findOne({ where: { order_id: orderKey } })
+      : null;
     if (existing) return existing;
 
-    const referrer = await sequelize.query(
-      `SELECT id FROM users WHERE referral_code = :code LIMIT 1`,
-      { replacements: { code: referralCode }, type: QueryTypes.SELECT }
-    );
-    if (!referrer.length) return null;
+    const amt = parseFloat(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      logger.warn(`[recordCommission] skip order=${orderKey} invalid amount=${amount}`);
+      return null;
+    }
 
-    const affiliateId = referrer[0].id;
-    if (String(affiliateId) === String(userId)) return null;
+    const code = normalizeReferralCodeInput(referralCode);
+    if (!code) {
+      logger.warn(`[recordCommission] skip order=${orderKey} empty referralCode`);
+      return null;
+    }
+
+    const referrer = await sequelize.query(
+      `SELECT id FROM users WHERE UPPER(TRIM(COALESCE(referral_code, ''))) = :code LIMIT 1`,
+      { replacements: { code }, type: QueryTypes.SELECT }
+    );
+    if (!referrer.length) {
+      logger.warn(`[recordCommission] skip order=${orderKey} no user for referral code (normalized)`);
+      return null;
+    }
+
+    const affiliateId = Number(referrer[0].id);
+    if (!Number.isFinite(affiliateId)) {
+      logger.warn(`[recordCommission] skip order=${orderKey} invalid referrer id`);
+      return null;
+    }
+    if (affiliateId === buyerId) {
+      logger.warn(`[recordCommission] skip order=${orderKey} self-referral affiliateId=${affiliateId}`);
+      return null;
+    }
 
     let commissionAmount = 0;
     let courseId = null;
 
     if (type === 'course') {
       courseId = Number(entityId);
+      if (!Number.isFinite(courseId)) {
+        logger.warn(`[recordCommission] skip order=${orderKey} invalid course entityId=${entityId}`);
+        return null;
+      }
       const course = await Course.findByPk(courseId, { attributes: ['affiliate_commission'] });
       const pct = course ? parseFloat(course.affiliate_commission) : 0;
-      commissionAmount = pct > 0 ? (amount * pct) / 100 : 0;
+      commissionAmount = pct > 0 ? (amt * pct) / 100 : 0;
+      if (commissionAmount <= 0) {
+        logger.warn(
+          `[recordCommission] skip order=${orderKey} courseId=${courseId} affiliate_commission pct=${pct} (set in admin)`
+        );
+        return null;
+      }
     } else if (type === 'membership') {
-      commissionAmount = (amount * MEMBERSHIP_COMMISSION_PERCENT) / 100;
+      const planId = Number(entityId);
+      if (!Number.isFinite(planId)) {
+        logger.warn(`[recordCommission] skip order=${orderKey} invalid plan entityId=${entityId}`);
+        return null;
+      }
+      let pct = 0;
+      try {
+        const planRows = await sequelize.query(
+          `SELECT affiliate_commission FROM premium_plans WHERE id = :planId LIMIT 1`,
+          { replacements: { planId }, type: QueryTypes.SELECT },
+        );
+        pct = planRows.length ? parseFloat(planRows[0].affiliate_commission) : 0;
+      } catch (e) {
+        logger.error(`[recordCommission] premium_plans query failed planId=${planId}: ${e.message}`);
+        throw e;
+      }
+      commissionAmount = pct > 0 ? (amt * pct) / 100 : 0;
+      if (commissionAmount <= 0) {
+        logger.warn(
+          `[recordCommission] skip order=${orderKey} planId=${planId} affiliate_commission pct=${pct} (set in admin / DB column)`
+        );
+        return null;
+      }
+    } else {
+      logger.warn(`[recordCommission] skip order=${orderKey} unknown type=${type}`);
+      return null;
     }
 
-    if (commissionAmount <= 0) return null;
     commissionAmount = Math.round(commissionAmount * 100) / 100;
 
     const t = await sequelize.transaction();
@@ -195,10 +312,10 @@ const affiliateService = {
         course_id: courseId,
         entity_type: type,
         entity_id: String(entityId),
-        user_id: userId,
+        user_id: buyerId,
         affiliate_id: affiliateId,
-        order_id: orderId,
-        order_amount: amount,
+        order_id: orderKey,
+        order_amount: amt,
         commission_amount: commissionAmount,
         status: 'confirmed',
       }, { transaction: t });
@@ -214,6 +331,9 @@ const affiliateService = {
       }, { transaction: t });
 
       await t.commit();
+      logger.info(
+        `[recordCommission] credited order=${orderKey} affiliateId=${affiliateId} commission=${commissionAmount} type=${type}`
+      );
       return record;
     } catch (err) {
       await t.rollback();
@@ -226,19 +346,43 @@ const affiliateService = {
    * User-facing: get affiliate stats and history for a specific user.
    */
   async getMyAffiliateData(userId) {
+    const uid = Number(userId);
+    if (!Number.isFinite(uid)) {
+      logger.warn(`[getMyAffiliateData] invalid userId=${userId}`);
+      return {
+        balance: { affiliate_id: null, total_earned: 0, total_withdrawn: 0, current_balance: 0 },
+        pending_withdrawal_total: 0,
+        available_for_withdrawal: 0,
+        totalOrders: 0,
+        totalOrderValue: 0,
+        totalCommission: 0,
+        history: [],
+      };
+    }
+
     const [balance] = await AffiliateBalance.findOrCreate({
-      where: { affiliate_id: userId },
-      defaults: { affiliate_id: userId, total_earned: 0, total_withdrawn: 0, current_balance: 0 },
+      where: { affiliate_id: uid },
+      defaults: { affiliate_id: uid, total_earned: 0, total_withdrawn: 0, current_balance: 0 },
     });
 
+    const pendingWithdrawalTotal = await sumPendingWithdrawals(uid);
+    const balPlain = balance.get({ plain: true });
+    const currentBal = parseFloat(balPlain.current_balance || 0);
+    const availableForWithdrawal = Math.max(
+      0,
+      Math.round((currentBal - pendingWithdrawalTotal) * 100) / 100
+    );
+
     const history = await AffiliateHistory.findAll({
-      where: { affiliate_id: userId },
+      where: { affiliate_id: uid },
       order: [['created_at', 'DESC']],
     });
 
     if (history.length === 0) {
       return {
-        balance: balance.get({ plain: true }),
+        balance: balPlain,
+        pending_withdrawal_total: pendingWithdrawalTotal,
+        available_for_withdrawal: availableForWithdrawal,
         totalOrders: 0,
         totalOrderValue: 0,
         totalCommission: parseFloat(balance.total_earned),
@@ -281,7 +425,9 @@ const affiliateService = {
     const totalOrderValue = enriched.reduce((s, h) => s + parseFloat(h.order_amount || 0), 0);
 
     return {
-      balance: balance.get({ plain: true }),
+      balance: balPlain,
+      pending_withdrawal_total: pendingWithdrawalTotal,
+      available_for_withdrawal: availableForWithdrawal,
       totalOrders: enriched.length,
       totalOrderValue: Math.round(totalOrderValue * 100) / 100,
       totalCommission: parseFloat(balance.total_earned),
@@ -293,7 +439,10 @@ const affiliateService = {
    * User-facing: get commission history with date filtering.
    */
   async getMyCommissionOrders(userId, { from, to } = {}) {
-    const where = { affiliate_id: userId };
+    const uid = Number(userId);
+    if (!Number.isFinite(uid)) return [];
+
+    const where = { affiliate_id: uid };
     if (from || to) {
       where.created_at = {};
       if (from) where.created_at[Op.gte] = new Date(from);

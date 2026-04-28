@@ -664,6 +664,11 @@ const coursesService = {
         ]
       : [];
 
+    const affiliatePct =
+      data.affiliate_commission !== undefined && data.affiliate_commission !== null
+        ? Number(data.affiliate_commission)
+        : 0;
+
     const row = await Course.create({
       title: data.title || "",
       short_title: data.short_title || null,
@@ -694,6 +699,7 @@ const coursesService = {
       is_published: !!data.is_published,
       start_date: data.start_date || null,
       end_date: data.end_date || null,
+      affiliate_commission: Number.isFinite(affiliatePct) ? affiliatePct : 0,
     });
     const plain = row.get({ plain: true });
     await this.upsertPrimaryAuthorProfile(plain.id, data);
@@ -744,6 +750,7 @@ const coursesService = {
       "is_published",
       "start_date",
       "end_date",
+      "affiliate_commission",
     ];
     const updatePayload = {};
     for (const field of updatableFields) {

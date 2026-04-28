@@ -48,6 +48,7 @@ const createCourse = {
         author_bio: Joi.string().max(200).allow('', null),
         author_image: Joi.string().max(500).allow('', null),
         course_cat_ids: Joi.array().items(Joi.number().integer().positive()),
+        affiliate_commission: Joi.number().min(0).max(100),
     }),
 };
 
@@ -90,6 +91,7 @@ const updateCourse = {
         author_bio: Joi.string().max(200).allow('', null),
         author_image: Joi.string().max(500).allow('', null),
         course_cat_ids: Joi.array().items(Joi.number().integer().positive()),
+        affiliate_commission: Joi.number().min(0).max(100),
     }),
 };
 

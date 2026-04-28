@@ -10,6 +10,14 @@ const { AppError, logger } = require('../../../../shared');
 // GST rate applied on top of the post-discount price before charging via Razorpay
 const GST_RATE = 0.18;
 
+/** Trim + uppercase so order row matches `users.referral_code` lookups in course-service. */
+function normalizeReferralForOrder(code) {
+  if (code == null) return null;
+  const s = String(code).trim();
+  if (!s) return null;
+  return s.toUpperCase();
+}
+
 function generateOrderId() {
   return 'ORD_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
 }
@@ -462,7 +470,7 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
             amount: grandTotal,
             currency,
             status: 'pending',
-            affiliate: referralCode || null,
+            affiliate: normalizeReferralForOrder(referralCode),
             gateway: 'free',
           },
           { transaction: t }
@@ -528,7 +536,7 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
       amount: grandTotal,
       currency,
       status: 'pending',
-      affiliate: referralCode || null,
+      affiliate: normalizeReferralForOrder(referralCode),
     });
 
     const rpOrder = await razorpay.orders.create({
