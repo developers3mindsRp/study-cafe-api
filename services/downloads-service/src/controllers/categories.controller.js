@@ -29,8 +29,8 @@ const remove = asyncHandler(async (req, res) => {
 
 const listFiles = asyncHandler(async (req, res) => {
   const { slug } = req.params;
-  const { page, limit } = req.query;
-  const result = await categoriesService.listFilesBySlug(slug, { page, limit });
+  const { page, limit, search } = req.query;
+  const result = await categoriesService.listFilesBySlug(slug, { page, limit, search });
   res.json({ success: true, ...result });
 });
 

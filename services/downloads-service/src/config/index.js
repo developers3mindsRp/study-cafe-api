@@ -2,6 +2,8 @@ module.exports = {
   port: parseInt(process.env.PORT || '4006', 10),
   serviceName: 'downloads-service',
   internalApiKey: process.env.INTERNAL_API_KEY || '',
+  /** auth-service base URL (must reach /auth/validate and /internal/users/:id/memberships) */
+  authServiceUrl: process.env.AUTH_SERVICE_URL || 'http://127.0.0.1:4001',
   mysql: {
     host: process.env.MYSQL_HOST || 'localhost',
     port: parseInt(process.env.MYSQL_PORT || '3306', 10),

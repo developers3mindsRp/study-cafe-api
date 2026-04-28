@@ -27,25 +27,23 @@ function resolveAssetsOrigin() {
   if (process.env.ASSETS_BASE_URL) {
     return process.env.ASSETS_BASE_URL.replace(/\/$/, '');
   }
-  if (process.env.NODE_ENV === 'production') {
-    return DEFAULT_PRODUCTION_ASSETS_ORIGIN;
-  }
-  return null;
+  return DEFAULT_PRODUCTION_ASSETS_ORIGIN;
 }
 
 /**
  * Public URL for a file under the uploads base (served at /uploads/ on assets host).
+ *
+ * Always returns an absolute URL so the value persisted in the database is the
+ * exact URL the frontend should render. Defaults to https://assets.studycafe.in;
+ * override with ASSETS_BASE_URL (e.g. for staging).
+ *
  * @param {string} relativePath - e.g. 2026/04/file.jpg
- * @param {'platform' | 'user'} whichApi - dev fallback: /api/uploads vs /api/user-uploads
+ * @param {'platform' | 'user'} [_whichApi] - retained for API compatibility (unused)
  */
-function publicMediaUrl(relativePath, whichApi) {
-  const rel = relativePath.replace(/^\/+/, '');
+function publicMediaUrl(relativePath, _whichApi) {
+  const rel = String(relativePath || '').replace(/^\/+/, '');
   const origin = resolveAssetsOrigin();
-  if (origin) {
-    return `${origin}/uploads/${rel}`;
-  }
-  const prefix = whichApi === 'user' ? '/api/user-uploads' : '/api/uploads';
-  return `${prefix}/${rel}`;
+  return `${origin}/uploads/${rel}`;
 }
 
 module.exports = {

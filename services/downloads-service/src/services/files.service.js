@@ -3,6 +3,25 @@ const { File, FileCat, FileCategory, sequelize } = require('../models');
 const { AppError, paginate } = require('../../../../shared');
 const { slugify } = require('../utils/slugify');
 
+/**
+ * Columns safe to expose to anonymous / non-member users.
+ * IMPORTANT: never includes `file_url` — that is gated behind active membership
+ * via `getSecureDownloadUrl()` and the protected route GET /api/downloads/files/:idOrSlug/url.
+ */
+const PUBLIC_FILE_ATTRS = [
+  'id',
+  'wp_post_id',
+  'title',
+  'slug',
+  'author_id',
+  'views',
+  'status',
+  'meta_title',
+  'meta_description',
+  'meta_keywords',
+  'created_at',
+];
+
 const filesService = {
   /**
    * Admin list — shows all statuses, accepts sortBy/sortOrder from DataTable.
@@ -95,6 +114,7 @@ const filesService = {
       limit,
       sortBy,
       sortOrder,
+      attributes: PUBLIC_FILE_ATTRS,
       include: includeOptions,
       distinct: true,
       col: 'id',
@@ -107,16 +127,62 @@ const filesService = {
 
     const file = await File.findOne({
       where,
+      attributes: PUBLIC_FILE_ATTRS,
       include: [{ model: FileCat, through: { attributes: [] } }],
     });
 
     if (!file) throw new AppError('File not found', 404);
 
-    await file.increment('views');
+    // Do not increment views here — GET runs during SSR and again on the client,
+    // which causes hydration mismatches. Use incrementViewCount via POST from the browser.
+    return file.get({ plain: true });
+  },
 
+  /**
+   * Increment view counter once (call from client after mount).
+   * @returns {{ views: number }}
+   */
+  async incrementViewCount(idOrSlug) {
+    const isNumeric = /^\d+$/.test(String(idOrSlug));
+    const where = isNumeric ? { id: Number(idOrSlug) } : { slug: String(idOrSlug) };
+
+    const file = await File.findOne({
+      where,
+      attributes: ['id', 'views', 'status'],
+    });
+    if (!file) throw new AppError('File not found', 404);
     const plain = file.get({ plain: true });
-    plain.views = (plain.views || 0) + 1;
-    return plain;
+    if (plain.status !== 'publish') throw new AppError('File not found', 404);
+
+    await file.increment('views', { by: 1 });
+    await file.reload();
+    return { views: file.views ?? 0 };
+  },
+
+  /**
+   * Returns the protected `file_url` for a file. Caller MUST have already
+   * verified that the requester is authenticated AND has an active membership.
+   * Throws 404 if the file does not exist or is not published.
+   */
+  async getSecureDownloadUrl(idOrSlug) {
+    const isNumeric = /^\d+$/.test(String(idOrSlug));
+    const where = isNumeric ? { id: Number(idOrSlug) } : { slug: String(idOrSlug) };
+
+    const file = await File.findOne({
+      where,
+      attributes: ['id', 'slug', 'title', 'file_url', 'status'],
+    });
+
+    if (!file) throw new AppError('File not found', 404);
+    const plain = file.get({ plain: true });
+    if (plain.status !== 'publish') throw new AppError('File not found', 404);
+
+    return {
+      id: plain.id,
+      slug: plain.slug,
+      title: plain.title,
+      url: plain.file_url,
+    };
   },
 
   async create({ title, slug: slugInput, file_url, author_id, category_ids = [], status = 'publish', meta_title, meta_description, meta_keywords }) {
@@ -221,3 +287,4 @@ const filesService = {
 };
 
 module.exports = filesService;
+module.exports.PUBLIC_FILE_ATTRS = PUBLIC_FILE_ATTRS;

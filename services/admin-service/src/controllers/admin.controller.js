@@ -5,8 +5,56 @@ const platformClient = require('../clients/platformClient');
 const authClient = require('../clients/authClient');
 const adminLogsService = require('../services/adminLogs.service');
 const paymentConfigService = require('../services/paymentConfig.service');
-const { Coupon } = require('../models');
+const { sequelize, Coupon } = require('../models');
 const { Op } = require('sequelize');
+
+/** Normalizes and validates coupon body for create/update. */
+function validateCouponPayload(body) {
+  const type = String(body.type || '').trim();
+  if (type !== 'Percentage' && type !== 'Amount') {
+    throw new AppError('Invalid coupon type', 400);
+  }
+  const value = Number(body.value);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new AppError('Discount value must be a positive number', 400);
+  }
+  if (type === 'Percentage' && value > 100) {
+    throw new AppError('Percentage discount cannot exceed 100', 400);
+  }
+  let max_discount = body.max_discount;
+  if (type === 'Amount') {
+    max_discount = null;
+  } else if (max_discount != null && max_discount !== '') {
+    const m = Number(max_discount);
+    if (!Number.isFinite(m) || m < 0) throw new AppError('Invalid maximum discount', 400);
+    max_discount = m;
+  } else {
+    max_discount = null;
+  }
+  if (body.min_order != null && body.min_order !== '') {
+    const mo = Number(body.min_order);
+    if (!Number.isFinite(mo) || mo < 0) throw new AppError('Invalid minimum order value', 400);
+  }
+  const start = body.start_date ? new Date(body.start_date) : null;
+  const end = body.expire_date ? new Date(body.expire_date) : null;
+  if (start && end && !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && end <= start) {
+    throw new AppError('Expiry date must be after start date', 400);
+  }
+  const code = body.code != null ? String(body.code).trim().toUpperCase() : '';
+  if (!code) throw new AppError('Coupon code is required', 400);
+  return {
+    code,
+    description: body.description != null ? body.description : null,
+    type,
+    value,
+    max_discount,
+    min_order: body.min_order != null && body.min_order !== '' ? Number(body.min_order) : null,
+    discount_on: body.discount_on,
+    start_date: body.start_date || null,
+    expire_date: body.expire_date || null,
+    status: body.status || 'publish',
+  };
+}
 const { getAdminId, getAdminRole } = require('../middleware');
 const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, sendPaginated } = require('../../../../shared');
 
@@ -268,8 +316,12 @@ function platformProxy(handler) {
     const result = await handler(platformClient, req);
     if (result.status === 204) return sendNoContent(res);
     if (result.status === 201) return sendCreated(res, result.data);
-    if (result.data && typeof result.data === 'object' && 'meta' in result.data) {
-      return sendPaginated(res, result.data);
+    // True paginated shape: { data, meta } (e.g. list + pagination).
+    // CMS page rows are { id, slug, title, content, meta } — a JSON `meta` field must NOT
+    // trigger this branch or the record is mangled and the admin form loads empty.
+    const d = result.data;
+    if (d && typeof d === 'object' && 'data' in d && 'meta' in d) {
+      return sendPaginated(res, d);
     }
     sendSuccess(res, result.data);
   });
@@ -291,14 +343,18 @@ const getCoupon = asyncHandler(async (req, res) => {
 });
 
 const postCoupon = asyncHandler(async (req, res) => {
-  const coupon = await Coupon.create(req.body);
+  const payload = validateCouponPayload(req.body);
+  const coupon = await Coupon.create(payload);
   sendCreated(res, coupon.get({ plain: true }));
 });
 
 const putCoupon = asyncHandler(async (req, res) => {
   const coupon = await Coupon.findByPk(req.params.id);
   if (!coupon) throw new AppError('Coupon not found', 404);
-  await coupon.update(req.body);
+  const merged = { ...coupon.get({ plain: true }), ...req.body };
+  const payload = validateCouponPayload(merged);
+  await coupon.update(payload);
+  await coupon.reload();
   sendSuccess(res, coupon.get({ plain: true }));
 });
 
@@ -311,16 +367,14 @@ const deleteCoupon = asyncHandler(async (req, res) => {
 
 const checkCouponCodeExists = asyncHandler(async (req, res) => {
   const { code, excludeId } = req.query;
-  if (!code) {
+  if (!code || !String(code).trim()) {
     return sendSuccess(res, { exists: false });
   }
 
-  const where = { code };
-  if (excludeId) {
-    where.id = { [Op.ne]: excludeId };
-  }
-
-  const existingCoupon = await Coupon.findOne({ where });
+  const normalized = String(code).trim().toLowerCase();
+  const clauses = [sequelize.where(sequelize.fn('lower', sequelize.col('code')), normalized)];
+  if (excludeId) clauses.push({ id: { [Op.ne]: excludeId } });
+  const existingCoupon = await Coupon.findOne({ where: { [Op.and]: clauses } });
   sendSuccess(res, { exists: !!existingCoupon });
 });
 
@@ -410,6 +464,22 @@ const uploadImage = asyncHandler(async (req, res) => {
   sendSuccess(res, payload);
 });
 
+const uploadFile = asyncHandler(async (req, res) => {
+  if (!req.file || !req.file.buffer) throw new AppError('No file uploaded', 400);
+  const form = new FormData();
+  form.append('file', req.file.buffer, {
+    filename: req.file.originalname || 'file.pdf',
+    contentType: req.file.mimetype,
+  });
+  const { data } = await platformClient.post('/internal/platform/upload/file', form, {
+    headers: form.getHeaders(),
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity,
+  });
+  const payload = data?.success === true && data?.data !== undefined ? data.data : data;
+  sendSuccess(res, payload);
+});
+
 // ── Affiliate proxy handlers ───────────────────────────────────────
 
 const getAffiliateHistory = asyncHandler(async (req, res) => {
@@ -487,6 +557,7 @@ module.exports = {
   checkCouponCodeExists,
   platform,
   uploadImage,
+  uploadFile,
   getAffiliateHistory,
   getWithdrawalRequests,
   getAffiliateBalance,

@@ -345,6 +345,20 @@ const uploadImage = asyncHandler(async (req, res) => {
   sendSuccess(res, { url });
 });
 
+const uploadFile = asyncHandler(async (req, res) => {
+  if (!req.file || !req.file.filename) throw new AppError('No file uploaded', 400);
+  logger.info(`[uploadFile] saved → path: ${req.file.path}, size: ${req.file.size} bytes`);
+  const rel = relativePathFromFile(uploadsDir, req.file.path);
+  const url = publicMediaUrl(rel, 'platform');
+  sendSuccess(res, {
+    url,
+    filename: req.file.filename,
+    originalName: req.file.originalname,
+    mimeType: req.file.mimetype,
+    size: req.file.size,
+  });
+});
+
 // ── Media Assets ────────────────────────────────────────────────────
 
 const getMediaAssets = asyncHandler(async (req, res) => {
@@ -515,6 +529,7 @@ module.exports = {
   getCmsPageBySlugInternal,
   putCmsPageBySlug,
   uploadImage,
+  uploadFile,
   getMediaAssets,
   createMediaAsset,
   deleteMediaAsset,
