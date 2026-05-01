@@ -1,3 +1,12 @@
+const path = require('path');
+const dotenv = require('dotenv');
+
+// Load env in this order:
+// 1) repo root .env (common for monorepo)
+// 2) service-local .env (optional override)
+dotenv.config({ path: path.resolve(__dirname, '../../../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env'), override: true });
+
 module.exports = {
   port: parseInt(process.env.PORT || '4005', 10),
   serviceName: 'platform-service',
