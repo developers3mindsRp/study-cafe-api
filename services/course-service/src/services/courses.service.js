@@ -131,6 +131,61 @@ function normalizeLanguage(value) {
   return [];
 }
 
+/** Parse course.curriculum (string or array) into a day array. */
+function parseCurriculumDays(curriculum) {
+  if (curriculum == null) return [];
+  let cur = curriculum;
+  if (typeof cur === "string") {
+    try {
+      cur = JSON.parse(cur);
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(cur) ? cur : [];
+}
+
+/**
+ * Total course duration in minutes from stored curriculum (same section rules as batch/session creation).
+ * Sums each section's `duration`; legacy flat days use `minutes` on the day for a single synthetic section.
+ */
+function totalCurriculumDurationMinutes(curriculum) {
+  const days = parseCurriculumDays(curriculum);
+  let total = 0;
+  for (let i = 0; i < days.length; i++) {
+    const day = days[i];
+    if (!day || typeof day !== "object") continue;
+    const dayNumber = i + 1;
+    const dayTitle = day.title || `Day ${dayNumber}`;
+    const sections =
+      Array.isArray(day.sections) && day.sections.length > 0
+        ? day.sections
+        : [
+            {
+              title: dayTitle,
+              description: day.description || "",
+              videoId: day.video || "",
+              duration: day.minutes || "",
+            },
+          ];
+    for (const sec of sections) {
+      if (!sec || typeof sec !== "object") continue;
+      const raw = sec.duration;
+      if (raw == null || raw === "") continue;
+      const n = parseInt(String(raw), 10);
+      if (Number.isFinite(n) && n > 0) total += n;
+    }
+  }
+  return total > 0 ? total : null;
+}
+
+function withListingDuration(plain) {
+  const duration = totalCurriculumDurationMinutes(plain.curriculum);
+  const out = { ...plain, duration };
+  delete out.curriculum;
+  return out;
+}
+
 const coursesService = {
   async getCourseAuthors(courseId) {
     const links = await CourseAuthor.findAll({
@@ -306,12 +361,13 @@ const coursesService = {
         "is_published",
         "created_at",
         "language",
+        "curriculum",
       ],
     });
     return rows.map((r) => {
       const d = r.get({ plain: true });
       d.language = normalizeLanguage(d.language);
-      return d;
+      return withListingDuration(d);
     });
   },
 
@@ -333,12 +389,13 @@ const coursesService = {
         "is_published",
         "created_at",
         "language",
+        "curriculum",
       ],
     });
     return rows.map((r) => {
       const d = r.get({ plain: true });
       d.language = normalizeLanguage(d.language);
-      return d;
+      return withListingDuration(d);
     });
   },
 
@@ -360,6 +417,7 @@ const coursesService = {
         "updated_at",
         "enrolled_count",
         "language",
+        "curriculum",
       ],
       include: [
         {
@@ -382,7 +440,7 @@ const coursesService = {
         slug: c.slug ?? null,
       }));
       d.course_cat_ids = cats.map((c) => c.id);
-      return d;
+      return withListingDuration(d);
     });
   },
 
@@ -1419,6 +1477,7 @@ const coursesService = {
       "ratings",
       "language",
       "is_published",
+      "curriculum",
     ];
 
     // ── Build base WHERE clause ──
@@ -1525,7 +1584,7 @@ const coursesService = {
     const data = rows.map((r) => {
       const d = r.get({ plain: true });
       d.language = normalizeLanguage(d.language);
-      return d;
+      return withListingDuration(d);
     });
 
     return { data, total, page: safePage, pageCount };

@@ -35,12 +35,19 @@ function buildUnsubscribeUrl(token) {
  */
 async function sendMail({ to, subject, html }) {
   try {
-    await getTransporter().sendMail({
+    logger.info(
+      `[mailer] attempt to=${to} subject="${subject}" host=${config.smtp.host || 'not-set'} port=${config.smtp.port}`,
+    );
+    const info = await getTransporter().sendMail({
       from: config.smtp.from,
       to,
       subject,
       html,
     });
+    // SMTP accepted the message; inbox delivery is tracked in your provider (e.g. Mailgun logs).
+    logger.info(
+      `[mailer] accepted by SMTP for ${to} messageId=${info.messageId || 'n/a'} response=${(info.response || '').trim()}`,
+    );
     return { ok: true };
   } catch (err) {
     logger.error(`[mailer] failed to send to ${to}: ${err.message}`);

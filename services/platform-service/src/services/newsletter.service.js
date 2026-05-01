@@ -12,17 +12,104 @@ function randomToken() {
 
 // ── Subscribers ──────────────────────────────────────────────────────
 
+function buildWelcomeEmail(email, unsubscribeToken) {
+  const unsubUrl = mailer.buildUnsubscribeUrl(unsubscribeToken);
+  const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Welcome to Study Cafe Newsletter</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f3f4f6;padding:40px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background-color:#1e3a5f;padding:32px 40px;text-align:center;">
+              <h1 style="margin:0;color:#ffffff;font-size:26px;font-weight:700;letter-spacing:0.5px;">Study Cafe</h1>
+              <p style="margin:6px 0 0;color:#93c5fd;font-size:14px;">Your Learning Companion</p>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:40px 40px 24px;">
+              <h2 style="margin:0 0 16px;color:#1e3a5f;font-size:22px;">Thank You for Subscribing!</h2>
+              <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+                Hi there,<br /><br />
+                Welcome to the <strong>Study Cafe</strong> newsletter! We're thrilled to have you with us.
+              </p>
+              <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+                You'll now receive the latest updates on:
+              </p>
+              <ul style="margin:0 0 24px;padding-left:20px;color:#374151;font-size:15px;line-height:1.8;">
+                <li>New courses &amp; study materials</li>
+                <li>Legal articles &amp; case law updates</li>
+                <li>Exclusive offers &amp; membership plans</li>
+                <li>Tips to boost your exam preparation</li>
+              </ul>
+              <p style="margin:0 0 32px;color:#374151;font-size:15px;line-height:1.6;">
+                Stay tuned — great content is coming your way!
+              </p>
+              <div style="text-align:center;">
+                <a href="https://studycafe.in" style="display:inline-block;background-color:#1e3a5f;color:#ffffff;text-decoration:none;padding:12px 32px;border-radius:6px;font-size:15px;font-weight:600;">
+                  Visit Study Cafe
+                </a>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:24px 40px 32px;border-top:1px solid #e5e7eb;">
+              <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;line-height:1.6;">
+                You received this email because you subscribed to the Study Cafe newsletter.<br />
+                <a href="${unsubUrl}" style="color:#6b7280;text-decoration:underline;">Unsubscribe</a>
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+  return html;
+}
+
 async function subscribe(email) {
   const normalized = String(email).trim().toLowerCase();
   const existing = await NewsletterSubscriber.findOne({ where: { email: normalized } });
   if (existing) {
     return { already_subscribed: true };
   }
+  const token = randomToken();
   await NewsletterSubscriber.create({
     email: normalized,
     is_verified: true,
-    unsubscribe_token: randomToken(),
+    unsubscribe_token: token,
   });
+
+  // Send welcome email (fire-and-forget — don't fail the subscription if mail fails)
+  logger.info(`[newsletter] welcome email trigger for ${normalized}`);
+  mailer.sendMail({
+    to: normalized,
+    subject: 'Welcome to Study Cafe Newsletter!',
+    html: buildWelcomeEmail(normalized, token),
+  }).then((result) => {
+    if (result && result.ok) {
+      logger.info(`[newsletter] welcome email sent for ${normalized}`);
+      return;
+    }
+    logger.error(`[newsletter] welcome email failed for ${normalized}: ${(result && result.error) || 'unknown error'}`);
+  });
+
   return { already_subscribed: false };
 }
 
