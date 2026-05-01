@@ -25,6 +25,11 @@ function register(router) {
   );
   router.get('/platform/articles/:slug', optionalWebUser, validate(schemas.slugParam), controller.getArticleBySlug);
   router.get('/platform/article-categories', controller.getArticleCategories);
+  router.get(
+    '/platform/seo-metadata/by-path',
+    validate(schemas.seoByPathQuery),
+    controller.getSeoMetadataByPathPublic,
+  );
   router.get('/platform/seo-metadata/slug/:slug', validate(schemas.slugParam), controller.getSeoMetadataBySlugPublic);
   router.get('/platform/cms-pages/:slug', validate(schemas.slugParam), controller.getCmsPageBySlug);
   router.post('/platform/contact-us', validate(schemas.createContactInquiry), controller.createContactInquiry);

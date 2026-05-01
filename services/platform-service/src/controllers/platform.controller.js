@@ -446,6 +446,15 @@ const getSeoMetadataBySlugPublic = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+/** Query ?path=/blogs/foo — supports multi-segment paths unlike /slug/:slug */
+const getSeoMetadataByPathPublic = asyncHandler(async (req, res) => {
+  const raw = typeof req.query?.path === 'string' ? req.query.path : '';
+  const pathNorm = raw === '' ? '/' : raw.startsWith('/') ? raw : `/${raw}`;
+  const data = await platformService.seo.getSeoMetadataBySlugPublic(pathNorm);
+  if (!data) throw new AppError('SEO Metadata not found', 404);
+  sendSuccess(res, data);
+});
+
 const createSeoMetadata = asyncHandler(async (req, res) => {
   const data = await platformService.seo.createSeoMetadata(req.body);
   sendCreated(res, data);
@@ -487,6 +496,7 @@ module.exports = {
   getSeoMetadataInternal,
   getSeoMetadataByIdInternal,
   getSeoMetadataBySlugPublic,
+  getSeoMetadataByPathPublic,
   createSeoMetadata,
   updateSeoMetadata,
   deleteSeoMetadata,

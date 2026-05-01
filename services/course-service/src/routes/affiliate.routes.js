@@ -14,6 +14,7 @@ function register(router) {
   router.get('/affiliate/my-dashboard', affiliateController.getMyAffiliate);
   router.get('/affiliate/my-orders', affiliateController.getMyCommissionOrders);
   router.get('/affiliate/my-links', affiliateController.getMyReferralLinks);
+  router.get('/affiliate/my-withdrawals', affiliateController.getMyWithdrawals);
   router.post('/affiliate/my-withdrawals', affiliateController.createMyWithdrawal);
 }
 

@@ -194,6 +194,7 @@ const createPlan = {
         course_cat_ids: Joi.array().items(Joi.number().integer().positive()),
         courses: Joi.array().items(Joi.number().integer().positive()),
         categories: Joi.array().items(Joi.number().integer().positive()),
+        affiliate_commission: Joi.number().min(0).max(100).default(0),
     }),
 };
 
@@ -216,6 +217,7 @@ const updatePlan = {
         course_cat_ids: Joi.array().items(Joi.number().integer().positive()),
         courses: Joi.array().items(Joi.number().integer().positive()),
         categories: Joi.array().items(Joi.number().integer().positive()),
+        affiliate_commission: Joi.number().min(0).max(100),
     }),
 };
 
@@ -365,10 +367,18 @@ const sendNewsletter = {
     }),
 };
 
+/** Full URL path SEO lookup (?path=/blogs/foo), avoids single-segment :slug limitation */
+const seoByPathQuery = {
+    query: Joi.object({
+        path: Joi.string().max(500).default('/'),
+    }),
+};
+
 module.exports = {
     idParam,
     slugParam,
     keyParam,
+    seoByPathQuery,
     upsertHomePage,
     createState,
     updateState,

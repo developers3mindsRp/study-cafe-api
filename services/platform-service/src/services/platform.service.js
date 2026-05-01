@@ -555,6 +555,10 @@ function slugify(text) {
 
 async function createPlan(data) {
   const slugVal = data.slug || slugify(data.name);
+  const pct =
+    data.affiliate_commission !== undefined && data.affiliate_commission !== null
+      ? Number(data.affiliate_commission)
+      : 0;
   const row = await PremiumPlan.create({
     name: data.name || '',
     slug: slugVal,
@@ -566,6 +570,7 @@ async function createPlan(data) {
     features: data.features || null,
     sort_order: data.sort_order ?? 0,
     is_active: data.is_active !== undefined ? !!data.is_active : true,
+    affiliate_commission: Number.isFinite(pct) ? pct : 0,
   });
   const planId = row.id;
   const course_ids = Array.isArray(data.course_ids) ? data.course_ids : [];
@@ -606,6 +611,10 @@ async function updatePlan(id, data) {
       );
     }
     updates.is_popular = !!data.is_popular;
+  }
+  if (data.affiliate_commission !== undefined) {
+    const pct = Number(data.affiliate_commission);
+    updates.affiliate_commission = Number.isFinite(pct) ? pct : 0;
   }
   await row.update(updates);
   if (data.course_ids !== undefined) {
