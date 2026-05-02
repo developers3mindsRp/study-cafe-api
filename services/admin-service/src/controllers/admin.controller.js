@@ -5,6 +5,7 @@ const platformClient = require('../clients/platformClient');
 const authClient = require('../clients/authClient');
 const adminLogsService = require('../services/adminLogs.service');
 const paymentConfigService = require('../services/paymentConfig.service');
+const paymentLinkService = require('../services/paymentLink.service');
 const { sequelize, Coupon } = require('../models');
 const { Op } = require('sequelize');
 
@@ -547,6 +548,59 @@ const updateWithdrawalStatus = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+// ── Payment links (CMS checkout pages) ─────────────────────────────
+
+const listPaymentLinksPublic = asyncHandler(async (req, res) => {
+  const rows = await paymentLinkService.listPublishedPublic();
+  sendSuccess(res, rows);
+});
+
+const getPaymentLinkPublicBySlug = asyncHandler(async (req, res) => {
+  const data = await paymentLinkService.getPublishedBySlug(req.params.slug);
+  sendSuccess(res, data);
+});
+
+const getPaymentLinkInternal = asyncHandler(async (req, res) => {
+  const data = await paymentLinkService.getInternalForCheckout(req.params.id);
+  sendSuccess(res, data);
+});
+
+const listPaymentLinksAdmin = asyncHandler(async (req, res) => {
+  const { data, meta } = await paymentLinkService.listPaymentLinks({
+    limit: req.query.limit,
+    offset: req.query.offset,
+    status: req.query.status,
+    search: req.query.search,
+  });
+  sendPaginated(res, { data, meta });
+});
+
+const getPaymentLinkAdmin = asyncHandler(async (req, res) => {
+  const row = await paymentLinkService.getPaymentLinkById(req.params.id);
+  sendSuccess(res, row);
+});
+
+const postPaymentLink = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const created = await paymentLinkService.createPaymentLink(req.body);
+  await adminLogsService.logAction(adminId, 'CREATE_PAYMENT_LINK', 'payment_link', String(created.id), { slug: created.slug }, req.ip);
+  sendCreated(res, created);
+});
+
+const putPaymentLink = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const updated = await paymentLinkService.updatePaymentLink(req.params.id, req.body);
+  await adminLogsService.logAction(adminId, 'UPDATE_PAYMENT_LINK', 'payment_link', req.params.id, {}, req.ip);
+  sendSuccess(res, updated);
+});
+
+const deletePaymentLink = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  await paymentLinkService.deletePaymentLink(req.params.id);
+  await adminLogsService.logAction(adminId, 'DELETE_PAYMENT_LINK', 'payment_link', req.params.id, {}, req.ip);
+  sendNoContent(res);
+});
+
 module.exports = {
   me,
   getPaymentConfigInternal,
@@ -603,4 +657,12 @@ module.exports = {
   getCourseReviewById,
   patchCourseReview,
   deleteCourseReview,
+  listPaymentLinksPublic,
+  getPaymentLinkPublicBySlug,
+  getPaymentLinkInternal,
+  listPaymentLinksAdmin,
+  getPaymentLinkAdmin,
+  postPaymentLink,
+  putPaymentLink,
+  deletePaymentLink,
 };

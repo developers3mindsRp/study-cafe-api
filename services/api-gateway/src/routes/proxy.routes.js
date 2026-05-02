@@ -41,6 +41,12 @@ function register(app) {
     pathRewrite: { '^/api/uploads': '/platform/uploads' },
   });
 
+  const adminPaymentLinksPlatformProxy = createProxyMiddleware({
+    target: config.adminServiceUrl,
+    changeOrigin: true,
+    pathRewrite: { '^/api/platform/payment-links': '/platform/payment-links' },
+  });
+
   const usersProxy = createProxyMiddleware({
     target: config.authServiceUrl,
     changeOrigin: true,
@@ -117,6 +123,8 @@ function register(app) {
   app.use('/api/progress', validateJWT, injectUserId, progressProxy);
   app.use('/api/reviews', validateJWT, injectUserId, courseReviewsUserProxy);
   app.post('/api/orders/webhook/razorpay', orderProxy);
+  app.post('/api/orders/payment-link/create', optionalJWT, injectOptionalUserId, orderProxy);
+  app.post('/api/orders/payment-link/verify', orderProxy);
   app.get('/api/coupons', orderProxy);
   const injectOrderUserId = (req, _res, next) => {
     const uid = req.user?.userId ?? req.user?.id;
@@ -137,6 +145,7 @@ function register(app) {
     if (req.user?.role) req.headers['x-user-role'] = req.user.role;
     next();
   }, adminProxy);
+  app.use('/api/platform/payment-links', adminPaymentLinksPlatformProxy);
   app.use('/api/platform', platformProxy);
   app.use('/api/uploads', uploadsProxy);
 

@@ -9,6 +9,9 @@ function register(router) {
   // Public — no auth required, frontend uses this to display available coupons
   router.get('/coupons', ordersController.listActiveCoupons);
 
+  router.post('/orders/payment-link/create', optionalUserId, validate(schemas.paymentLinkCreateOrder), ordersController.createPaymentLink);
+  router.post('/orders/payment-link/verify', validate(schemas.paymentLinkVerifyOrder), ordersController.verifyPaymentLink);
+
   router.post('/orders/create', requireUserId, validate(schemas.createOrder), ordersController.create);
   router.post('/orders/verify', requireUserId, validate(schemas.verifyOrder), ordersController.verify);
   router.get('/orders', requireUserId, ordersController.list);

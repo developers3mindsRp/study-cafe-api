@@ -394,24 +394,50 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
 
       await locked.update({ status: 'paid' }, { transaction: t });
 
-      await Payment.findOrCreate({
-        where: { razorpay_payment_id: razorpayPaymentId, status: 'captured' },
-        defaults: {
-          order_id: locked.id,
-          razorpay_payment_id: razorpayPaymentId,
-          razorpay_signature: signature,
-          amount: locked.amount,
-          status: 'captured',
-          source,
-        },
+      const existingPay = await Payment.findOne({
+        where: { razorpay_payment_id: razorpayPaymentId },
         transaction: t,
+        lock: t.LOCK.UPDATE,
       });
+      if (!existingPay) {
+        await Payment.create(
+          {
+            order_id: locked.id,
+            razorpay_payment_id: razorpayPaymentId,
+            razorpay_signature: signature,
+            amount: locked.amount,
+            status: 'captured',
+            source,
+          },
+          { transaction: t }
+        );
+      } else {
+        if (String(existingPay.order_id) !== String(locked.id)) {
+          throw new AppError('Payment is associated with another order', 409);
+        }
+        if (existingPay.status !== 'captured') {
+          await existingPay.update(
+            {
+              status: 'captured',
+              razorpay_signature: signature ?? existingPay.razorpay_signature,
+              amount: locked.amount,
+              source,
+            },
+            { transaction: t }
+          );
+        }
+      }
 
       await emitPurchaseOutbox(locked, t);
       return { verified: true };
     });
   } catch (err) {
-    if (err.name === 'SequelizeUniqueConstraintError') return { verified: true, alreadyPaid: true };
+    if (err.name === 'SequelizeUniqueConstraintError') {
+      const fresh = await Order.findByPk(order.id);
+      if (fresh && fresh.status === 'paid') {
+        return { verified: true, alreadyPaid: true };
+      }
+    }
     throw err;
   }
 }
@@ -584,6 +610,223 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
     await redis.del(lockKey).catch(() => {});
     throw err;
   }
+}
+
+// ─── Payment link checkout (amount from admin-service; guest OK) ─────────────
+
+async function fetchPaymentLinkCheckoutContext(paymentLinkId) {
+  try {
+    const { data: body, status } = await axios.get(
+      `${config.adminServiceUrl}/internal/payment-links/${encodeURIComponent(paymentLinkId)}`,
+      {
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        timeout: 12000,
+        validateStatus: () => true,
+      }
+    );
+    const payload =
+      body && typeof body === 'object' && body.success === true && body.data !== undefined ? body.data : body;
+    if (status !== 200) {
+      const msg =
+        payload && typeof payload === 'object'
+          ? payload.error || payload.message
+          : typeof payload === 'string'
+            ? payload
+            : null;
+      throw new AppError(msg || 'Payment link unavailable', status >= 400 && status < 600 ? status : 502);
+    }
+    return payload;
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    logger.warn(`[orders] fetchPaymentLinkCheckoutContext: ${err.message}`);
+    throw new AppError('Payment link service unavailable', 502);
+  }
+}
+
+async function createPaymentLinkOrder(userId, body) {
+  const paymentLinkId = String(body.paymentLinkId ?? '').trim();
+  const fullName = String(body.fullName || '').trim();
+  const email = String(body.email || '').trim();
+  const mobile = String(body.mobile || '').trim();
+  const gstRaw = body.gstNumber != null ? String(body.gstNumber).trim() : '';
+  const gstNumber = gstRaw === '' ? null : gstRaw;
+
+  if (!paymentLinkId) throw new AppError('paymentLinkId is required', 400);
+  if (!fullName) throw new AppError('Full name is required', 400);
+  if (!email) throw new AppError('Email is required', 400);
+  if (!mobile) throw new AppError('Mobile number is required', 400);
+
+  const link = await fetchPaymentLinkCheckoutContext(paymentLinkId);
+
+  const salePrice = parseAmount(link.sale_price);
+  const listAmount = parseAmount(link.amount);
+  if (!Number.isFinite(salePrice) || salePrice < 0) throw new AppError('Invalid payment link price', 400);
+
+  const discountAmount = 0;
+  const afterDiscount = salePrice;
+  const gstAmount = Number((afterDiscount * GST_RATE).toFixed(2));
+  const grandTotal = Number((afterDiscount + gstAmount).toFixed(2));
+
+  const lockKey = `order:lock:pl:${paymentLinkId}:${email.toLowerCase()}`;
+  const redis = await getRedis();
+  const gotLock = await redis.set(lockKey, '1', { NX: true, EX: 45 });
+  if (!gotLock) throw new AppError('Duplicate order in progress', 429);
+
+  const orderId = generateOrderId();
+  const amountPaise = Math.round(grandTotal * 100);
+
+  try {
+    if (grandTotal <= 0) {
+      await sequelize.transaction(async (t) => {
+        const created = await Order.create(
+          {
+            order_id: orderId,
+            user_id: userId || null,
+            type: 'payment_link',
+            entity_id: String(paymentLinkId),
+            batch_id: null,
+            original_amount: listAmount,
+            coupon_code: null,
+            coupon_discount: 0,
+            amount: grandTotal,
+            currency: 'INR',
+            status: 'pending',
+            affiliate: normalizeReferralForOrder(body.referralCode),
+            gateway: 'free',
+            buyer_name: fullName,
+            buyer_email: email,
+            buyer_mobile: mobile,
+            buyer_gst: gstNumber,
+          },
+          { transaction: t }
+        );
+        const locked = await Order.findOne({
+          where: { id: created.id },
+          lock: t.LOCK.UPDATE,
+          transaction: t,
+        });
+        if (!locked) throw new AppError('Order not found after create', 500);
+        await locked.update({ status: 'paid' }, { transaction: t });
+        const freeRef = `free:${orderId}`;
+        await Payment.findOrCreate({
+          where: { order_id: locked.id, source: 'free' },
+          defaults: {
+            order_id: locked.id,
+            razorpay_payment_id: freeRef,
+            razorpay_signature: null,
+            amount: locked.amount,
+            status: 'captured',
+            source: 'free',
+          },
+          transaction: t,
+        });
+        await emitPurchaseOutbox(locked, t);
+      });
+      await redis.del(lockKey);
+      const rpConfig = await getRazorpayConfig();
+      return {
+        orderId,
+        free: true,
+        paid: true,
+        razorpayOrderId: null,
+        amount: 0,
+        originalAmount: Math.round(listAmount * 100),
+        discountAmount: 0,
+        gstAmount: Math.round(gstAmount * 100),
+        grandTotal: 0,
+        currency: 'INR',
+        key: rpConfig?.key_id || null,
+        prefill: { name: fullName, email, contact: mobile },
+      };
+    }
+
+    const razorpay = await getRazorpayInstance();
+    if (!razorpay) throw new AppError('Payment not configured', 503);
+
+    const order = await Order.create({
+      order_id: orderId,
+      user_id: userId || null,
+      type: 'payment_link',
+      entity_id: String(paymentLinkId),
+      batch_id: null,
+      original_amount: listAmount,
+      coupon_code: null,
+      coupon_discount: discountAmount,
+      amount: grandTotal,
+      currency: 'INR',
+      status: 'pending',
+      affiliate: normalizeReferralForOrder(body.referralCode),
+      buyer_name: fullName,
+      buyer_email: email,
+      buyer_mobile: mobile,
+      buyer_gst: gstNumber,
+    });
+
+    const rpOrder = await razorpay.orders.create({
+      amount: amountPaise,
+      currency: 'INR',
+      receipt: orderId,
+      notes: {
+        orderId,
+        userId: userId != null ? String(userId) : '',
+        type: 'PAYMENT_LINK',
+        entityId: String(paymentLinkId),
+      },
+    });
+
+    await order.update({ razorpay_order_id: rpOrder.id });
+
+    await redis.del(lockKey);
+
+    const rpConfig = await getRazorpayConfig();
+
+    return {
+      orderId,
+      free: false,
+      paid: false,
+      razorpayOrderId: rpOrder.id,
+      amount: amountPaise,
+      originalAmount: Math.round(listAmount * 100),
+      discountAmount: Math.round(discountAmount * 100),
+      gstAmount: Math.round(gstAmount * 100),
+      grandTotal: Math.round(grandTotal * 100),
+      currency: 'INR',
+      key: rpConfig?.key_id,
+      prefill: {
+        name: fullName,
+        email,
+        contact: mobile,
+      },
+    };
+  } catch (err) {
+    await redis.del(lockKey).catch(() => {});
+    throw err;
+  }
+}
+
+async function verifyPaymentLinkOrder({ orderId, razorpay_order_id, razorpay_payment_id, razorpay_signature }) {
+  const rpConfig = await getRazorpayConfig();
+  if (!rpConfig) throw new AppError('Payment not configured', 503);
+
+  const expected = crypto
+    .createHmac('sha256', rpConfig.key_secret)
+    .update(razorpay_order_id + '|' + razorpay_payment_id)
+    .digest('hex');
+  if (expected !== razorpay_signature) throw new AppError('Invalid signature', 400);
+
+  const order = await Order.findOne({ where: { order_id: orderId, type: 'payment_link' } });
+  if (!order) throw new AppError('Order not found', 404);
+
+  if (order.razorpay_order_id && order.razorpay_order_id !== razorpay_order_id) {
+    logger.warn('[verifyPaymentLinkOrder] razorpay_order_id mismatch');
+    throw new AppError('Order ID mismatch', 400);
+  }
+
+  if (order.status === 'paid') {
+    return { alreadyPaid: true, message: 'Already paid' };
+  }
+
+  return completePayment(order, razorpay_payment_id, { signature: razorpay_signature, source: 'checkout' });
 }
 
 // ─── verifyOrder ─────────────────────────────────────────────────────────────
@@ -991,6 +1234,8 @@ module.exports = {
   createOrder,
   verifyOrder,
   completePayment,
+  createPaymentLinkOrder,
+  verifyPaymentLinkOrder,
   listOrders,
   listMyPurchases,
   getInvoice,

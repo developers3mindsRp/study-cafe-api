@@ -45,6 +45,13 @@ async function connect() {
       throw err;
     }
   }
+  try {
+    await sequelize.query('ALTER TABLE orders ADD COLUMN buyer_gst VARCHAR(32) NULL AFTER buyer_mobile');
+  } catch (err) {
+    if (err?.parent?.errno !== 1060 && err?.original?.errno !== 1060) {
+      throw err;
+    }
+  }
 }
 
 module.exports = {

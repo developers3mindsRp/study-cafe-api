@@ -5,6 +5,9 @@ const { uploadImage: uploadImageMw, uploadFile: uploadFileMw } = require('../mid
 function register(router) {
   router.get('/admin/me', requireAdmin, controller.me);
   router.get('/internal/payment-config', internalAuth, controller.getPaymentConfigInternal);
+  router.get('/platform/payment-links', controller.listPaymentLinksPublic);
+  router.get('/platform/payment-links/:slug', controller.getPaymentLinkPublicBySlug);
+  router.get('/internal/payment-links/:id', internalAuth, controller.getPaymentLinkInternal);
   router.get('/admin/stats', requireAdmin, controller.getStats);
   router.put('/admin/payment-config', requireAdmin, controller.updatePaymentConfig);
   router.get('/admin/logs', requireAdmin, controller.getLogs);
@@ -27,6 +30,11 @@ function register(router) {
   router.post('/admin/coupons', requireAdmin, controller.postCoupon);
   router.put('/admin/coupons/:id', requireAdmin, controller.putCoupon);
   router.delete('/admin/coupons/:id', requireAdmin, controller.deleteCoupon);
+  router.get('/admin/payment-links', requireAdmin, controller.listPaymentLinksAdmin);
+  router.get('/admin/payment-links/:id', requireAdmin, controller.getPaymentLinkAdmin);
+  router.post('/admin/payment-links', requireAdmin, controller.postPaymentLink);
+  router.put('/admin/payment-links/:id', requireAdmin, controller.putPaymentLink);
+  router.delete('/admin/payment-links/:id', requireAdmin, controller.deletePaymentLink);
   router.post('/admin/courses', requireAdmin, controller.createCourse);
   router.put('/admin/courses/:id', requireAdmin, controller.updateCourse);
   router.post('/admin/courses/:id/batches', requireAdmin, controller.createBatch);

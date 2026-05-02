@@ -19,6 +19,7 @@ module.exports = (sequelize) => {
       buyer_name: { type: DataTypes.STRING(250), allowNull: true },
       buyer_email: { type: DataTypes.STRING(255), allowNull: true },
       buyer_mobile: { type: DataTypes.STRING(20), allowNull: true },
+      buyer_gst: { type: DataTypes.STRING(32), allowNull: true },
       rp_payment_id: { type: DataTypes.STRING(100), allowNull: true },
       razorpay_order_id: { type: DataTypes.STRING(128), allowNull: true },
       coupon_code: { type: DataTypes.STRING(100), allowNull: true },

@@ -68,6 +68,17 @@ const webhook = asyncHandler(async (req, res) => {
   res.status(statusCode).json(body);
 });
 
+const createPaymentLink = asyncHandler(async (req, res) => {
+  const uid = req.userId != null ? req.userId : null;
+  const result = await ordersService.createPaymentLinkOrder(uid, req.body);
+  sendCreated(res, result);
+});
+
+const verifyPaymentLink = asyncHandler(async (req, res) => {
+  const result = await ordersService.verifyPaymentLinkOrder(req.body);
+  sendSuccess(res, result);
+});
+
 const listActiveCoupons = asyncHandler(async (req, res) => {
   const coupons = await ordersService.listActiveCoupons();
   sendSuccess(res, coupons);
@@ -113,4 +124,6 @@ module.exports = {
   updateCoupon,
   deleteCoupon,
   webhook,
+  createPaymentLink,
+  verifyPaymentLink,
 };

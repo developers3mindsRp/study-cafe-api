@@ -8,6 +8,7 @@ const ALL_PERMISSIONS = [
   'courses:list', 'courses:view', 'courses:create', 'courses:edit', 'courses:delete',
   'orders:list', 'orders:view',
   'coupons:list', 'coupons:view', 'coupons:create', 'coupons:edit', 'coupons:delete',
+  'payment_links:list', 'payment_links:view', 'payment_links:create', 'payment_links:edit', 'payment_links:delete',
   'live_sessions:list', 'live_sessions:view',
   'contact_inquiries:list', 'contact_inquiries:view',
   'affiliate:list', 'affiliate:view',
@@ -64,6 +65,12 @@ const MODULE_HIERARCHY = {
     ['coupons:create'],
     ['coupons:delete'],
   ],
+  payment_links: [
+    ['payment_links:list', 'payment_links:view'],
+    ['payment_links:edit'],
+    ['payment_links:create'],
+    ['payment_links:delete'],
+  ],
   live_sessions: [
     ['live_sessions:list', 'live_sessions:view'],
   ],
@@ -109,6 +116,7 @@ const ROLE_PERMISSIONS = {
     'content:list', 'content:view', 'content:edit',
     'testimonials:list', 'testimonials:view', 'testimonials:create', 'testimonials:edit',
     'faq:list', 'faq:view', 'faq:create', 'faq:edit',
+    'payment_links:list', 'payment_links:view', 'payment_links:create', 'payment_links:edit',
   ],
   viewer: [
     'articles:list', 'articles:view',
