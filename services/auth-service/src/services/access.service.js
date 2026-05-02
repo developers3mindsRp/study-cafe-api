@@ -1,5 +1,5 @@
 const { UserCourse, UserMembership, sequelize } = require('../models');
-const { QueryTypes } = require('sequelize');
+const { QueryTypes, Op } = require('sequelize');
 const authService = require('./auth.service');
 const config = require('../config');
 
@@ -108,7 +108,21 @@ async function grantCourse({ userId, courseId, orderId }) {
   return { granted: true };
 }
 
+async function getActiveMembership(userId) {
+  const row = await UserMembership.findOne({
+    where: { user_id: userId, expires_at: { [Op.gt]: new Date() } },
+    order: [['expires_at', 'DESC']],
+  });
+  return row ? row.get({ plain: true }) : null;
+}
+
 async function grantMembership({ userId, membershipType, orderId, startsAt, expiresAt }) {
+  // Expire any existing active membership rows before inserting the new tier.
+  // This keeps the history intact while ensuring only one active membership exists.
+  await UserMembership.update(
+    { expires_at: new Date() },
+    { where: { user_id: userId, expires_at: { [Op.gt]: new Date() } } }
+  );
   await UserMembership.create({
     user_id: userId,
     membership_type: membershipType,
@@ -124,4 +138,5 @@ module.exports = {
   isAuthorizedForGrant,
   grantCourse,
   grantMembership,
+  getActiveMembership,
 };
