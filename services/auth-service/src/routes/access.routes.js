@@ -1,4 +1,5 @@
 const accessController = require('../controllers/access.controller');
+const accessService = require('../services/access.service');
 const { requireGrantAuth } = require('../middleware');
 const schemas = require('../validations/schemas');
 const { validate } = require('../../../../shared');
@@ -25,6 +26,11 @@ function register(router) {
     });
     if (!user) throw new AppError('User not found', 404);
     sendSuccess(res, user.get({ plain: true }));
+  }));
+
+  router.get('/internal/users/:id/active-membership', requireGrantAuth, asyncHandler(async (req, res) => {
+    const activeMembership = await accessService.getActiveMembership(req.params.id);
+    sendSuccess(res, activeMembership);
   }));
 
   router.get('/internal/users/:id/memberships', requireGrantAuth, asyncHandler(async (req, res) => {
