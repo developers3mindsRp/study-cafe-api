@@ -40,6 +40,38 @@ async function fetchPlanDetails(entityId) {
   }
 }
 
+async function fetchUserActiveMembership(userId) {
+  try {
+    const { data } = await axios.get(
+      `${config.authServiceUrl}/internal/users/${userId}/active-membership`,
+      {
+        timeout: 5000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200,
+      }
+    );
+    const payload = data.data !== undefined ? data.data : data;
+    return payload || null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchPlanBySlug(slug) {
+  try {
+    const { data } = await axios.get(
+      `${config.platformServiceUrl}/platform/plans/${encodeURIComponent(slug)}`,
+      {
+        timeout: 5000,
+        validateStatus: (s) => s === 200,
+      }
+    );
+    return data.data !== undefined ? data.data : data;
+  } catch {
+    return null;
+  }
+}
+
 function buildMembershipPayload(order, plan) {
   const now = new Date();
   const payload = { userId: order.user_id, orderId: order.order_id };
@@ -425,6 +457,30 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
 
   // 1. Fetch canonical price from the owning service — never trust client
   const originalAmount = await resolveAmountForEntity(typeUpper, entityId);
+
+  // 1b. Membership upgrade guard — enforce one-active-membership and upgrade-only direction
+  if (typeUpper === 'MEMBERSHIP') {
+    const [newPlan, activeMembership] = await Promise.all([
+      fetchPlanDetails(entityId),
+      fetchUserActiveMembership(userId),
+    ]);
+
+    if (activeMembership) {
+      // Resolve the sort_order of the currently active plan via its slug
+      const activePlan = await fetchPlanBySlug(activeMembership.membership_type);
+      const activeOrder = activePlan ? Number(activePlan.sort_order ?? 0) : 0;
+      const newOrder = newPlan ? Number(newPlan.sort_order ?? 0) : 0;
+
+      if (newOrder <= activeOrder) {
+        const activeName = activePlan ? activePlan.name : activeMembership.membership_type;
+        const newName = newPlan ? newPlan.name : String(entityId);
+        throw new AppError(
+          `You already have an active "${activeName}" membership. You can only upgrade to a higher tier, not purchase "${newName}".`,
+          400
+        );
+      }
+    }
+  }
 
   // 2. Validate coupon (throws on invalid/expired/over-limit)
   let couponResult = null;
