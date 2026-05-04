@@ -127,8 +127,11 @@ async function dashboardStats(userId) {
 
 async function fetchCourseMeta(courseId) {
   try {
-    const { data } = await axios.get(`${config.courseServiceUrl}/courses/${courseId}`, {
+    const base = String(config.courseServiceUrl || "").replace(/\/$/, "");
+    if (!base || !config.internalApiKey) return null;
+    const { data } = await axios.get(`${base}/internal/courses/${encodeURIComponent(courseId)}`, {
       timeout: 8000,
+      headers: { "X-Internal-API-Key": config.internalApiKey },
       validateStatus: (s) => s === 200,
     });
     const payload = data.data !== undefined ? data.data : data;

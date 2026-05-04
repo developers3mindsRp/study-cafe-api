@@ -34,6 +34,8 @@ module.exports = (sequelize) => {
       certifications: { type: DataTypes.TEXT, allowNull: true },
       gateway: { type: DataTypes.STRING(200), allowNull: true },
       is_published: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+      /** When true, course is excluded from public listings and marketing pages unless the viewer has course access. */
+      hide_from_public: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       status: { type: DataTypes.STRING(20), defaultValue: 'draft' },
       start_date: { type: DataTypes.DATE, allowNull: true },
       end_date: { type: DataTypes.DATE, allowNull: true },

@@ -29,7 +29,9 @@ const getBySlug = asyncHandler(async (req, res) => {
 });
 
 const getSessions = asyncHandler(async (req, res) => {
-  const result = await coursesService.getSessionsByCourseId(req.params.id);
+  const result = await coursesService.getSessionsByCourseId(req.params.id, {
+    authorization: req.headers.authorization,
+  });
   if (result === null) throw new AppError('Course not found', 404);
   sendSuccess(res, result);
 });
@@ -40,6 +42,7 @@ const getSessionsBySlug = asyncHandler(async (req, res) => {
   const userId = userIdHeader ? Number(userIdHeader) : null;
   const result = await coursesService.getSessionsBySlug(req.params.slug, {
     userId: Number.isFinite(userId) && userId > 0 ? userId : null,
+    authorization: req.headers.authorization,
   });
   if (result === null) throw new AppError('Course not found', 404);
   sendSuccess(res, result);
@@ -67,7 +70,9 @@ const getBatchByIdInternal = asyncHandler(async (req, res) => {
 });
 
 const getMaterials = asyncHandler(async (req, res) => {
-  const rows = await coursesService.getMaterialsByCourseId(req.params.id);
+  const rows = await coursesService.getMaterialsByCourseId(req.params.id, {
+    authorization: req.headers.authorization,
+  });
   if (rows === null) throw new AppError('Course not found', 404);
   sendSuccess(res, rows);
 });

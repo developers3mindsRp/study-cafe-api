@@ -11,7 +11,42 @@ const {
   BatchEnrollment,
 } = require("../models");
 const { QueryTypes } = require("sequelize");
+const axios = require("axios");
+const config = require("../config");
+const { logger } = require("../../../../shared");
 const { checkCourseAccess } = require("./accessClient");
+
+/** Grant auth-service user_courses row so access/check + dashboard work (admin batch enroll, auto-enroll). */
+async function syncUserCourseGrant(userId, courseId) {
+  const base = config.authServiceUrl?.replace(/\/$/, "") || "";
+  if (!base || !config.internalApiKey) {
+    logger.warn("[courses] syncUserCourseGrant skipped: missing AUTH_SERVICE_URL or INTERNAL_API_KEY");
+    return;
+  }
+  const uid = Number(userId);
+  const cid = Number(courseId);
+  if (!Number.isFinite(uid) || uid <= 0 || !Number.isFinite(cid) || cid <= 0) return;
+  try {
+    await axios.post(
+      `${base}/access/grant-course`,
+      { userId: uid, courseId: cid, orderId: null },
+      {
+        headers: { "X-Internal-API-Key": config.internalApiKey },
+        timeout: 10000,
+        validateStatus: (s) => s === 200,
+      },
+    );
+  } catch (err) {
+    logger.warn(`[courses] syncUserCourseGrant failed userId=${uid} courseId=${cid}: ${err.message}`);
+  }
+}
+
+/** Published course detail/sessions/materials: hidden courses only for viewers with access. */
+async function allowPublicCourseDetail(hideFromPublic, courseId, authorization) {
+  if (!hideFromPublic) return true;
+  if (!courseId) return false;
+  return checkCourseAccess(authorization, courseId);
+}
 
 function stripCurriculumVideos(course) {
   if (!course || course.curriculum == null) return course;
@@ -349,7 +384,7 @@ const coursesService = {
 
   async listPublished() {
     const rows = await Course.findAll({
-      where: { is_published: true },
+      where: { is_published: true, hide_from_public: false },
       order: [["created_at", "DESC"]],
       attributes: [
         "id",
@@ -375,7 +410,7 @@ const coursesService = {
   async listFeaturedPublished(limit = 6) {
     const lim = Math.min(24, Math.max(1, parseInt(String(limit), 10) || 6));
     const rows = await Course.findAll({
-      where: { is_published: true },
+      where: { is_published: true, hide_from_public: false },
       order: [["created_at", "DESC"]],
       limit: lim,
       attributes: [
@@ -413,6 +448,7 @@ const coursesService = {
         "sale_price",
         "thumbnail_url",
         "is_published",
+        "hide_from_public",
         "created_at",
         "updated_at",
         "enrolled_count",
@@ -456,6 +492,8 @@ const coursesService = {
     const row = await Course.findOne({ where: { id, is_published: true } });
     if (!row) return null;
     const d = row.get({ plain: true });
+    const visible = await allowPublicCourseDetail(d.hide_from_public, id, opts.authorization);
+    if (!visible) return null;
     d.language = normalizeLanguage(d.language);
     const enriched = await this.enrichCourseWithAuthors(d);
     const allowed = await checkCourseAccess(opts.authorization, id);
@@ -500,6 +538,8 @@ const coursesService = {
     const row = await Course.findOne({ where: { slug, is_published: true } });
     if (!row) return null;
     const d = row.get({ plain: true });
+    const visible = await allowPublicCourseDetail(d.hide_from_public, d.id, opts.authorization);
+    if (!visible) return null;
     d.language = normalizeLanguage(d.language);
     const enriched = await this.enrichCourseWithAuthors(d);
     const allowed = await checkCourseAccess(opts.authorization, d.id);
@@ -549,17 +589,20 @@ const coursesService = {
    *
    * This guarantees a learner sees ONLY recordings of their own batch cohort.
    */
-  async getSessionsBySlug(slug, { userId = null } = {}) {
+  async getSessionsBySlug(slug, { userId = null, authorization = null } = {}) {
     const course = await Course.findOne({
       where: { slug, is_published: true },
-      attributes: ["id"],
+      attributes: ["id", "hide_from_public"],
     });
     if (!course) return null;
+    const cplain = course.get({ plain: true });
+    const vis = await allowPublicCourseDetail(cplain.hide_from_public, cplain.id, authorization);
+    if (!vis) return null;
 
     if (userId) {
-      const userBatch = await this.getUserBatchForCourse(course.id, userId);
+      const userBatch = await this.getUserBatchForCourse(cplain.id, userId);
       if (userBatch) {
-        return this._getBatchesSessionsRecordings(course.id, {
+        return this._getBatchesSessionsRecordings(cplain.id, {
           visibleOnly: true,
           onlyBatchId: userBatch.id,
         });
@@ -567,7 +610,7 @@ const coursesService = {
     }
 
     // Not purchased (or anonymous) → return batch schedule without recordings.
-    return this._getBatchesSessionsRecordings(course.id, {
+    return this._getBatchesSessionsRecordings(cplain.id, {
       visibleOnly: true,
       stripRecordings: true,
     });
@@ -581,12 +624,15 @@ const coursesService = {
     return this.attachCourseCatIds(enriched);
   },
 
-  async getSessionsByCourseId(courseId) {
+  async getSessionsByCourseId(courseId, opts = {}) {
     const course = await Course.findOne({
       where: { id: courseId, is_published: true },
-      attributes: ["id"],
+      attributes: ["id", "hide_from_public"],
     });
     if (!course) return null;
+    const cplain = course.get({ plain: true });
+    const vis = await allowPublicCourseDetail(cplain.hide_from_public, courseId, opts.authorization);
+    if (!vis) return null;
     return this._getBatchesSessionsRecordings(courseId, { visibleOnly: true });
   },
 
@@ -731,12 +777,15 @@ const coursesService = {
     };
   },
 
-  async getMaterialsByCourseId(courseId) {
+  async getMaterialsByCourseId(courseId, opts = {}) {
     const course = await Course.findOne({
       where: { id: courseId, is_published: true },
-      attributes: ["id"],
+      attributes: ["id", "hide_from_public"],
     });
     if (!course) return null;
+    const cplain = course.get({ plain: true });
+    const vis = await allowPublicCourseDetail(cplain.hide_from_public, courseId, opts.authorization);
+    if (!vis) return null;
     const rows = await Material.findAll({
       where: { course_id: courseId },
       order: [["id", "ASC"]],
@@ -789,6 +838,7 @@ const coursesService = {
       certifications: data.certifications || null,
       gateway: data.gateway || null,
       is_published: !!data.is_published,
+      hide_from_public: !!data.hide_from_public,
       start_date: data.start_date || null,
       end_date: data.end_date || null,
       affiliate_commission: Number.isFinite(affiliatePct) ? affiliatePct : 0,
@@ -840,6 +890,7 @@ const coursesService = {
       "certifications",
       "gateway",
       "is_published",
+      "hide_from_public",
       "start_date",
       "end_date",
       "affiliate_commission",
@@ -1230,6 +1281,10 @@ const coursesService = {
       where: { batch_id: batchId, user_id: userId },
       defaults: { batch_id: batchId, user_id: userId },
     });
+    const batch = await Batch.findByPk(batchId, { attributes: ["course_id"] });
+    if (batch?.course_id) {
+      await syncUserCourseGrant(userId, batch.course_id);
+    }
     return { ...row.get({ plain: true }), created };
   },
 
@@ -1364,6 +1419,7 @@ const coursesService = {
       where: { batch_id: targetBatchId, user_id: userId },
       defaults: { batch_id: targetBatchId, user_id: userId },
     });
+    await syncUserCourseGrant(userId, courseId);
     return { ...row.get({ plain: true }), created };
   },
 
@@ -1488,7 +1544,7 @@ const coursesService = {
     ];
 
     // ── Build base WHERE clause ──
-    const where = { is_published: true };
+    const where = { is_published: true, hide_from_public: false };
 
     // Search filter (title contains)
     if (search && search.trim()) {

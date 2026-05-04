@@ -35,6 +35,7 @@
     "ensure-cms-pages": "node scripts/ensure-cms-pages-table.js",
     "ensure-faqs": "node scripts/ensure-faqs-table.js",
     "ensure-home-sections": "node scripts/ensure-home-sections-meta.js",
+    "ensure-hide-from-public": "node --require dotenv/config scripts/apply-mysql-sql-file.js services/course-service/scripts/add-hide-from-public-to-courses.sql",
     "sync": "bash scripts/run-full-migration.sh",
     "seed:admin": "npm run seed:admin --prefix services/auth-service"
   },
