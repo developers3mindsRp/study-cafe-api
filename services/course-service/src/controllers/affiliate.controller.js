@@ -62,9 +62,12 @@ const getMyReferralLinks = asyncHandler(async (req, res) => {
 const createMyWithdrawal = asyncHandler(async (req, res) => {
   const userId = req.headers['x-user-id'];
   if (!userId) throw new AppError('Authentication required', 401);
+  const amount = Number(req.body.amount);
+  if (!Number.isFinite(amount)) throw new AppError('Valid amount is required', 400);
+  if (amount < 1000) throw new AppError('Minimum amount 1000 required to redeem', 400);
   const request = await affiliateService.createWithdrawal({
     affiliate_id: userId,
-    amount: req.body.amount,
+    amount,
   });
   sendCreated(res, request);
 });
