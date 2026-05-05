@@ -1,6 +1,12 @@
 const authService = require('../services/auth.service');
 const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent } = require('../../../../shared');
 
+function bearerToken(req) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) return null;
+  return auth.slice(7);
+}
+
 const register = asyncHandler(async (req, res) => {
   const {
     email,
@@ -28,7 +34,12 @@ const register = asyncHandler(async (req, res) => {
     state,
     country,
   });
-  const accessToken = authService.signAccess({ userId: user.id, email: user.email, role: user.role });
+  const accessToken = authService.signAccess({
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+    emailVerified: !!user.email_verified,
+  });
   const refreshToken = authService.signRefresh({ userId: user.id });
   sendCreated(res, {
     user: {
@@ -45,17 +56,45 @@ const register = asyncHandler(async (req, res) => {
       state: user.state,
       country: user.country,
       referral_code: user.referral_code,
+      email_verified: !!user.email_verified,
     },
     accessToken,
     refreshToken,
-    expiresIn: 3600,
+    expiresIn: authService.expiresInSecondsFromAccessToken(accessToken),
   });
 });
 
 const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
-  const result = await authService.login({ email, password });
+  const result = await authService.loginWithPassword({ email, password });
   if (!result) throw new AppError('Invalid credentials', 401);
+  sendSuccess(res, result);
+});
+
+const loginRequestOtp = asyncHandler(async (req, res) => {
+  const out = await authService.requestLoginOtp({ email: req.body.email });
+  sendSuccess(res, out);
+});
+
+const loginWithOtp = asyncHandler(async (req, res) => {
+  const { email, otp } = req.body;
+  const result = await authService.loginWithEmailOtp({ email, otp });
+  if (!result) throw new AppError('Invalid or expired code', 401);
+  sendSuccess(res, result);
+});
+
+const verifyEmail = asyncHandler(async (req, res) => {
+  const token = bearerToken(req);
+  if (!token) throw new AppError('Missing or invalid authorization', 401);
+  const { otp } = req.body;
+  const result = await authService.verifyEmailWithToken(token, otp);
+  sendSuccess(res, result);
+});
+
+const resendVerificationEmail = asyncHandler(async (req, res) => {
+  const token = bearerToken(req);
+  if (!token) throw new AppError('Missing or invalid authorization', 401);
+  const result = await authService.resendVerificationEmail(token);
   sendSuccess(res, result);
 });
 
@@ -95,6 +134,7 @@ const me = asyncHandler(async (req, res) => {
     city: user.city || null,
     state: user.state || null,
     country: user.country || null,
+    email_verified: !!user.email_verified,
   });
 });
 
@@ -123,4 +163,15 @@ const changePassword = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
-module.exports = { register, login, validate, me, refresh, changePassword };
+module.exports = {
+  register,
+  login,
+  loginRequestOtp,
+  loginWithOtp,
+  verifyEmail,
+  resendVerificationEmail,
+  validate,
+  me,
+  refresh,
+  changePassword,
+};

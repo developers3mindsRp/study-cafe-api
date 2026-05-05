@@ -30,6 +30,25 @@ const login = {
     }),
 };
 
+const loginOtpRequest = {
+    body: Joi.object({
+        email: Joi.string().email().required(),
+    }),
+};
+
+const loginOtp = {
+    body: Joi.object({
+        email: Joi.string().email().required(),
+        otp: Joi.string().pattern(/^\d{6}$/).required(),
+    }),
+};
+
+const verifyEmailOtp = {
+    body: Joi.object({
+        otp: Joi.string().pattern(/^\d{6}$/).required(),
+    }),
+};
+
 const refreshToken = {
     body: Joi.object({
         refreshToken: Joi.string().required(),
@@ -104,6 +123,9 @@ const idParam = {
 module.exports = {
     register,
     login,
+    loginOtpRequest,
+    loginOtp,
+    verifyEmailOtp,
     refreshToken,
     changePassword,
     checkAccess,

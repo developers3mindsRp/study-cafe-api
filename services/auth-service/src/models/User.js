@@ -41,6 +41,7 @@ module.exports = (sequelize) => {
       referral_code: { type: DataTypes.STRING(32), allowNull: true, unique: true },
       referred_by: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
       referred_at: { type: DataTypes.DATE, allowNull: true },
+      email_verified_at: { type: DataTypes.DATE, allowNull: true },
     },
     {
       tableName: 'users',

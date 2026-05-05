@@ -6,8 +6,9 @@ const { User, Role, UserMembership } = require('../models');
 const { getRedis } = require('../config/redis');
 const config = require('../config');
 const { getEffectivePermissions } = require('../config/permissions');
-const { AppError } = require('../../../../shared');
+const { AppError, logger } = require('../../../../shared');
 const phpass = require('../utils/phpass');
+const emailService = require('./email.service');
 
 /**
  * Verify a password against any supported hash format:
@@ -44,8 +45,66 @@ function generateReferralCode() {
   return crypto.randomBytes(4).toString('hex').toUpperCase();
 }
 
+function generateSixDigitOtp() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function hashOtp(purpose, subjectId, otp) {
+  return crypto
+    .createHmac('sha256', config.otpPepper)
+    .update(`${purpose}|${subjectId}|${otp}`)
+    .digest('hex');
+}
+
+async function saveOtp(purpose, subjectId, otp) {
+  const redis = await getRedis();
+  const key = `otp:${purpose}:${subjectId}`;
+  await redis.setEx(key, config.otpTtlSeconds, hashOtp(purpose, subjectId, otp));
+}
+
+async function verifyOtp(purpose, subjectId, otp, { consume = true } = {}) {
+  const redis = await getRedis();
+  const key = `otp:${purpose}:${subjectId}`;
+  const stored = await redis.get(key);
+  if (!stored) return false;
+  const computed = hashOtp(purpose, subjectId, otp);
+  const a = Buffer.from(String(stored), 'utf8');
+  const b = Buffer.from(computed, 'utf8');
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+  if (consume) await redis.del(key);
+  return true;
+}
+
+async function rateLimitLoginOtp(emailNorm) {
+  const redis = await getRedis();
+  const key = `ratelimit:login_otp:${emailNorm}`;
+  const n = await redis.incr(key);
+  if (n === 1) await redis.expire(key, 3600);
+  if (n > config.loginOtpMaxPerHour) {
+    throw new AppError('Too many code requests. Try again later.', 429);
+  }
+}
+
+function userIsEmailVerified(plain) {
+  return plain.email_verified_at != null;
+}
+
+const SESSION_USER_ATTRS = [
+  'id', 'email', 'name', 'bio', 'role_id', 'password_hash', 'permission_overrides',
+  'profile_pic_url', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country',
+  'referral_code', 'email_verified_at',
+];
+
 function signAccess(payload) {
   return jwt.sign(payload, config.jwt.secret, { expiresIn: config.jwt.expiry });
+}
+
+/** Seconds until access JWT expiry — must match signAccess / JWT_EXPIRY (login used to hardcode 3600). */
+function expiresInSecondsFromAccessToken(token) {
+  const decoded = jwt.decode(token);
+  if (!decoded || typeof decoded.exp !== 'number') return 3600;
+  const remaining = decoded.exp - Math.floor(Date.now() / 1000);
+  return remaining > 0 ? remaining : 0;
 }
 
 function signRefresh(payload) {
@@ -81,6 +140,51 @@ function emptyToNull(s) {
   if (s == null) return null;
   const t = String(s).trim();
   return t === '' ? null : t;
+}
+
+async function sessionFromUserEntity(user) {
+  if (!user) return null;
+  const plain = user.get({ plain: true });
+  const role = plain.Role?.name || 'user';
+  const emailVerified = userIsEmailVerified(plain);
+  const accessToken = signAccess({
+    userId: plain.id,
+    email: plain.email,
+    role,
+    emailVerified,
+  });
+  const refreshToken = signRefresh({ userId: plain.id });
+  try {
+    const redis = await getRedis();
+    await redis.setEx(`token:${plain.id}`, config.cacheTtl, accessToken);
+  } catch (_) {}
+  const permissions = getEffectivePermissions(role, plain.permission_overrides);
+  const has_active_membership = await hasActiveMembershipForUserId(plain.id);
+  return {
+    token: accessToken,
+    accessToken,
+    refreshToken,
+    user: {
+      id: String(plain.id),
+      email: plain.email,
+      name: plain.name || '',
+      bio: plain.bio != null && String(plain.bio).trim() !== '' ? String(plain.bio) : null,
+      avatar: plain.profile_pic_url || null,
+      phone: plain.phone || null,
+      profession: plain.profession || null,
+      company: plain.company || null,
+      designation: plain.designation || null,
+      city: plain.city || null,
+      state: plain.state || null,
+      country: plain.country || null,
+      referral_code: plain.referral_code || null,
+      role,
+      permissions,
+      has_active_membership,
+      email_verified: emailVerified,
+    },
+    expiresIn: expiresInSecondsFromAccessToken(accessToken),
+  };
 }
 
 async function register({
@@ -141,11 +245,25 @@ async function register({
     referral_code: newReferralCode,
     referred_by: referredBy,
     referred_at: referredBy ? new Date() : null,
+    email_verified_at: null,
   });
+
+  const otp = generateSixDigitOtp();
+  await saveOtp('verify_email', String(user.id), otp);
+  const sendResult = await emailService.sendOtpEmail({ to: emailNorm, otp, purpose: 'signup' });
+  if (!sendResult.sent) {
+    logger.warn('[register] OTP not emailed (configure SMTP_HOST for production)', {
+      email: emailNorm,
+      otp,
+      reason: sendResult.reason,
+    });
+  }
+
   const withRole = await User.findByPk(user.id, {
     include: [{ model: Role, as: 'Role', attributes: ['name'] }],
     attributes: [
-      'id', 'email', 'name', 'referral_code', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country',
+      'id', 'email', 'name', 'referral_code', 'phone', 'profession', 'company', 'designation',
+      'city', 'state', 'country', 'email_verified_at',
     ],
   });
   const r = withRole.get({ plain: true });
@@ -163,53 +281,107 @@ async function register({
     city: r.city,
     state: r.state,
     country: r.country,
+    email_verified: userIsEmailVerified(r),
   };
 }
 
-async function login({ email, password }) {
+async function loginWithPassword({ email, password }) {
+  const norm = String(email).trim().toLowerCase();
   const user = await User.scope('withPassword').findOne({
-    where: { email, is_active: true },
+    where: { email: norm, is_active: true },
     include: [{ model: Role, as: 'Role', attributes: ['name'] }],
-    attributes: ['id', 'email', 'name', 'bio', 'role_id', 'password_hash', 'permission_overrides',
-      'profile_pic_url', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country', 'referral_code'],
+    attributes: SESSION_USER_ATTRS,
   });
   if (!user) return null;
   const passwordValid = await verifyAndMaybeUpgradePassword(password, user);
   if (!passwordValid) return null;
-  const plain = user.get({ plain: true });
-  const role = plain.Role?.name || 'user';
-  const accessToken = signAccess({ userId: plain.id, email: plain.email, role });
-  const refreshToken = signRefresh({ userId: plain.id });
+  return sessionFromUserEntity(user);
+}
+
+async function loginWithEmailOtp({ email, otp }) {
+  const norm = String(email).trim().toLowerCase();
+  const ok = await verifyOtp('login', norm, otp, { consume: true });
+  if (!ok) return null;
+
+  const user = await User.findOne({
+    where: { email: norm, is_active: true },
+    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+    attributes: SESSION_USER_ATTRS.filter((a) => a !== 'password_hash'),
+  });
+  return sessionFromUserEntity(user);
+}
+
+async function invalidateOtp(purpose, subjectId) {
+  const redis = await getRedis();
+  await redis.del(`otp:${purpose}:${subjectId}`);
+}
+
+async function requestLoginOtp({ email }) {
+  const norm = String(email).trim().toLowerCase();
+  await rateLimitLoginOtp(norm);
+
+  const user = await User.findOne({
+    where: { email: norm, is_active: true },
+    attributes: ['id', 'email'],
+  });
+
+  if (!user) {
+    return { ok: true, message: 'If an account exists for this email, a sign-in code was sent.' };
+  }
+
+  const otp = generateSixDigitOtp();
+  await saveOtp('login', norm, otp);
   try {
-    const redis = await getRedis();
-    await redis.setEx(`token:${plain.id}`, config.cacheTtl, accessToken);
-  } catch (_) {}
-  const permissions = getEffectivePermissions(role, plain.permission_overrides);
-  const has_active_membership = await hasActiveMembershipForUserId(plain.id);
-  return {
-    token: accessToken,
-    accessToken,
-    refreshToken,
-    user: {
-      id: String(plain.id),
-      email: plain.email,
-      name: plain.name || '',
-      bio: plain.bio != null && String(plain.bio).trim() !== '' ? String(plain.bio) : null,
-      avatar: plain.profile_pic_url || null,
-      phone: plain.phone || null,
-      profession: plain.profession || null,
-      company: plain.company || null,
-      designation: plain.designation || null,
-      city: plain.city || null,
-      state: plain.state || null,
-      country: plain.country || null,
-      referral_code: plain.referral_code || null,
-      role,
-      permissions,
-      has_active_membership,
-    },
-    expiresIn: 3600,
-  };
+    await emailService.sendOtpEmail({ to: norm, otp, purpose: 'login' });
+  } catch (err) {
+    logger.error('[requestLoginOtp] send failed', { err: err?.message || err });
+    await invalidateOtp('login', norm);
+    throw new AppError('Could not send sign-in email. Try again shortly.', 503);
+  }
+
+  return { ok: true, message: 'If an account exists for this email, a sign-in code was sent.' };
+}
+
+async function verifyEmailWithToken(accessToken, otp) {
+  const decoded = verifyAccess(accessToken);
+  const userId = decoded.userId;
+  const row = await User.findByPk(userId, {
+    where: { is_active: true },
+    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+    attributes: SESSION_USER_ATTRS.filter((a) => a !== 'password_hash'),
+  });
+  if (!row) throw new AppError('User not found or inactive', 401);
+  const plain = row.get({ plain: true });
+  if (userIsEmailVerified(plain)) {
+    return sessionFromUserEntity(row);
+  }
+  const ok = await verifyOtp('verify_email', String(userId), otp, { consume: true });
+  if (!ok) throw new AppError('Invalid or expired verification code', 400);
+  await row.update({ email_verified_at: new Date() });
+  await row.reload({ include: [{ model: Role, as: 'Role', attributes: ['name'] }] });
+  return sessionFromUserEntity(row);
+}
+
+async function resendVerificationEmail(accessToken) {
+  const decoded = verifyAccess(accessToken);
+  const user = await User.findByPk(decoded.userId, {
+    where: { is_active: true },
+    attributes: ['id', 'email', 'email_verified_at'],
+  });
+  if (!user) throw new AppError('User not found or inactive', 401);
+  const plain = user.get({ plain: true });
+  if (userIsEmailVerified(plain)) {
+    throw new AppError('Email is already verified', 400);
+  }
+  const otp = generateSixDigitOtp();
+  await saveOtp('verify_email', String(plain.id), otp);
+  try {
+    await emailService.sendOtpEmail({ to: plain.email, otp, purpose: 'signup' });
+  } catch (err) {
+    logger.error('[resendVerificationEmail] send failed', { err: err?.message || err });
+    throw new AppError('Could not send email. Try again shortly.', 503);
+  }
+  return { ok: true };
 }
 
 async function validateToken(token) {
@@ -217,13 +389,17 @@ async function validateToken(token) {
   const user = await User.findByPk(decoded.userId, {
     where: { is_active: true },
     include: [{ model: Role, as: 'Role', attributes: ['name'] }],
-    attributes: ['id', 'email', 'name', 'bio', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country', 'permission_overrides', 'referral_code', 'profile_pic_url'],
+    attributes: [
+      'id', 'email', 'name', 'bio', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country',
+      'permission_overrides', 'referral_code', 'profile_pic_url', 'email_verified_at',
+    ],
   });
   if (!user) return null;
   const r = user.get({ plain: true });
   const role = r.Role?.name || 'user';
   const permissions = getEffectivePermissions(role, r.permission_overrides);
   const has_active_membership = await hasActiveMembershipForUserId(r.id);
+  const email_verified = userIsEmailVerified(r);
   return {
     userId: r.id,
     id: String(r.id),
@@ -242,6 +418,7 @@ async function validateToken(token) {
     city: r.city || null,
     state: r.state || null,
     country: r.country || null,
+    email_verified,
   };
 }
 
@@ -259,21 +436,33 @@ async function refreshTokens(refreshToken) {
   const user = await User.findByPk(decoded.userId, {
     where: { is_active: true },
     include: [{ model: Role, as: 'Role', attributes: ['name'] }],
-    attributes: ['id', 'email', 'name'],
+    attributes: ['id', 'email', 'role_id', 'email_verified_at'],
   });
   if (!user) return null;
   const r = user.get({ plain: true });
-  const accessToken = signAccess({ userId: r.id, email: r.email, role: r.Role?.name || 'user' });
-  return { accessToken, expiresIn: 3600 };
+  const role = r.Role?.name || 'user';
+  const emailVerified = userIsEmailVerified(r);
+  const accessToken = signAccess({
+    userId: r.id,
+    email: r.email,
+    role,
+    emailVerified,
+  });
+  return { accessToken, expiresIn: expiresInSecondsFromAccessToken(accessToken) };
 }
 
 module.exports = {
   signAccess,
   signRefresh,
+  expiresInSecondsFromAccessToken,
   verifyAccess,
   verifyRefresh,
   register,
-  login,
+  loginWithPassword,
+  loginWithEmailOtp,
+  requestLoginOtp,
+  verifyEmailWithToken,
+  resendVerificationEmail,
   validateToken,
   refreshTokens,
   changePassword,
