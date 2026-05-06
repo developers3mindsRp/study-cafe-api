@@ -1,0 +1,12 @@
+-- DEPRECATED for repeated runs: multi-statement ALTER fails if any column already exists (ER_DUP_FIELDNAME).
+-- Use instead (idempotent):
+--   npm run ensure-articles-extended-seo
+--
+-- Reference DDL for manual fixes only:
+
+-- ALTER TABLE articles ADD COLUMN canonical_url VARCHAR(1000) NULL;
+-- ALTER TABLE articles ADD COLUMN robots VARCHAR(255) NULL;
+-- ALTER TABLE articles ADD COLUMN og_title VARCHAR(255) NULL;
+-- ALTER TABLE articles ADD COLUMN og_description TEXT NULL;
+-- ALTER TABLE articles ADD COLUMN og_image_url VARCHAR(500) NULL;
+-- ALTER TABLE articles ADD COLUMN thumbnail_alt VARCHAR(500) NULL;

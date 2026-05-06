@@ -1115,6 +1115,43 @@ function buildPremiumPreviewHtml(excerpt, fullContent) {
   return `<p>${escapeHtmlText(cut)}</p>`;
 }
 
+/**
+ * Published articles sharing any of the given categories, globally newest first.
+ * Avoids ArticleCategoryMap.findAll + limit without ORDER BY, which returned an arbitrary
+ * slice of sibling rows (often oldest IDs) and made "related" / up-next look stale.
+ */
+async function findPublishedArticlesSharingCategories(excludeArticleId, catIds, attributes, resultLimit) {
+  const excludeId = Number(excludeArticleId);
+  const safeCatIds = [...new Set(catIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0))];
+  const lim = Math.min(500, Math.max(1, Number(resultLimit) || 1));
+  if (!safeCatIds.length || !Number.isFinite(excludeId)) return [];
+
+  const catPlaceholders = safeCatIds.map(() => '?').join(',');
+  const idRows = await sequelize.query(
+    `SELECT a.id FROM articles a
+     WHERE a.status = 'publish'
+       AND a.id != ?
+       AND EXISTS (
+         SELECT 1 FROM article_categories ac
+         WHERE ac.article_id = a.id AND ac.category_id IN (${catPlaceholders})
+       )
+     ORDER BY a.published_at IS NULL, a.published_at DESC, a.id DESC
+     LIMIT ?`,
+    { replacements: [excludeId, ...safeCatIds, lim], type: QueryTypes.SELECT },
+  );
+
+  const ids = idRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n));
+  if (!ids.length) return [];
+
+  const rows = await Article.findAll({
+    where: { id: { [Op.in]: ids } },
+    attributes,
+  });
+  const rank = new Map(ids.map((id, i) => [id, i]));
+  rows.sort((a, b) => (rank.get(Number(a.id)) ?? 0) - (rank.get(Number(b.id)) ?? 0));
+  return rows;
+}
+
 async function getRelatedArticlesForArticle(articleId, limit = 4) {
   const RELATED_ATTRS = [
     'id', 'title', 'slug', 'thumbnail_url', 'excerpt',
@@ -1129,22 +1166,9 @@ async function getRelatedArticlesForArticle(articleId, limit = 4) {
 
   let rows = [];
 
-  // Try same-category articles first
+  // Try same-category articles first (newest site-wide among siblings, not among an arbitrary map slice)
   if (catIds.length) {
-    const sibs = await ArticleCategoryMap.findAll({
-      where: { category_id: { [Op.in]: catIds }, article_id: { [Op.ne]: articleId } },
-      attributes: ['article_id'],
-      limit: 48,
-    });
-    const candidateIds = [...new Set(sibs.map((s) => Number(s.article_id)))].filter((n) => Number.isFinite(n));
-    if (candidateIds.length) {
-      rows = await Article.findAll({
-        where: { id: { [Op.in]: candidateIds }, status: 'publish' },
-        attributes: RELATED_ATTRS,
-        order: [['published_at', 'DESC']],
-        limit,
-      });
-    }
+    rows = await findPublishedArticlesSharingCategories(articleId, catIds, RELATED_ATTRS, limit);
   }
 
   // Fallback: latest published articles (excluding current)
@@ -1349,21 +1373,13 @@ async function getUpNextArticlesBySlugPublic(slug, viewer = null, rawLimit) {
   const catIds = [...new Set(maps.map((m) => Number(m.category_id)))].filter((n) => Number.isFinite(n));
 
   if (picked.length < limit && catIds.length) {
-    const sibs = await ArticleCategoryMap.findAll({
-      where: { category_id: { [Op.in]: catIds }, article_id: { [Op.ne]: articleId } },
-      attributes: ['article_id'],
-      limit: 240,
-      raw: true,
-    });
-    const candidateIds = [...new Set(sibs.map((s) => Number(s.article_id)))].filter((n) => Number.isFinite(n));
-    if (candidateIds.length) {
-      const rows = await Article.findAll({
-        where: { id: { [Op.in]: candidateIds }, status: 'publish' },
-        attributes: UP_NEXT_LIST_ATTRS,
-        order: [['published_at', 'DESC'], ['id', 'DESC']],
-      });
-      takeFromRows(rows);
-    }
+    const rows = await findPublishedArticlesSharingCategories(
+      articleId,
+      catIds,
+      UP_NEXT_LIST_ATTRS,
+      Math.max(limit * 10, 60),
+    );
+    takeFromRows(rows);
   }
 
   if (picked.length < limit && authorId != null) {
@@ -1543,6 +1559,46 @@ async function getArticleByIdInternal(id) {
   return result;
 }
 
+async function getExistingArticleTagIds(articleId) {
+  const rows = await ArticleTagMap.findAll({
+    where: { article_id: articleId },
+    attributes: ['tag_id'],
+    raw: true,
+  });
+  return [...new Set(rows.map((r) => Number(r.tag_id)).filter((n) => Number.isFinite(n) && n > 0))];
+}
+
+/** Match/create Tag by human-readable name (case-insensitive) for comma-separated admin tags. */
+async function findOrCreateTagIdForLabel(rawLabel) {
+  const name = String(rawLabel || '').trim();
+  if (!name) return null;
+  const lower = name.toLowerCase();
+  const existing = await Tag.findOne({
+    where: sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), lower),
+    attributes: ['id'],
+  });
+  if (existing) return Number(existing.get('id'));
+  let slug = slugify(name);
+  if (!slug) slug = `tag-${Date.now()}`;
+  const row = await Tag.create({ name, slug });
+  return Number(row.get('id'));
+}
+
+async function mergeArticleTagIdsFromPayload({ tag_ids: chipIdsRaw, tag_labels: labelsRaw }) {
+  const chipIds = (Array.isArray(chipIdsRaw) ? chipIdsRaw : [])
+    .map((id) => Number(id))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  const labels = (Array.isArray(labelsRaw) ? labelsRaw : [])
+    .map((s) => String(s || '').trim())
+    .filter(Boolean);
+  const fromLabels = [];
+  for (const label of labels) {
+    const tid = await findOrCreateTagIdForLabel(label);
+    if (tid != null) fromLabels.push(tid);
+  }
+  return [...new Set([...chipIds, ...fromLabels])];
+}
+
 async function createArticle(data) {
   const slugVal = data.slug || slugify(data.title);
   const row = await Article.create({
@@ -1551,6 +1607,9 @@ async function createArticle(data) {
     excerpt: data.excerpt || null,
     content: data.content ?? data.body ?? null,
     thumbnail_url: data.thumbnail_url ?? data.cover_image_url ?? null,
+    thumbnail_alt: data.thumbnail_alt || null,
+    thumbnail_link_url: data.thumbnail_link_url || null,
+    thumbnail_caption: data.thumbnail_caption || null,
     author_id: data.author_id ?? null,
     sub_heading: data.sub_heading ?? null,
     status: data.status || 'draft',
@@ -1558,15 +1617,24 @@ async function createArticle(data) {
     meta_title: data.meta_title || null,
     meta_description: data.meta_description || null,
     meta_keywords: data.meta_keywords || null,
+    canonical_url: data.canonical_url || null,
+    robots: data.robots || null,
+    og_title: data.og_title || null,
+    og_description: data.og_description || null,
+    og_image_url: data.og_image_url || null,
+    rel_download_url: data.rel_download_url ?? null,
     blog_access_tier: normalizeBlogAccessTier(data.blog_access_tier),
   });
   const articleId = row.id;
   const category_ids = Array.isArray(data.category_ids) ? data.category_ids : [];
-  const tag_ids = Array.isArray(data.tag_ids) ? data.tag_ids : [];
+  const mergedTagIds = await mergeArticleTagIdsFromPayload({
+    tag_ids: data.tag_ids,
+    tag_labels: data.tag_labels,
+  });
   const article_type_ids = Array.isArray(data.article_type_ids) ? data.article_type_ids : [];
   const court_ids = Array.isArray(data.court_ids) ? data.court_ids : [];
   if (category_ids.length) await ArticleCategoryMap.bulkCreate(category_ids.map((category_id) => ({ article_id: articleId, category_id })));
-  if (tag_ids.length) await ArticleTagMap.bulkCreate(tag_ids.map((tag_id) => ({ article_id: articleId, tag_id })));
+  if (mergedTagIds.length) await ArticleTagMap.bulkCreate(mergedTagIds.map((tag_id) => ({ article_id: articleId, tag_id })));
   if (article_type_ids.length) await ArticleTypeMap.bulkCreate(article_type_ids.map((article_type_id) => ({ article_id: articleId, article_type_id })));
   if (court_ids.length) await ArticleCourtMap.bulkCreate(court_ids.map((court_id) => ({ article_id: articleId, court_id })));
   return getArticleByIdInternal(articleId);
@@ -1583,6 +1651,9 @@ async function updateArticle(id, data) {
   if (data.body !== undefined) updates.content = data.body;
   if (data.thumbnail_url !== undefined) updates.thumbnail_url = data.thumbnail_url;
   if (data.cover_image_url !== undefined) updates.thumbnail_url = data.cover_image_url;
+  if (data.thumbnail_alt !== undefined) updates.thumbnail_alt = data.thumbnail_alt || null;
+  if (data.thumbnail_link_url !== undefined) updates.thumbnail_link_url = data.thumbnail_link_url || null;
+  if (data.thumbnail_caption !== undefined) updates.thumbnail_caption = data.thumbnail_caption || null;
   if (data.author_id !== undefined) updates.author_id = data.author_id;
   if (data.sub_heading !== undefined) updates.sub_heading = data.sub_heading;
   if (data.status !== undefined) updates.status = data.status;
@@ -1590,6 +1661,11 @@ async function updateArticle(id, data) {
   if (data.meta_title !== undefined) updates.meta_title = data.meta_title;
   if (data.meta_description !== undefined) updates.meta_description = data.meta_description;
   if (data.meta_keywords !== undefined) updates.meta_keywords = data.meta_keywords;
+  if (data.canonical_url !== undefined) updates.canonical_url = data.canonical_url || null;
+  if (data.robots !== undefined) updates.robots = data.robots || null;
+  if (data.og_title !== undefined) updates.og_title = data.og_title || null;
+  if (data.og_description !== undefined) updates.og_description = data.og_description || null;
+  if (data.og_image_url !== undefined) updates.og_image_url = data.og_image_url || null;
   if (data.blog_access_tier !== undefined) updates.blog_access_tier = normalizeBlogAccessTier(data.blog_access_tier);
   if (data.rel_download_url !== undefined) updates.rel_download_url = data.rel_download_url || null;
   await row.update(updates);
@@ -1598,10 +1674,19 @@ async function updateArticle(id, data) {
     const ids = Array.isArray(data.category_ids) ? data.category_ids : [];
     if (ids.length) await ArticleCategoryMap.bulkCreate(ids.map((category_id) => ({ article_id: id, category_id })));
   }
-  if (data.tag_ids !== undefined) {
+  if (data.tag_ids !== undefined || data.tag_labels !== undefined) {
     await ArticleTagMap.destroy({ where: { article_id: id } });
-    const ids = Array.isArray(data.tag_ids) ? data.tag_ids : [];
-    if (ids.length) await ArticleTagMap.bulkCreate(ids.map((tag_id) => ({ article_id: id, tag_id })));
+    const chipIds =
+      data.tag_ids !== undefined
+        ? (Array.isArray(data.tag_ids) ? data.tag_ids : [])
+        : await getExistingArticleTagIds(id);
+    const labels =
+      data.tag_labels !== undefined ? (Array.isArray(data.tag_labels) ? data.tag_labels : []) : [];
+    const mergedTagIds = await mergeArticleTagIdsFromPayload({
+      tag_ids: chipIds,
+      tag_labels: labels,
+    });
+    if (mergedTagIds.length) await ArticleTagMap.bulkCreate(mergedTagIds.map((tag_id) => ({ article_id: id, tag_id })));
   }
   if (data.article_type_ids !== undefined) {
     await ArticleTypeMap.destroy({ where: { article_id: id } });
