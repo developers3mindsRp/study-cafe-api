@@ -655,6 +655,9 @@ async function deletePlan(id) {
 
 async function getArticlesPublic(options = {}) {
   const { page = 1, limit = 20, search, category } = options;
+  const normalizedCategory = category && String(category).trim()
+    ? String(category).trim().toLowerCase()
+    : undefined;
 
   const where = { status: 'publish' };
   if (search && String(search).trim()) {
@@ -665,9 +668,9 @@ async function getArticlesPublic(options = {}) {
     ];
   }
 
-  // If category slug provided, find the category id first and filter via subquery
-  if (category && String(category).trim()) {
-    const catRow = await Category.findOne({ where: { slug: String(category).trim() }, attributes: ['id'] });
+  // If category slug provided (except "all"), find category id and filter via mapping table.
+  if (normalizedCategory && normalizedCategory !== 'all') {
+    const catRow = await Category.findOne({ where: { slug: normalizedCategory }, attributes: ['id'] });
     if (!catRow) {
       return { data: [], total: 0, page, limit, totalPages: 0 };
     }
@@ -679,22 +682,29 @@ async function getArticlesPublic(options = {}) {
     where.id = { [Op.in]: articleIds };
   }
 
-  const result = await paginate(Article, {
+  const safePage = Math.max(1, Number(page) || 1);
+  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
+  const offset = (safePage - 1) * safeLimit;
+
+  const { count, rows } = await Article.findAndCountAll({
     where,
-    page,
-    limit,
-    sortBy: 'published_at',
-    sortOrder: 'DESC',
+    limit: safeLimit,
+    offset,
+    // Keep newest records first (latest created / last inserted)
+    order: [['created_at', 'DESC'], ['id', 'DESC']],
     attributes: ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'published_at', 'created_at'],
   });
 
+  const total = typeof count === 'number' ? count : count.length;
+  const totalPages = Math.ceil(total / safeLimit) || 0;
+
   // Flatten { data, meta } into { data, total, page, limit, totalPages }
   const out = {
-    data: result.data || [],
-    total: result.meta?.total ?? 0,
-    page: result.meta?.page ?? page,
-    limit: result.meta?.limit ?? limit,
-    totalPages: result.meta?.totalPages ?? 0,
+    data: rows.map((r) => (typeof r.get === 'function' ? r.get({ plain: true }) : r)),
+    total,
+    page: safePage,
+    limit: safeLimit,
+    totalPages,
   };
 
   if (out.data.length > 0) {
