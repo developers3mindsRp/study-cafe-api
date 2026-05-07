@@ -37,6 +37,7 @@
     "ensure-home-sections": "node scripts/ensure-home-sections-meta.js",
     "ensure-hide-from-public": "node --require dotenv/config scripts/apply-mysql-sql-file.js services/course-service/scripts/add-hide-from-public-to-courses.sql",
     "ensure-articles-extended-seo": "node scripts/ensure-articles-extended-seo-columns.js",
+    "ensure-courses-seo": "node scripts/ensure-courses-seo-columns.js",
     "sync": "bash scripts/run-full-migration.sh",
     "seed:admin": "npm run seed:admin --prefix services/auth-service"
   },

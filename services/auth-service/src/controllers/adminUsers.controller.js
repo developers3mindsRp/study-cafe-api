@@ -41,6 +41,7 @@ const create = asyncHandler(async (req, res) => {
     role_id: parseInt(role_id, 10),
     permission_overrides: sanitizePermissionOverrides(permission_overrides),
     actorRole: req.adminUser?.role,
+    actorPermissions: req.adminUser?.permissions ?? [],
   });
   sendCreated(res, user);
 });
@@ -56,6 +57,7 @@ const update = asyncHandler(async (req, res) => {
     password: password !== undefined ? password : undefined,
     permission_overrides: permission_overrides !== undefined ? sanitizePermissionOverrides(permission_overrides) : undefined,
     actorRole: req.adminUser?.role,
+    actorPermissions: req.adminUser?.permissions ?? [],
   });
   if (!user) throw new AppError('User not found', 404);
   sendSuccess(res, user);

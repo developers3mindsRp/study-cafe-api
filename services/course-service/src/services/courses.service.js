@@ -13,7 +13,7 @@ const {
 const { QueryTypes } = require("sequelize");
 const axios = require("axios");
 const config = require("../config");
-const { logger } = require("../../../../shared");
+const { logger, AppError } = require("../../../../shared");
 const { checkCourseAccess } = require("./accessClient");
 
 /** Grant auth-service user_courses row so access/check + dashboard work (admin batch enroll, auto-enroll). */
@@ -101,12 +101,30 @@ function withCourseMetaDetail(course) {
       ? course.keywords.trim()
       : "";
 
+  const ogTitle =
+    typeof course?.og_title === "string" && course.og_title.trim()
+      ? course.og_title.trim()
+      : metaTitle;
+  const ogDescription =
+    typeof course?.og_description === "string" && course.og_description.trim()
+      ? course.og_description.trim()
+      : metaDescription;
+  let ogImageUrl = "";
+  if (typeof course?.og_image_url === "string" && course.og_image_url.trim()) {
+    ogImageUrl = course.og_image_url.trim();
+  } else if (typeof course?.thumbnail_url === "string" && course.thumbnail_url.trim()) {
+    ogImageUrl = course.thumbnail_url.trim();
+  }
+
   return {
     ...course,
     meta_detail: {
       meta_title: metaTitle,
       meta_description: metaDescription,
       meta_keywords: metaKeywords,
+      og_title: ogTitle,
+      og_description: ogDescription,
+      og_image_url: ogImageUrl,
     },
   };
 }
@@ -323,16 +341,21 @@ const coursesService = {
     let userId = data.author_user_id ?? existing?.user_id ?? null;
 
     if (userId == null) {
+      // Admin UI always sends author_* keys (often null). Only treat as an author
+      // update when at least one field has real content; otherwise skip quietly.
+      const authorFieldHasValue = (v) =>
+        v !== undefined && v !== null && String(v).trim() !== "";
       const hasProfileValues =
-        data.author_name !== undefined ||
-        data.author_role !== undefined ||
-        data.author_bio !== undefined ||
-        data.author_image !== undefined;
+        authorFieldHasValue(data.author_name) ||
+        authorFieldHasValue(data.author_role) ||
+        authorFieldHasValue(data.author_bio) ||
+        authorFieldHasValue(data.author_image);
 
       if (hasProfileValues) {
-        const err = new Error("author_user_id is required to update author profile");
-        err.statusCode = 400;
-        throw err;
+        throw new AppError(
+          "author_user_id is required to update author profile",
+          400,
+        );
       }
       return;
     }
@@ -831,6 +854,11 @@ const coursesService = {
       meta_title: data.meta_title || null,
       meta_description: data.meta_description || null,
       meta_keywords: data.meta_keywords || null,
+      canonical_url: data.canonical_url || null,
+      robots: data.robots || null,
+      og_title: data.og_title || null,
+      og_description: data.og_description || null,
+      og_image_url: data.og_image_url || null,
       faqs: data.faqs || null,
       feedback: data.feedback || null,
       includes_info: data.includes_info || null,
@@ -883,6 +911,11 @@ const coursesService = {
       "meta_title",
       "meta_description",
       "meta_keywords",
+      "canonical_url",
+      "robots",
+      "og_title",
+      "og_description",
+      "og_image_url",
       "faqs",
       "feedback",
       "includes_info",
@@ -943,11 +976,10 @@ const coursesService = {
     }
 
     if (!Array.isArray(curriculum) || curriculum.length === 0) {
-      const err = new Error(
+      throw new AppError(
         "Course has no curriculum items. Add curriculum in the course editor first.",
+        400,
       );
-      err.statusCode = 400;
-      throw err;
     }
 
     const { start_date, meet_link } = data;
@@ -1053,11 +1085,10 @@ const coursesService = {
     }
 
     if (!Array.isArray(curriculum) || curriculum.length === 0) {
-      const err = new Error(
+      throw new AppError(
         "Course has no curriculum items. Add curriculum in the course editor first.",
+        400,
       );
-      err.statusCode = 400;
-      throw err;
     }
 
     // Collect existing recordings keyed by (day_number, section_index)
