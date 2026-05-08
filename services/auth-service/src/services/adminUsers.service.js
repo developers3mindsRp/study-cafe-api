@@ -5,6 +5,11 @@ const { getEffectivePermissions, expandPermissionHierarchy } = require('../confi
 
 const ADMIN_PANEL_ROLES = ['super_admin', 'admin', 'editor', 'viewer', 'editor_articles', 'custom'];
 
+function actorMayAssignAdminRole({ actorRole, actorPermissions }) {
+  if (actorRole === 'super_admin' || actorRole === 'admin') return true;
+  return Array.isArray(actorPermissions) && actorPermissions.includes('admin_users:create');
+}
+
 async function listRoles() {
   const roles = await Role.findAll({
     order: [['id', 'ASC']],
@@ -66,14 +71,19 @@ async function getAdminUser(id) {
   };
 }
 
-async function createAdminUser({ email, password, name, role_id, permission_overrides, actorRole }) {
+async function createAdminUser({
+  email, password, name, role_id, permission_overrides, actorRole, actorPermissions,
+}) {
   const role = await Role.findByPk(role_id);
   if (!role) throw new Error('Invalid role_id');
   if (!ADMIN_PANEL_ROLES.includes(role.name)) {
     throw new Error('Role must be one of: ' + ADMIN_PANEL_ROLES.join(', '));
   }
-  if (['admin', 'super_admin'].includes(role.name) && actorRole !== 'super_admin') {
-    throw new Error('Only super_admin can create admin or super_admin users');
+  if (role.name === 'super_admin' && actorRole !== 'super_admin') {
+    throw new Error('Only super_admin can create super_admin users');
+  }
+  if (role.name === 'admin' && !actorMayAssignAdminRole({ actorRole, actorPermissions })) {
+    throw new Error('Insufficient permissions to assign the admin role');
   }
   const overrides = Array.isArray(permission_overrides) ? permission_overrides : [];
   const isFullAccess = ['super_admin', 'admin'].includes(role.name);
@@ -96,7 +106,9 @@ async function createAdminUser({ email, password, name, role_id, permission_over
   return getAdminUser(user.id);
 }
 
-async function updateAdminUser(id, { name, role_id, is_active, password, permission_overrides, actorRole }) {
+async function updateAdminUser(id, {
+  name, role_id, is_active, password, permission_overrides, actorRole, actorPermissions,
+}) {
   const user = await User.findByPk(id);
   if (!user) return null;
   const updates = {};
@@ -107,8 +119,11 @@ async function updateAdminUser(id, { name, role_id, is_active, password, permiss
     if (!ADMIN_PANEL_ROLES.includes(role.name)) {
       throw new Error('Role must be one of: ' + ADMIN_PANEL_ROLES.join(', '));
     }
-    if (['admin', 'super_admin'].includes(role.name) && actorRole !== 'super_admin') {
-      throw new Error('Only super_admin can assign admin or super_admin role');
+    if (role.name === 'super_admin' && actorRole !== 'super_admin') {
+      throw new Error('Only super_admin can assign the super_admin role');
+    }
+    if (role.name === 'admin' && !actorMayAssignAdminRole({ actorRole, actorPermissions })) {
+      throw new Error('Insufficient permissions to assign the admin role');
     }
     updates.role_id = role_id;
   }

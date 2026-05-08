@@ -5,6 +5,7 @@ const ALL_PERMISSIONS = [
   'memberships:list', 'memberships:view', 'memberships:create', 'memberships:edit', 'memberships:delete',
   'testimonials:list', 'testimonials:view', 'testimonials:create', 'testimonials:edit', 'testimonials:delete',
   'faq:list', 'faq:view', 'faq:create', 'faq:edit', 'faq:delete',
+  'newsletter:list', 'newsletter:edit', 'newsletter:create', 'newsletter:delete', 'newsletter:send',
   'courses:list', 'courses:view', 'courses:create', 'courses:edit', 'courses:delete',
   'orders:list', 'orders:view',
   'coupons:list', 'coupons:view', 'coupons:create', 'coupons:edit', 'coupons:delete',
@@ -12,6 +13,7 @@ const ALL_PERMISSIONS = [
   'live_sessions:list', 'live_sessions:view',
   'contact_inquiries:list', 'contact_inquiries:view',
   'affiliate:list', 'affiliate:view',
+  'downloads:list', 'downloads:view', 'downloads:create', 'downloads:edit', 'downloads:delete',
   'admin:access',
   'admin_users:list', 'admin_users:view', 'admin_users:create', 'admin_users:edit', 'admin_users:delete',
 ];
@@ -50,6 +52,12 @@ const MODULE_HIERARCHY = {
     ['faq:create'],
     ['faq:delete'],
   ],
+  newsletter: [
+    ['newsletter:list'],
+    ['newsletter:edit'],
+    ['newsletter:create'],
+    ['newsletter:delete'],
+  ],
   courses: [
     ['courses:list', 'courses:view'],
     ['courses:edit'],
@@ -79,6 +87,12 @@ const MODULE_HIERARCHY = {
   ],
   affiliate: [
     ['affiliate:list', 'affiliate:view'],
+  ],
+  downloads: [
+    ['downloads:list', 'downloads:view'],
+    ['downloads:edit'],
+    ['downloads:create'],
+    ['downloads:delete'],
   ],
   admin_users: [
     ['admin_users:list', 'admin_users:view'],
