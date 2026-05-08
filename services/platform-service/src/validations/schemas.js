@@ -227,7 +227,7 @@ const articleListQuery = {
     query: Joi.object({
         page: Joi.number().integer().min(1).default(1),
         limit: Joi.number().integer().min(1).max(100).default(10),
-        status: Joi.string().valid('draft', 'publish', 'archived').allow('', null),
+        status: Joi.string().valid('draft', 'publish', 'archived', 'scheduled').allow('', null),
         search: Joi.string().max(255).allow('', null),
         sortBy: Joi.string().max(64).allow('', null),
         sortOrder: Joi.string().valid('ASC', 'DESC', 'asc', 'desc').default('DESC'),
@@ -243,7 +243,7 @@ const articleWriteBody = {
     sub_heading: Joi.string().allow('', null),
     thumbnail: Joi.string().max(500).allow('', null),
     thumbnail_url: Joi.string().max(500).allow('', null),
-    status: Joi.string().valid('draft', 'publish', 'archived'),
+    status: Joi.string().valid('draft', 'publish', 'archived', 'scheduled'),
     seo_title: Joi.string().max(255).allow('', null),
     seo_description: Joi.string().allow('', null),
     seo_keywords: Joi.string().allow('', null),
@@ -270,6 +270,7 @@ const articleWriteBody = {
     court_ids: Joi.array().items(Joi.number().integer().positive()),
     author_id: Joi.number().integer().positive().allow(null),
     published_at: Joi.alternatives().try(Joi.date(), Joi.string().allow('', null)),
+    scheduled_publish_at: Joi.alternatives().try(Joi.date(), Joi.string().allow('', null)),
     /** Public blog: full HTML for everyone vs members-only full body. */
     blog_access_tier: Joi.string().valid('free', 'premium'),
     /** Downloadable asset URL (PDF / judgment). */
@@ -280,7 +281,7 @@ const createArticle = {
     body: Joi.object({
         ...articleWriteBody,
         title: Joi.string().max(500).required(),
-        status: Joi.string().valid('draft', 'publish', 'archived').default('draft'),
+        status: Joi.string().valid('draft', 'publish', 'archived', 'scheduled').default('draft'),
         blog_access_tier: Joi.string().valid('free', 'premium').default('free'),
     }),
 };

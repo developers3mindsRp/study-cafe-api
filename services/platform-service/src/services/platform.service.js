@@ -86,6 +86,7 @@ function normalizeStructuredFeatures(raw) {
 }
 
 const { paginate, AppError } = require('../../../../shared');
+const articleScheduling = require('./article-scheduling.service');
 const {
   sequelize,
   CmsPage,
@@ -1441,8 +1442,30 @@ async function getUpNextArticlesBySlugPublic(slug, viewer = null, rawLimit) {
   return attachAccessAndAuthorsToArticles(enrichedPlain, authorNameMap, articleCats, viewer);
 }
 
-const ARTICLE_LIST_ATTRS = ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'status', 'published_at', 'created_at', 'updated_at', 'blog_access_tier'];
-const SORTABLE_ARTICLE_COLUMNS = ['id', 'title', 'slug', 'created_at', 'updated_at', 'status', 'published_at'];
+const ARTICLE_LIST_ATTRS = ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'status', 'published_at', 'scheduled_publish_at', 'created_at', 'updated_at', 'blog_access_tier'];
+const SORTABLE_ARTICLE_COLUMNS = ['id', 'title', 'slug', 'created_at', 'updated_at', 'status', 'published_at', 'scheduled_publish_at'];
+
+function normalizeArticleAdminStatus(raw) {
+  if (raw === undefined || raw === null || raw === '') return 'draft';
+  const s = String(raw).toLowerCase().trim();
+  if (s === 'published') return 'publish';
+  if (['draft', 'publish', 'archived', 'scheduled'].includes(s)) return s;
+  return 'draft';
+}
+
+function assertValidArticleSchedule(status, scheduledAt) {
+  if (status !== 'scheduled') return;
+  if (!scheduledAt) {
+    throw new AppError('scheduled_publish_at is required when status is scheduled', 400);
+  }
+  const t = new Date(scheduledAt).getTime();
+  if (Number.isNaN(t)) {
+    throw new AppError('scheduled_publish_at must be a valid date', 400);
+  }
+  if (t <= Date.now()) {
+    throw new AppError('scheduled_publish_at must be in the future', 400);
+  }
+}
 
 function buildArticlesWhere(options = {}) {
   const { status, search } = options;
@@ -1601,6 +1624,22 @@ async function mergeArticleTagIdsFromPayload({ tag_ids: chipIdsRaw, tag_labels: 
 
 async function createArticle(data) {
   const slugVal = data.slug || slugify(data.title);
+  const statusNorm = normalizeArticleAdminStatus(data.status);
+  const scheduledAt =
+    data.scheduled_publish_at != null && data.scheduled_publish_at !== ''
+      ? new Date(data.scheduled_publish_at)
+      : null;
+
+  assertValidArticleSchedule(statusNorm, scheduledAt);
+
+  let published_at = null;
+  let scheduled_publish_at = null;
+  if (statusNorm === 'publish') {
+    published_at = data.published_at ? new Date(data.published_at) : new Date();
+  } else if (statusNorm === 'scheduled') {
+    scheduled_publish_at = scheduledAt;
+  }
+
   const row = await Article.create({
     title: data.title || '',
     slug: slugVal,
@@ -1612,8 +1651,9 @@ async function createArticle(data) {
     thumbnail_caption: data.thumbnail_caption || null,
     author_id: data.author_id ?? null,
     sub_heading: data.sub_heading ?? null,
-    status: data.status || 'draft',
-    published_at: data.published_at || null,
+    status: statusNorm,
+    published_at,
+    scheduled_publish_at,
     meta_title: data.meta_title || null,
     meta_description: data.meta_description || null,
     meta_keywords: data.meta_keywords || null,
@@ -1624,6 +1664,7 @@ async function createArticle(data) {
     og_image_url: data.og_image_url || null,
     rel_download_url: data.rel_download_url ?? null,
     blog_access_tier: normalizeBlogAccessTier(data.blog_access_tier),
+    rel_download_url: data.rel_download_url !== undefined ? (data.rel_download_url || null) : null,
   });
   const articleId = row.id;
   const category_ids = Array.isArray(data.category_ids) ? data.category_ids : [];
@@ -1637,12 +1678,31 @@ async function createArticle(data) {
   if (mergedTagIds.length) await ArticleTagMap.bulkCreate(mergedTagIds.map((tag_id) => ({ article_id: articleId, tag_id })));
   if (article_type_ids.length) await ArticleTypeMap.bulkCreate(article_type_ids.map((article_type_id) => ({ article_id: articleId, article_type_id })));
   if (court_ids.length) await ArticleCourtMap.bulkCreate(court_ids.map((court_id) => ({ article_id: articleId, court_id })));
-  return getArticleByIdInternal(articleId);
+
+  const out = await getArticleByIdInternal(articleId);
+  console.log('[createArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
+  await articleScheduling.syncArticlePublishJob(out).catch((err) => {
+    console.error('[createArticle] sync schedule failed', err.message, err.stack);
+  });
+  return out;
 }
 
 async function updateArticle(id, data) {
   const row = await Article.findByPk(id);
   if (!row) return null;
+  const cur = row.get({ plain: true });
+  const nextStatus = data.status !== undefined ? normalizeArticleAdminStatus(data.status) : cur.status;
+
+  let nextScheduled = cur.scheduled_publish_at;
+  if (data.scheduled_publish_at !== undefined) {
+    nextScheduled =
+      data.scheduled_publish_at != null && data.scheduled_publish_at !== ''
+        ? new Date(data.scheduled_publish_at)
+        : null;
+  }
+
+  assertValidArticleSchedule(nextStatus, nextStatus === 'scheduled' ? nextScheduled : null);
+
   const updates = {};
   if (data.title !== undefined) updates.title = data.title;
   if (data.slug !== undefined) updates.slug = data.slug;
@@ -1656,8 +1716,7 @@ async function updateArticle(id, data) {
   if (data.thumbnail_caption !== undefined) updates.thumbnail_caption = data.thumbnail_caption || null;
   if (data.author_id !== undefined) updates.author_id = data.author_id;
   if (data.sub_heading !== undefined) updates.sub_heading = data.sub_heading;
-  if (data.status !== undefined) updates.status = data.status;
-  if (data.published_at !== undefined) updates.published_at = data.published_at;
+  if (data.status !== undefined) updates.status = nextStatus;
   if (data.meta_title !== undefined) updates.meta_title = data.meta_title;
   if (data.meta_description !== undefined) updates.meta_description = data.meta_description;
   if (data.meta_keywords !== undefined) updates.meta_keywords = data.meta_keywords;
@@ -1668,6 +1727,28 @@ async function updateArticle(id, data) {
   if (data.og_image_url !== undefined) updates.og_image_url = data.og_image_url || null;
   if (data.blog_access_tier !== undefined) updates.blog_access_tier = normalizeBlogAccessTier(data.blog_access_tier);
   if (data.rel_download_url !== undefined) updates.rel_download_url = data.rel_download_url || null;
+
+  if (data.status !== undefined || data.scheduled_publish_at !== undefined || data.published_at !== undefined) {
+    if (nextStatus === 'publish') {
+      const wasPublished = String(cur.status).toLowerCase() === 'publish';
+      if (!wasPublished || data.published_at !== undefined) {
+        updates.published_at =
+          data.published_at != null && data.published_at !== ''
+            ? new Date(data.published_at)
+            : new Date();
+      }
+      updates.scheduled_publish_at = null;
+    } else if (nextStatus === 'scheduled') {
+      updates.scheduled_publish_at = nextScheduled;
+      updates.published_at = null;
+    } else {
+      updates.scheduled_publish_at = null;
+      if (data.published_at !== undefined) {
+        updates.published_at = data.published_at ? new Date(data.published_at) : null;
+      }
+    }
+  }
+
   await row.update(updates);
   if (data.category_ids !== undefined) {
     await ArticleCategoryMap.destroy({ where: { article_id: id } });
@@ -1698,10 +1779,16 @@ async function updateArticle(id, data) {
     const ids = Array.isArray(data.court_ids) ? data.court_ids : [];
     if (ids.length) await ArticleCourtMap.bulkCreate(ids.map((court_id) => ({ article_id: id, court_id })));
   }
-  return getArticleByIdInternal(id);
+  const out = await getArticleByIdInternal(id);
+  console.log('[updateArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
+  await articleScheduling.syncArticlePublishJob(out).catch((err) => {
+    console.error('[updateArticle] sync schedule failed', err.message, err.stack);
+  });
+  return out;
 }
 
 async function deleteArticle(id) {
+  await articleScheduling.removeScheduledPublishJob(id).catch(() => {});
   const deleted = await Article.destroy({ where: { id } });
   return deleted > 0;
 }
