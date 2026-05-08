@@ -5,11 +5,14 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "worker:article-publish": "node src/workers/article-publish-worker.js"
   },
   "dependencies": {
+    "bullmq": "^5.34.5",
     "cors": "^2.8.5",
     "express": "^4.18.2",
+    "ioredis": "^5.4.2",
     "joi": "^18.0.2",
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.10.0",
