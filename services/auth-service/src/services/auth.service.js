@@ -240,7 +240,10 @@ async function register({
     designation: emptyToNull(designation),
     city: city ? String(city).trim() : null,
     state: state ? String(state).trim() : null,
-    country: country ? String(country).trim() : null,
+    country:
+      country != null && String(country).trim() !== ''
+        ? String(country).trim()
+        : 'India',
     role_id: userRole.id,
     referral_code: newReferralCode,
     referred_by: referredBy,
