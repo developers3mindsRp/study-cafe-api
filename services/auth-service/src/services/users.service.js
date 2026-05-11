@@ -1,6 +1,7 @@
 const { User, Role } = require('../models');
 const { Op } = require('sequelize');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const { AppError, logger } = require('../../../../shared');
 
 async function list(query = {}) {
@@ -63,12 +64,21 @@ async function getOne(id) {
 }
 
 async function create(data) {
-    const { password, role, ...fields } = data;
+    const { password, role, country, ...fields } = data;
 
     if (!data.email) throw new AppError('Email is required', 400);
-    if (!password) throw new AppError('Password is required', 400);
 
-    const password_hash = await bcrypt.hash(password, 10);
+    const effectivePassword =
+        password != null && String(password).trim() !== ''
+            ? String(password).trim()
+            : crypto.randomBytes(24).toString('base64url');
+
+    const password_hash = await bcrypt.hash(effectivePassword, 10);
+
+    const countryStored =
+        country != null && String(country).trim() !== ''
+            ? String(country).trim()
+            : 'India';
 
     let role_id = data.role_id || 1;
     if (role) {
@@ -78,6 +88,7 @@ async function create(data) {
 
     const user = await User.create({
         ...fields,
+        country: countryStored,
         password_hash,
         role_id,
         is_active: true,
