@@ -6,6 +6,7 @@ const { validate } = require('../../../../shared');
 function register(router) {
   // Public routes
   router.get('/courses', coursesController.list);
+  router.get('/course-cats/all', coursesController.listCourseCatsAllPublic);
   router.get('/course-cats', coursesController.listCourseCatsPublic);
   router.get('/courses/by-category', coursesController.listByCategory);
   // Static path before /:id — "featured" is not a numeric id
