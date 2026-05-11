@@ -845,6 +845,18 @@ const coursesService = {
       terms_conditions: data.terms_conditions || null,
       price: data.price ?? 0,
       sale_price: data.sale_price !== undefined ? data.sale_price : null,
+      enrolled_count:
+        data.enrolled_count !== undefined && data.enrolled_count !== null
+          ? Math.max(0, parseInt(String(data.enrolled_count), 10) || 0)
+          : 0,
+      ratings:
+        data.ratings !== undefined && data.ratings !== null && data.ratings !== ''
+          ? Number(data.ratings)
+          : null,
+      rating_users:
+        data.rating_users !== undefined && data.rating_users !== null
+          ? Math.max(0, parseInt(String(data.rating_users), 10) || 0)
+          : 0,
       thumbnail_url: data.thumbnail_url || null,
       youtube_url: data.youtube_url || null,
       language: data.language || null,
@@ -902,6 +914,9 @@ const coursesService = {
       "terms_conditions",
       "price",
       "sale_price",
+      "enrolled_count",
+      "ratings",
+      "rating_users",
       "thumbnail_url",
       "youtube_url",
       "language",
