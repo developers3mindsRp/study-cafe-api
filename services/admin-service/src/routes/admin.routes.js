@@ -85,6 +85,10 @@ function register(router) {
   router.delete('/admin/platform/seo-metadata/:id', requireAdmin, p.deleteSeoMetadata);
   router.get('/admin/platform/footer', requireAdmin, p.getFooter);
   router.put('/admin/platform/footer/:key', requireAdmin, p.putFooter);
+  router.get('/admin/platform/site-ads', requireAdmin, p.getSiteAds);
+  router.put('/admin/platform/site-ads', requireAdmin, p.putSiteAds);
+  router.get('/admin/platform/global-settings', requireAdmin, p.getGlobalSettings);
+  router.put('/admin/platform/global-settings/:key', requireAdmin, p.putGlobalSetting);
   router.get('/admin/platform/plans', requireAdmin, p.getPlans);
   router.get('/admin/platform/plans/:id', requireAdmin, p.getPlan);
   router.post('/admin/platform/plans', requireAdmin, p.postPlan);

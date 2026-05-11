@@ -90,6 +90,31 @@ const upsertFooter = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+const getGlobalSettingsSnippetsPublic = asyncHandler(async (req, res) => {
+  const data = await platformService.globalSettings.getPublicSnippets();
+  sendSuccess(res, data);
+});
+
+const getGlobalSettingsInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.globalSettings.getAllMap();
+  sendSuccess(res, data);
+});
+
+const putGlobalSetting = asyncHandler(async (req, res) => {
+  const data = await platformService.globalSettings.upsert(req.params.key, req.body);
+  sendSuccess(res, data);
+});
+
+const getSiteAds = asyncHandler(async (req, res) => {
+  const data = await platformService.siteAds.getSiteAdsPublic();
+  sendSuccess(res, data);
+});
+
+const putSiteAds = asyncHandler(async (req, res) => {
+  const data = await platformService.siteAds.putSiteAds(req.body);
+  sendSuccess(res, data);
+});
+
 // ── Plans ──────────────────────────────────────────────────────────
 
 const getPlans = asyncHandler(async (req, res) => {
@@ -503,6 +528,11 @@ module.exports = {
   getFooter,
   getFooterInternal,
   upsertFooter,
+  getGlobalSettingsSnippetsPublic,
+  getGlobalSettingsInternal,
+  putGlobalSetting,
+  getSiteAds,
+  putSiteAds,
   getPlans,
   getPlanBySlug,
   getPlansInternal,

@@ -14,6 +14,7 @@ const ALL_PERMISSIONS = [
   'contact_inquiries:list', 'contact_inquiries:view',
   'affiliate:list', 'affiliate:view',
   'downloads:list', 'downloads:view', 'downloads:create', 'downloads:edit', 'downloads:delete',
+  'global_settings:list', 'global_settings:view', 'global_settings:edit',
   'admin:access',
   'admin_users:list', 'admin_users:view', 'admin_users:create', 'admin_users:edit', 'admin_users:delete',
 ];
@@ -93,6 +94,10 @@ const MODULE_HIERARCHY = {
     ['downloads:edit'],
     ['downloads:create'],
     ['downloads:delete'],
+  ],
+  global_settings: [
+    ['global_settings:list', 'global_settings:view'],
+    ['global_settings:edit'],
   ],
   admin_users: [
     ['admin_users:list', 'admin_users:view'],

@@ -93,6 +93,7 @@ const {
   State,
   Testimonial,
   FooterData,
+  GlobalSetting,
   PremiumPlan,
   PlanCourse,
   PlanCourseCategory,
@@ -394,11 +395,117 @@ async function deleteTestimonial(id) {
   return deleted > 0;
 }
 
+const SITE_DISPLAY_ADS_KEY = 'site_display_ads';
+
+const TRACKING_SNIPPET_KEYS = ['tracking_meta_pixel', 'tracking_google_analytics', 'tracking_linkedin_pixel'];
+
+/** Avoid 500s on public routes if `global_settings` was not created yet (run `npm run ensure-global-settings`). */
+let warnedMissingGlobalSettingsTable = false;
+function warnMissingGlobalSettingsTableOnce() {
+  if (warnedMissingGlobalSettingsTable) return;
+  warnedMissingGlobalSettingsTable = true;
+  console.warn(
+    '[platform-service] The `global_settings` table is missing. Run `npm run ensure-global-settings` from the study-cafe-api repo root, then restart. Public reads are degraded until then.',
+  );
+}
+
+function isMissingGlobalSettingsTableError(err) {
+  if (!err || err.name !== 'SequelizeDatabaseError') return false;
+  const code = err.parent?.code;
+  const msg = String(err.parent?.sqlMessage || err.message || '');
+  if (code === 'ER_NO_SUCH_TABLE') return true;
+  return /global_settings/i.test(msg) && /doesn't exist/i.test(msg);
+}
+
+async function getGlobalSettingValueString(key) {
+  try {
+    const row = await GlobalSetting.findOne({ where: { setting_key: key } });
+    return row ? row.setting_value : null;
+  } catch (err) {
+    if (isMissingGlobalSettingsTableError(err)) {
+      warnMissingGlobalSettingsTableOnce();
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function upsertGlobalSettingRow(key, rawValue, metaExplicit) {
+  let setting_value = rawValue;
+  if (setting_value !== undefined && setting_value !== null && typeof setting_value !== 'string') {
+    setting_value = JSON.stringify(setting_value);
+  }
+  let row = await GlobalSetting.findOne({ where: { setting_key: key } });
+  if (row) {
+    const patch = {};
+    if (setting_value !== undefined) patch.setting_value = setting_value;
+    if (metaExplicit !== undefined) patch.meta = metaExplicit;
+    await row.update(patch);
+    await row.reload();
+  } else {
+    row = await GlobalSetting.create({
+      setting_key: key,
+      setting_value: setting_value !== undefined ? setting_value : null,
+      meta: metaExplicit !== undefined ? metaExplicit : null,
+    });
+  }
+  return row.get({ plain: true });
+}
+
+async function getAllGlobalSettingsMap() {
+  let rows;
+  try {
+    rows = await GlobalSetting.findAll({ order: [['setting_key', 'ASC']] });
+  } catch (err) {
+    if (isMissingGlobalSettingsTableError(err)) {
+      warnMissingGlobalSettingsTableOnce();
+      return {};
+    }
+    throw err;
+  }
+  const out = {};
+  for (const r of rows) {
+    const p = r.get({ plain: true });
+    out[p.setting_key] = p.setting_value;
+  }
+  return out;
+}
+
+async function getPublicTrackingSnippets() {
+  let rows;
+  try {
+    rows = await GlobalSetting.findAll({ where: { setting_key: TRACKING_SNIPPET_KEYS } });
+  } catch (err) {
+    if (isMissingGlobalSettingsTableError(err)) {
+      warnMissingGlobalSettingsTableOnce();
+      rows = [];
+    } else {
+      throw err;
+    }
+  }
+  const byKey = new Map(rows.map((r) => {
+    const p = r.get({ plain: true });
+    return [p.setting_key, p.setting_value];
+  }));
+  const result = {};
+  for (const k of TRACKING_SNIPPET_KEYS) {
+    const v = byKey.get(k);
+    result[k] = v && String(v).trim() !== '' ? v : null;
+  }
+  return result;
+}
+
+async function upsertGlobalSettingFromAdmin(key, body) {
+  const { value, meta } = body || {};
+  return upsertGlobalSettingRow(key, value, meta !== undefined ? meta : undefined);
+}
+
 async function getFooterPublic() {
   const rows = await FooterData.findAll({ order: [['id', 'ASC']] });
   const footer = {};
   for (const r of rows) {
     const p = r.get({ plain: true });
+    if (p.data_key === SITE_DISPLAY_ADS_KEY) continue;
     footer[p.data_key] = p.data_value;
     if (p.meta) footer[`${p.data_key}_meta`] = p.meta;
   }
@@ -406,7 +513,10 @@ async function getFooterPublic() {
 }
 
 async function getFooterInternal() {
-  const rows = await FooterData.findAll({ order: [['data_key', 'ASC']] });
+  const rows = await FooterData.findAll({
+    where: { data_key: { [Op.ne]: SITE_DISPLAY_ADS_KEY } },
+    order: [['data_key', 'ASC']],
+  });
   return rows.map((r) => r.get({ plain: true }));
 }
 
@@ -447,6 +557,81 @@ async function upsertFooter(key, data) {
     });
   }
   return row.get({ plain: true });
+}
+
+/** Display ads JSON — stored in global_settings (migrated from footer_data) */
+
+function normalizeAdSlot(input) {
+  if (!input || typeof input !== 'object') return { image_url: '', link_url: '' };
+  return {
+    image_url: typeof input.image_url === 'string' ? input.image_url : typeof input.imageUrl === 'string' ? input.imageUrl : '',
+    link_url: typeof input.link_url === 'string' ? input.link_url : typeof input.linkUrl === 'string' ? input.linkUrl : '',
+  };
+}
+
+function defaultSiteDisplayAds() {
+  return {
+    popup: { enabled: true, ...normalizeAdSlot({}) },
+    article_detail_sidebar: [normalizeAdSlot({}), normalizeAdSlot({})],
+    article_listing_sidebar: normalizeAdSlot({}),
+    between_article: {
+      after_paragraph_3: normalizeAdSlot({}),
+      after_paragraph_6: normalizeAdSlot({}),
+      below_featured_post: normalizeAdSlot({}),
+    },
+  };
+}
+
+function mergeSiteDisplayAds(raw) {
+  const d = defaultSiteDisplayAds();
+  if (!raw || typeof raw !== 'object') return d;
+  if (raw.popup && typeof raw.popup === 'object') {
+    d.popup.enabled = raw.popup.enabled !== false;
+    const s = normalizeAdSlot(raw.popup);
+    d.popup.image_url = s.image_url;
+    d.popup.link_url = s.link_url;
+  }
+  const side = Array.isArray(raw.article_detail_sidebar) ? raw.article_detail_sidebar : raw.articleDetailSidebar;
+  if (Array.isArray(side)) {
+    d.article_detail_sidebar = [0, 1].map((i) => normalizeAdSlot(side[i]));
+  }
+  const listSide = raw.article_listing_sidebar || raw.articleListingSidebar;
+  if (listSide && typeof listSide === 'object') {
+    d.article_listing_sidebar = normalizeAdSlot(listSide);
+  }
+  const bet = raw.between_article || raw.betweenArticle;
+  if (bet && typeof bet === 'object') {
+    d.between_article.after_paragraph_3 = normalizeAdSlot(bet.after_paragraph_3 || bet.afterParagraph3);
+    d.between_article.after_paragraph_6 = normalizeAdSlot(bet.after_paragraph_6 || bet.afterParagraph6);
+    d.between_article.below_featured_post = normalizeAdSlot(bet.below_featured_post || bet.belowFeaturedPost);
+  }
+  return d;
+}
+
+function parseSiteDisplayAdsJson(str) {
+  if (!str || typeof str !== 'string') return null;
+  try {
+    return JSON.parse(str);
+  } catch {
+    return null;
+  }
+}
+
+async function getSiteAdsPublic() {
+  let raw = await getGlobalSettingValueString(SITE_DISPLAY_ADS_KEY);
+  if (!raw) {
+    const legacy = await FooterData.findOne({ where: { data_key: SITE_DISPLAY_ADS_KEY } });
+    raw = legacy?.data_value ?? null;
+  }
+  const parsed = parseSiteDisplayAdsJson(raw);
+  return mergeSiteDisplayAds(parsed);
+}
+
+async function putSiteAds(body) {
+  const merged = mergeSiteDisplayAds(body);
+  await upsertGlobalSettingRow(SITE_DISPLAY_ADS_KEY, JSON.stringify(merged), null);
+  await FooterData.destroy({ where: { data_key: SITE_DISPLAY_ADS_KEY } });
+  return merged;
 }
 
 async function getPlansPublic() {
@@ -2128,6 +2313,15 @@ module.exports = {
     getFooterPublic,
     getFooterInternal,
     upsertFooter,
+  },
+  siteAds: {
+    getSiteAdsPublic,
+    putSiteAds,
+  },
+  globalSettings: {
+    getPublicSnippets: getPublicTrackingSnippets,
+    getAllMap: getAllGlobalSettingsMap,
+    upsert: upsertGlobalSettingFromAdmin,
   },
   plans: {
     getPlansPublic,

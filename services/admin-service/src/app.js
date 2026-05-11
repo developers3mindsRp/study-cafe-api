@@ -10,7 +10,7 @@ function createApp() {
   app.use((req, res, next) => {
     // Skip JSON body parsing for multipart requests (file uploads) — let multer handle them
     if (req.headers['content-type']?.startsWith('multipart/form-data')) return next();
-    express.json()(req, res, next);
+    express.json({ limit: '15mb' })(req, res, next);
   });
   app.use(logger.requestLogger);
   app.use(routes);

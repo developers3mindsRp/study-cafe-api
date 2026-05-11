@@ -1520,10 +1520,17 @@ const coursesService = {
   },
 
   async upsertPageSetting(key, value) {
-    const [row] = await CoursePageSetting.upsert(
-      { setting_key: key, setting_value: value },
-      { returning: true },
-    );
+    const normalizedValue = value === undefined || value === null ? null : String(value);
+    let row = await CoursePageSetting.findOne({ where: { setting_key: key } });
+    if (row) {
+      row.setting_value = normalizedValue;
+      await row.save();
+    } else {
+      row = await CoursePageSetting.create({
+        setting_key: key,
+        setting_value: normalizedValue,
+      });
+    }
     return row.get({ plain: true });
   },
 

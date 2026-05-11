@@ -163,6 +163,24 @@ const upsertFooter = {
         .messages({ 'object.min': 'body must include at least one of data_value, meta' }),
 };
 
+/** Full site display-ads document; unknown keys ignored at service merge step. */
+const putSiteAds = {
+    body: Joi.object().unknown(true),
+};
+
+/** global_settings.setting_key rows (tracking HTML, JSON blobs, future keys) */
+const upsertGlobalSetting = {
+    params: Joi.object({
+        key: Joi.string().max(128).required(),
+    }),
+    body: Joi.object({
+        value: Joi.string().allow('', null),
+        meta: Joi.object().unknown(true).allow(null),
+    })
+        .min(1)
+        .messages({ 'object.min': 'body must include at least value or meta' }),
+};
+
 // ── Plans ───────────────────────────────────────────────────────────
 
 /** Legacy: string[] or HTML/plain string. Current admin: { mrp, included[], excluded[] } */
@@ -399,6 +417,8 @@ module.exports = {
     updateFaq,
     createContactInquiry,
     upsertFooter,
+    putSiteAds,
+    upsertGlobalSetting,
     createPlan,
     updatePlan,
     articleListQuery,

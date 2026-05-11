@@ -12,6 +12,8 @@ function register(router) {
   router.get('/platform/testimonials', controller.getTestimonials);
   router.get('/plateform/contact-inquiries', controller.getContactInquiryInternal)
   router.get('/platform/footer', controller.getFooter);
+  router.get('/platform/global-settings/snippets', controller.getGlobalSettingsSnippetsPublic);
+  router.get('/platform/site-ads', controller.getSiteAds);
   router.get('/platform/plans', controller.getPlans);
   router.get('/platform/plans/:slug', validate(schemas.slugParam), controller.getPlanBySlug);
   router.get('/platform/memberships', controller.getPlans);
@@ -57,6 +59,10 @@ function register(router) {
   router.delete('/internal/platform/seo-metadata/:id', internalAuth, validate(schemas.idParam), controller.deleteSeoMetadata);
   router.get('/internal/platform/footer', internalAuth, controller.getFooterInternal);
   router.put('/internal/platform/footer/:key', internalAuth, validate(schemas.upsertFooter), controller.upsertFooter);
+  router.get('/internal/platform/global-settings', internalAuth, controller.getGlobalSettingsInternal);
+  router.put('/internal/platform/global-settings/:key', internalAuth, validate(schemas.upsertGlobalSetting), controller.putGlobalSetting);
+  router.get('/internal/platform/site-ads', internalAuth, controller.getSiteAds);
+  router.put('/internal/platform/site-ads', internalAuth, validate(schemas.putSiteAds), controller.putSiteAds);
   router.get('/internal/platform/plans', internalAuth, controller.getPlansInternal);
   router.get('/internal/platform/plans/:id', internalAuth, validate(schemas.idParam), controller.getPlanByIdInternal);
   router.post('/internal/platform/plans', internalAuth, validate(schemas.createPlan), controller.createPlan);
