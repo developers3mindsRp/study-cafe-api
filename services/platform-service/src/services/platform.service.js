@@ -1476,6 +1476,14 @@ function sanitizeArticleHtml(html) {
   return out.trim();
 }
 
+/**
+ * Returns one element picked at random from the array, or null if empty.
+ */
+function pickRandom(arr) {
+  if (!arr || !arr.length) return null;
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 async function getArticleBySlugPublic(slug, viewer = null) {
   const row = await Article.findOne({
     where: { slug, status: 'publish' },
@@ -1493,6 +1501,34 @@ async function getArticleBySlugPublic(slug, viewer = null) {
   const fullBody = sanitizeArticleHtml(await embedRelatedArticles(p.content));
   const related_articles = access.can_read_full ? [] : await getRelatedArticlesForArticle(p.id, 4);
   const body = access.can_read_full ? fullBody : buildPremiumPreviewHtml(p.excerpt, p.content);
+
+  // Fetch all categories for this article (with social link fields)
+  const catMapRows = await ArticleCategoryMap.findAll({
+    where: { article_id: p.id },
+    attributes: ['category_id'],
+  });
+  const catIds = catMapRows.map((m) => Number(m.category_id)).filter((n) => Number.isFinite(n));
+  let whatsapp_link = null;
+  let telegram_link = null;
+  let google_news_url = null;
+  if (catIds.length) {
+    const catRows = await Category.findAll({
+      where: { id: { [Op.in]: catIds } },
+      attributes: ['id', 'whatsapp_links', 'telegram_links', 'google_news_url'],
+    });
+    const allWhatsapp = [];
+    const allTelegram = [];
+    for (const cat of catRows) {
+      const c = cat.get({ plain: true });
+      if (Array.isArray(c.whatsapp_links)) allWhatsapp.push(...c.whatsapp_links);
+      if (Array.isArray(c.telegram_links)) allTelegram.push(...c.telegram_links);
+      if (!google_news_url && c.google_news_url) google_news_url = c.google_news_url;
+    }
+    // Pick one random link from the full pool on every request
+    whatsapp_link = pickRandom([...new Set(allWhatsapp.filter(Boolean))]);
+    telegram_link = pickRandom([...new Set(allTelegram.filter(Boolean))]);
+  }
+
   const out = {
     ...p,
     blog_access_tier,
@@ -1509,6 +1545,9 @@ async function getArticleBySlugPublic(slug, viewer = null) {
     cover_image_url: p.thumbnail_url,
     author_name: authorName ?? p.author_id,
     download_url: p.rel_download_url || p.upload_url || null,
+    whatsapp_link,
+    telegram_link,
+    google_news_url,
   };
   if (related_articles.length) out.related_articles = related_articles;
   return out;
@@ -1997,6 +2036,9 @@ async function createArticleCategory(data) {
     name: data.name || '',
     slug: slugVal,
     parent_id: data.parent_id || null,
+    whatsapp_links: Array.isArray(data.whatsapp_links) ? data.whatsapp_links : [],
+    telegram_links: Array.isArray(data.telegram_links) ? data.telegram_links : [],
+    google_news_url: data.google_news_url || null,
   });
   return row.get({ plain: true });
 }
@@ -2008,6 +2050,9 @@ async function updateArticleCategory(id, data) {
     ...(data.name !== undefined && { name: data.name }),
     ...(data.slug !== undefined && { slug: data.slug }),
     ...(data.parent_id !== undefined && { parent_id: data.parent_id }),
+    ...(data.whatsapp_links !== undefined && { whatsapp_links: Array.isArray(data.whatsapp_links) ? data.whatsapp_links : [] }),
+    ...(data.telegram_links !== undefined && { telegram_links: Array.isArray(data.telegram_links) ? data.telegram_links : [] }),
+    ...(data.google_news_url !== undefined && { google_news_url: data.google_news_url || null }),
   });
   return row.get({ plain: true });
 }

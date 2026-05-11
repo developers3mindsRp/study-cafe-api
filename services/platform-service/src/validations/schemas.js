@@ -139,6 +139,9 @@ const createArticleCategory = {
         name: Joi.string().max(200).required(),
         slug: Joi.string().max(200).allow('', null),
         parent_id: Joi.number().integer().positive().allow(null),
+        whatsapp_links: Joi.array().items(Joi.string().uri().max(500)).allow(null),
+        telegram_links: Joi.array().items(Joi.string().uri().max(500)).allow(null),
+        google_news_url: Joi.string().uri().max(500).allow('', null),
     }),
 };
 
@@ -148,6 +151,9 @@ const updateArticleCategory = {
         name: Joi.string().max(200),
         slug: Joi.string().max(200).allow('', null),
         parent_id: Joi.number().integer().positive().allow(null),
+        whatsapp_links: Joi.array().items(Joi.string().uri().max(500)).allow(null),
+        telegram_links: Joi.array().items(Joi.string().uri().max(500)).allow(null),
+        google_news_url: Joi.string().uri().max(500).allow('', null),
     }),
 };
 

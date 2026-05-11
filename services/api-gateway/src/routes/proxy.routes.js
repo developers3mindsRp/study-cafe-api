@@ -126,6 +126,7 @@ function register(app) {
     next();
   };
 
+  app.get('/api/course-cats/all', courseProxy);
   app.get('/api/course-cats', courseProxy);
   app.get('/api/courses/by-category', courseProxy);
   app.get('/api/courses/slug/:slug', optionalJWT, injectOptionalUserId, courseProxy);

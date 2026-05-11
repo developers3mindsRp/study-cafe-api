@@ -8,6 +8,9 @@ module.exports = (sequelize) => {
       name: { type: DataTypes.STRING(100), allowNull: false },
       slug: { type: DataTypes.STRING(100), allowNull: false, unique: true },
       sort_order: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      whatsapp_links: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
+      telegram_links: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
+      google_news_url: { type: DataTypes.STRING(500), allowNull: true },
     },
     {
       tableName: 'article_categories',
