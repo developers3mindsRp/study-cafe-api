@@ -1558,13 +1558,9 @@ const coursesService = {
     return deleted > 0;
   },
 
+  /** Same payload as internal/admin course-cats (all categories, not featured-only). */
   async listCourseCatsPublic() {
-    const rows = await CourseCat.findAll({
-      where: { is_featured: true },
-      order: [["name", "ASC"]],
-      attributes: ["id", "name", "slug", "is_featured"],
-    });
-    return rows.map((r) => r.get({ plain: true }));
+    return this.listCourseCats();
   },
 
   async listPublishedByCategory(
