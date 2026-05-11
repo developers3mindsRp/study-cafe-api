@@ -1292,15 +1292,11 @@ function sanitizeArticleHtml(html) {
 }
 
 /**
- * Fisher-Yates shuffle — returns a new shuffled copy of the array.
+ * Returns one element picked at random from the array, or null if empty.
  */
-function shuffleArray(arr) {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
+function pickRandom(arr) {
+  if (!arr || !arr.length) return null;
+  return arr[Math.floor(Math.random() * arr.length)];
 }
 
 async function getArticleBySlugPublic(slug, viewer = null) {
@@ -1327,23 +1323,25 @@ async function getArticleBySlugPublic(slug, viewer = null) {
     attributes: ['category_id'],
   });
   const catIds = catMapRows.map((m) => Number(m.category_id)).filter((n) => Number.isFinite(n));
-  let whatsapp_links = [];
-  let telegram_links = [];
+  let whatsapp_link = null;
+  let telegram_link = null;
   let google_news_url = null;
   if (catIds.length) {
     const catRows = await Category.findAll({
       where: { id: { [Op.in]: catIds } },
       attributes: ['id', 'whatsapp_links', 'telegram_links', 'google_news_url'],
     });
+    const allWhatsapp = [];
+    const allTelegram = [];
     for (const cat of catRows) {
       const c = cat.get({ plain: true });
-      if (Array.isArray(c.whatsapp_links)) whatsapp_links.push(...c.whatsapp_links);
-      if (Array.isArray(c.telegram_links)) telegram_links.push(...c.telegram_links);
+      if (Array.isArray(c.whatsapp_links)) allWhatsapp.push(...c.whatsapp_links);
+      if (Array.isArray(c.telegram_links)) allTelegram.push(...c.telegram_links);
       if (!google_news_url && c.google_news_url) google_news_url = c.google_news_url;
     }
-    // Randomize on every request so callers get a different ordering each time
-    whatsapp_links = shuffleArray([...new Set(whatsapp_links.filter(Boolean))]);
-    telegram_links = shuffleArray([...new Set(telegram_links.filter(Boolean))]);
+    // Pick one random link from the full pool on every request
+    whatsapp_link = pickRandom([...new Set(allWhatsapp.filter(Boolean))]);
+    telegram_link = pickRandom([...new Set(allTelegram.filter(Boolean))]);
   }
 
   const out = {
@@ -1362,8 +1360,8 @@ async function getArticleBySlugPublic(slug, viewer = null) {
     cover_image_url: p.thumbnail_url,
     author_name: authorName ?? p.author_id,
     download_url: p.rel_download_url || p.upload_url || null,
-    whatsapp_links,
-    telegram_links,
+    whatsapp_link,
+    telegram_link,
     google_news_url,
   };
   if (related_articles.length) out.related_articles = related_articles;
