@@ -19,6 +19,7 @@ const {
     publicMediaUrl,
     DEFAULT_PRODUCTION_ASSETS_ORIGIN,
 } = require('./mediaUrl');
+const { computeMembershipUpgradeCredit } = require('./membershipUpgradeProration');
 
 module.exports = {
     logger,
@@ -36,4 +37,5 @@ module.exports = {
     relativePathFromFile,
     publicMediaUrl,
     DEFAULT_PRODUCTION_ASSETS_ORIGIN,
+    computeMembershipUpgradeCredit,
 };

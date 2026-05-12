@@ -147,6 +147,7 @@ function register(app) {
     next();
   }, adminProxy);
   app.use('/api/platform/payment-links', adminPaymentLinksPlatformProxy);
+  app.post('/api/platform/membership/upgrade-summary', validateJWT, injectUserId, platformProxy);
   app.use('/api/platform', platformProxy);
   app.use('/api/uploads', uploadsProxy);
 
