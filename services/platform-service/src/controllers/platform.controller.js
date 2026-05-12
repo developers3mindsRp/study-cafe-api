@@ -1,4 +1,5 @@
 const platformService = require('../services/platform.service');
+const membershipUpgradeService = require('../services/membership-upgrade.service');
 const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, sendPaginated, logger } = require('../../../../shared');
 const { uploadsDir } = require('../middleware/upload');
 const { relativePathFromFile, publicMediaUrl } = require('../../../../shared/mediaUrl');
@@ -125,6 +126,15 @@ const getPlans = asyncHandler(async (req, res) => {
 const getPlanBySlug = asyncHandler(async (req, res) => {
   const data = await platformService.plans.getPlanBySlugPublic(req.params.slug);
   if (!data) throw new AppError('Plan not found', 404);
+  sendSuccess(res, data);
+});
+
+const getMembershipUpgradeSummary = asyncHandler(async (req, res) => {
+  const userId = req.headers['x-user-id'];
+  if (!userId) throw new AppError('Authentication required', 401);
+  const { targetPlanId } = req.body;
+  if (!targetPlanId) throw new AppError('targetPlanId is required', 400);
+  const data = await membershipUpgradeService.calculateMembershipUpgrade(userId, targetPlanId);
   sendSuccess(res, data);
 });
 
@@ -587,6 +597,7 @@ module.exports = {
   putSiteAds,
   getPlans,
   getPlanBySlug,
+  getMembershipUpgradeSummary,
   getPlansInternal,
   getPlanByIdInternal,
   createPlan,
