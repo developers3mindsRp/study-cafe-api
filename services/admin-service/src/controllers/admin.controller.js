@@ -492,11 +492,22 @@ const platform = {
   putFaq: platformProxy((c, req) => c.put(`/internal/platform/faqs/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
   deleteFaq: platformProxy((c, req) => c.delete(`/internal/platform/faqs/${req.params.id}`).then(() => ({ status: 204 }))),
   getSeoMetadata: platformProxy((c) => c.get('/internal/platform/seo-metadata').then((r) => ({ data: r.data }))),
+  getSeoEligiblePages: platformProxy((c) => c.get('/internal/platform/seo-metadata/eligible-pages').then((r) => ({ data: r.data }))),
   getSeoMetadataById: platformProxy((c, req) => c.get(`/internal/platform/seo-metadata/${req.params.id}`).then((r) => ({ data: r.data }))),
   getSeoMetadataBySlug: platformProxy((c, req) => c.get(`/internal/platform/seo-metadata/slug/${req.params.slug}`).then((r) => ({ data: r.data }))),
   postSeoMetadata: platformProxy((c, req) => c.post('/internal/platform/seo-metadata', req.body).then((r) => ({ data: r.data, status: 201 }))),
   putSeoMetadata: platformProxy((c, req) => c.put(`/internal/platform/seo-metadata/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
   deleteSeoMetadata: platformProxy((c, req) => c.delete(`/internal/platform/seo-metadata/${req.params.id}`).then(() => ({ status: 204 }))),
+  listSiteSeoRoutes: platformProxy((c) => c.get('/internal/platform/site-seo-routes').then((r) => ({ data: r.data }))),
+  postSiteSeoRoute: platformProxy((c, req) =>
+    c.post('/internal/platform/site-seo-routes', req.body).then((r) => ({ data: r.data, status: 201 }))
+  ),
+  putSiteSeoRoute: platformProxy((c, req) =>
+    c.put(`/internal/platform/site-seo-routes/${req.params.id}`, req.body).then((r) => ({ data: r.data }))
+  ),
+  deleteSiteSeoRoute: platformProxy((c, req) =>
+    c.delete(`/internal/platform/site-seo-routes/${req.params.id}`).then(() => ({ status: 204 }))
+  ),
   getFooter: platformProxy((c) => c.get('/internal/platform/footer').then((r) => ({ data: r.data }))),
   putFooter: platformProxy((c, req) => c.put(`/internal/platform/footer/${req.params.key}`, req.body).then((r) => ({ data: r.data }))),
   getSiteAds: platformProxy((c) => c.get('/internal/platform/site-ads').then((r) => ({ data: r.data }))),

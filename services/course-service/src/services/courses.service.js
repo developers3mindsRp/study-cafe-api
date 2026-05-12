@@ -1729,10 +1729,10 @@ const coursesService = {
     } else if (sort === "newest") {
       order = [["id", "DESC"]];
     } else {
-      // 'latest' (default) — most enrolled first, then newest
+      // 'latest' (default) — newest first (matches public "Latest" label)
       order = [
-        ["enrolled_count", "DESC"],
         ["created_at", "DESC"],
+        ["id", "DESC"],
       ];
     }
 

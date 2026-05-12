@@ -346,6 +346,25 @@ const createSeoMetadata = {
     }),
 };
 
+const createSiteSeoRoute = {
+    body: Joi.object({
+        path: Joi.string().max(500).required(),
+        label: Joi.string().max(500).required(),
+        sort_order: Joi.number().integer().min(0).default(0),
+    }),
+};
+
+const updateSiteSeoRoute = {
+    params: idParam.params,
+    body: Joi.object({
+        path: Joi.string().max(500),
+        label: Joi.string().max(500),
+        sort_order: Joi.number().integer().min(0),
+    })
+        .min(1)
+        .required(),
+};
+
 const updateSeoMetadata = {
     params: idParam.params,
     body: Joi.object({
@@ -471,6 +490,8 @@ module.exports = {
     upsertCmsPage,
     createSeoMetadata,
     updateSeoMetadata,
+    createSiteSeoRoute,
+    updateSiteSeoRoute,
     subscribeNewsletter,
     unsubscribeNewsletter,
     createNewsletterTemplate,

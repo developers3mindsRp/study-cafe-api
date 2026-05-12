@@ -45,6 +45,7 @@ const PlanComparisonFeature = require("./PlanComparisonFeature")(sequelize);
 const PlanFeatureAvailability = require("./PlanFeatureAvailability")(sequelize);
 const Faq = require("./Faq")(sequelize);
 const SeoMetadata = require("./SeoMetadata")(sequelize);
+const SiteSeoRoute = require("./SiteSeoRoute")(sequelize);
 const MediaAsset = require("./MediaAsset")(sequelize);
 const ContactInquiry = require("./ContactInquiry")(sequelize);
 const UserMembership = require("./UserMembership")(sequelize);
@@ -87,6 +88,7 @@ const models = {
   PlanFeatureAvailability,
   Faq,
   SeoMetadata,
+  SiteSeoRoute,
   MediaAsset,
   ContactInquiry,
   UserMembership,
