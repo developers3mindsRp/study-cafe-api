@@ -9,6 +9,8 @@ const {
   Material,
   CoursePageSetting,
   BatchEnrollment,
+  Enrollment,
+  UserCourse,
 } = require("../models");
 const { QueryTypes } = require("sequelize");
 const axios = require("axios");
@@ -83,8 +85,8 @@ function withCourseMetaDetail(course) {
     typeof course?.brief_description === "string" && course.brief_description.trim()
       ? course.brief_description.trim()
       : typeof course?.description === "string"
-      ? course.description
-      : "";
+        ? course.description
+        : "";
 
   const metaTitle =
     typeof course?.meta_title === "string" && course.meta_title.trim()
@@ -98,8 +100,8 @@ function withCourseMetaDetail(course) {
     typeof course?.meta_keywords === "string" && course.meta_keywords.trim()
       ? course.meta_keywords.trim()
       : typeof course?.keywords === "string" && course.keywords.trim()
-      ? course.keywords.trim()
-      : "";
+        ? course.keywords.trim()
+        : "";
 
   return {
     ...course,
@@ -141,7 +143,7 @@ function normalizeLanguage(value) {
       try {
         const p = JSON.parse(v);
         if (Array.isArray(p)) return p;
-      } catch {}
+      } catch { }
       if (v.includes(","))
         return v
           .split(",")
@@ -155,7 +157,7 @@ function normalizeLanguage(value) {
     try {
       const p = JSON.parse(value);
       if (Array.isArray(p)) return p;
-    } catch {}
+    } catch { }
     if (value.includes(","))
       return value
         .split(",")
@@ -196,13 +198,13 @@ function totalCurriculumDurationMinutes(curriculum) {
       Array.isArray(day.sections) && day.sections.length > 0
         ? day.sections
         : [
-            {
-              title: dayTitle,
-              description: day.description || "",
-              videoId: day.video || "",
-              duration: day.minutes || "",
-            },
-          ];
+          {
+            title: dayTitle,
+            description: day.description || "",
+            videoId: day.video || "",
+            duration: day.minutes || "",
+          },
+        ];
     for (const sec of sections) {
       if (!sec || typeof sec !== "object") continue;
       const raw = sec.duration;
@@ -607,6 +609,19 @@ const coursesService = {
           onlyBatchId: userBatch.id,
         });
       }
+
+      // Lazy Auto-Enrollment for Membership Users
+      // If the user lacks a batch but has access (via membership), enroll them now.
+      const hasAccess = await checkCourseAccess(authorization, cplain.id);
+      if (hasAccess) {
+        const enrolled = await this.autoEnrollInBatch(cplain.id, userId);
+        if (enrolled && enrolled.batch_id) {
+          return this._getBatchesSessionsRecordings(cplain.id, {
+            visibleOnly: true,
+            onlyBatchId: enrolled.batch_id,
+          });
+        }
+      }
     }
 
     // Not purchased (or anonymous) → return batch schedule without recordings.
@@ -688,11 +703,11 @@ const coursesService = {
           recordings: stripRecordings
             ? []
             : (s.Recordings || []).map((r) => ({
-                id: r.id,
-                url: r.url,
-                source: r.source,
-                is_visible: r.is_visible,
-              })),
+              id: r.id,
+              url: r.url,
+              source: r.source,
+              is_visible: r.is_visible,
+            })),
         })),
       });
     }
@@ -797,12 +812,12 @@ const coursesService = {
   async create(data) {
     const course_cat_ids = Array.isArray(data.course_cat_ids)
       ? [
-          ...new Set(
-            data.course_cat_ids
-              .map((n) => Number(n))
-              .filter((n) => Number.isFinite(n) && n > 0),
-          ),
-        ]
+        ...new Set(
+          data.course_cat_ids
+            .map((n) => Number(n))
+            .filter((n) => Number.isFinite(n) && n > 0),
+        ),
+      ]
       : [];
 
     const affiliatePct =
@@ -907,12 +922,12 @@ const coursesService = {
     if (data.course_cat_ids !== undefined) {
       const ids = Array.isArray(data.course_cat_ids)
         ? [
-            ...new Set(
-              data.course_cat_ids
-                .map((n) => Number(n))
-                .filter((n) => Number.isFinite(n) && n > 0),
-            ),
-          ]
+          ...new Set(
+            data.course_cat_ids
+              .map((n) => Number(n))
+              .filter((n) => Number.isFinite(n) && n > 0),
+          ),
+        ]
         : [];
       await CourseCategory.destroy({ where: { course_id: id } });
       if (ids.length) {
@@ -964,9 +979,9 @@ const coursesService = {
     // Auto-generate batch name
     const nameDate = start_date
       ? new Date(start_date).toLocaleDateString("en-IN", {
-          month: "short",
-          year: "numeric",
-        })
+        month: "short",
+        year: "numeric",
+      })
       : "New";
     const existingCount = await Batch.count({ where: { course_id: courseId } });
     const batchName =
@@ -1092,13 +1107,13 @@ const coursesService = {
         Array.isArray(day.sections) && day.sections.length > 0
           ? day.sections
           : [
-              {
-                title: dayTitle,
-                description: day.description || "",
-                videoId: day.video || "",
-                duration: day.minutes || "",
-              },
-            ];
+            {
+              title: dayTitle,
+              description: day.description || "",
+              videoId: day.video || "",
+              duration: day.minutes || "",
+            },
+          ];
 
       for (let s = 0; s < sections.length; s++) {
         const sec = sections[s];
@@ -1296,36 +1311,76 @@ const coursesService = {
   },
 
   async getEnrollmentsByUser(userId) {
-    const rows = await BatchEnrollment.findAll({
+    // 1. Get primary enrollments
+    const enrollmentRows = await Enrollment.findAll({
       where: { user_id: userId },
-      include: [
-        {
-          model: Batch,
-          as: 'Batch',
-          required: true,
-          include: [
-            {
-              model: Course,
-              as: 'Course',
-              required: true,
-              attributes: ['id', 'title'],
-            },
-          ],
-          attributes: ['id', 'name', 'course_id'],
-        },
-      ],
-      order: [['enrolled_at', 'DESC']],
+      include: [{ model: Course, as: 'Course', attributes: ['id', 'title'] }],
     });
-    return rows.map((r) => {
+
+    // 2. Get batch enrollments (legacy or specific)
+    const batchRows = await BatchEnrollment.findAll({
+      where: { user_id: userId },
+      include: [{ model: Batch, as: 'Batch', include: [{ model: Course, as: 'Course', attributes: ['id', 'title'] }] }],
+    });
+
+    // 3. Get generic user_courses (Auth service parity)
+    const userCourseRows = await UserCourse.findAll({
+      where: { user_id: userId },
+    });
+
+    const resultsMap = new Map();
+
+    // Process generic Enrollments first
+    for (const r of enrollmentRows) {
       const e = r.get({ plain: true });
-      return {
+      resultsMap.set(String(e.course_id), {
         enrollment_id: e.id,
-        batch_id: e.batch_id,
-        batch_name: e.Batch?.name ?? null,
-        course_id: e.Batch?.course_id ?? null,
-        course_title: e.Batch?.Course?.title ?? null,
+        course_id: e.course_id,
+        course_title: e.Course?.title ?? 'Unknown Course',
+        batch_id: null,
+        batch_name: null,
         enrolled_at: e.enrolled_at,
-      };
+      });
+    }
+
+    // Layer in Batch info
+    for (const r of batchRows) {
+      const b = r.get({ plain: true });
+      const cid = String(b.Batch?.course_id);
+      if (!cid || cid === 'undefined') continue;
+
+      const existing = resultsMap.get(cid);
+      resultsMap.set(cid, {
+        enrollment_id: existing?.enrollment_id ?? null,
+        course_id: Number(cid),
+        course_title: b.Batch?.Course?.title ?? existing?.course_title ?? 'Unknown Course',
+        batch_id: b.batch_id,
+        batch_name: b.Batch?.name ?? null,
+        enrolled_at: b.enrolled_at || existing?.enrolled_at,
+      });
+    }
+
+    // Ensure all user_courses are represented
+    for (const r of userCourseRows) {
+      const uc = r.get({ plain: true });
+      const cid = String(uc.course_id);
+      if (!resultsMap.has(cid)) {
+        const course = await Course.findByPk(uc.course_id, { attributes: ['id', 'title'] });
+        resultsMap.set(cid, {
+          enrollment_id: null,
+          course_id: Number(uc.course_id),
+          course_title: course?.title ?? `Course ${uc.course_id}`,
+          batch_id: null,
+          batch_name: null,
+          enrolled_at: null,
+        });
+      }
+    }
+
+    return Array.from(resultsMap.values()).sort((a, b) => {
+      const dateA = a.enrolled_at ? new Date(a.enrolled_at).getTime() : 0;
+      const dateB = b.enrolled_at ? new Date(b.enrolled_at).getTime() : 0;
+      return dateB - dateA;
     });
   },
 
@@ -1411,16 +1466,34 @@ const coursesService = {
 
     if (!targetBatchId) {
       const picked = await this.selectPurchaseBatch(courseId);
-      if (!picked) return null;
-      targetBatchId = picked.id;
+      if (picked) {
+        targetBatchId = picked.id;
+      }
     }
 
-    const [row, created] = await BatchEnrollment.findOrCreate({
-      where: { batch_id: targetBatchId, user_id: userId },
-      defaults: { batch_id: targetBatchId, user_id: userId },
+    let row = null;
+    let created = false;
+    if (targetBatchId) {
+      const [batchRow, batchCreated] = await BatchEnrollment.findOrCreate({
+        where: { batch_id: targetBatchId, user_id: userId },
+        defaults: { batch_id: targetBatchId, user_id: userId, enrolled_at: new Date() },
+      });
+      row = batchRow;
+      created = batchCreated;
+    }
+
+    // Always create a course-level enrollment entry for tracking, even if no batch.
+    await Enrollment.findOrCreate({
+      where: { user_id: userId, course_id: courseId },
+      defaults: { user_id: userId, course_id: courseId, enrolled_at: new Date() }
     });
+
     await syncUserCourseGrant(userId, courseId);
-    return { ...row.get({ plain: true }), created };
+
+    if (row) {
+      return { ...row.get({ plain: true }), created };
+    }
+    return { course_id: courseId, user_id: userId, batch_id: null, created: true, note: "No active batch found, but course access granted." };
   },
 
   /**
@@ -1703,6 +1776,42 @@ const coursesService = {
       category: d.category_name || null,
       cat_slug: d.category_slug || null,
     }));
+  },
+
+  /**
+   * Remove a user from all enrollments related to a specific course.
+   * Called upon order refund to revoke access.
+   */
+  async unenrollUser(userId, courseId) {
+    const { BatchEnrollment, Batch, Enrollment, UserCourse } = require('../models');
+    const { Op } = require('sequelize');
+
+    // 1. Remove from all batches of this course
+    const batches = await Batch.findAll({
+      where: { course_id: courseId },
+      attributes: ['id'],
+      raw: true,
+    });
+    const batchIds = batches.map((b) => b.id);
+
+    if (batchIds.length > 0) {
+      await BatchEnrollment.destroy({
+        where: {
+          user_id: userId,
+          batch_id: { [Op.in]: batchIds },
+        },
+      });
+    }
+
+    // 2. Remove primary enrollment record
+    await Enrollment.destroy({
+      where: { user_id: userId, course_id: courseId }
+    });
+
+    // 3. Remove UserCourse record (generic access link)
+    await UserCourse.destroy({
+      where: { user_id: userId, course_id: courseId }
+    });
   },
 };
 

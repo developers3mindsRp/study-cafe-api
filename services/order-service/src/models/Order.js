@@ -30,6 +30,9 @@ module.exports = (sequelize) => {
       certificate_issue_date: { type: DataTypes.STRING(50), allowNull: true },
       status: { type: DataTypes.STRING(50), allowNull: false, defaultValue: 'pending' },
       gateway: { type: DataTypes.STRING(50), allowNull: true },
+      refund_amount: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
+      refund_remarks: { type: DataTypes.TEXT, allowNull: true },
+      utm: { type: DataTypes.JSON, allowNull: true },
     },
     {
       tableName: 'orders',

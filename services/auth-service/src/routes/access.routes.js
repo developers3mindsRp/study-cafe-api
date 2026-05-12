@@ -9,7 +9,9 @@ const { asyncHandler, sendSuccess, AppError } = require('../../../../shared');
 function register(router) {
   router.get('/access/check', validate(schemas.checkAccess), accessController.check);
   router.post('/access/grant-course', requireGrantAuth, validate(schemas.grantCourse), accessController.grantCourse);
+  router.post('/access/revoke-course', requireGrantAuth, validate(schemas.revokeCourse), accessController.revokeCourse);
   router.post('/access/grant-membership', requireGrantAuth, validate(schemas.grantMembership), accessController.grantMembership);
+  router.post('/access/revoke-membership', requireGrantAuth, validate(schemas.revokeMembership), accessController.revokeMembership);
 
   router.get('/internal/users/by-referral-code/:code', requireGrantAuth, asyncHandler(async (req, res) => {
     const user = await User.findOne({

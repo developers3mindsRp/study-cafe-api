@@ -110,4 +110,13 @@ async function remove(id) {
     return true;
 }
 
-module.exports = { list, getOne, create, update, remove };
+async function listByIds(ids) {
+    if (!ids || ids.length === 0) return [];
+    return await User.findAll({
+        where: { id: { [Op.in]: ids } },
+        attributes: ['id', 'name', 'email', 'phone'],
+        raw: true
+    });
+}
+
+module.exports = { list, getOne, create, update, remove, listByIds };

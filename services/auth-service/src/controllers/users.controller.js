@@ -1,6 +1,12 @@
 const usersService = require('../services/users.service');
-const { createCrudController } = require('../../../../shared');
+const { createCrudController, asyncHandler, sendSuccess } = require('../../../../shared');
 
 const controller = createCrudController(usersService, { resourceName: 'User' });
 
-module.exports = controller;
+const listByIds = asyncHandler(async (req, res) => {
+  const { ids } = req.body;
+  const users = await usersService.listByIds(ids);
+  sendSuccess(res, users);
+});
+
+module.exports = { ...controller, listByIds };

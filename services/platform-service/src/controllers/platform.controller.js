@@ -137,6 +137,17 @@ const deletePlan = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+const getPlanLinkedCoursesInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.plans.getPlanLinkedCoursesInternal(req.params.id);
+  sendSuccess(res, data);
+});
+
+const listPlansByIdsInternal = asyncHandler(async (req, res) => {
+  const ids = String(req.query.ids || '').split(',').map(Number).filter(Boolean);
+  const plans = await platformService.plans.listPlansByIds(ids);
+  sendSuccess(res, plans);
+});
+
 // ── Comparison Features ────────────────────────────────────────────
 
 const getComparisonFeatures = asyncHandler(async (req, res) => {
@@ -472,6 +483,47 @@ const deleteSeoMetadata = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+// ── Banners ─────────────────────────────────────────────────────────
+
+const getBanners = asyncHandler(async (req, res) => {
+  const data = await platformService.banners.getBannersPublic();
+  sendSuccess(res, data);
+});
+
+const getBannerByIdentifier = asyncHandler(async (req, res) => {
+  const data = await platformService.banners.getBannerByIdentifierPublic(req.params.identifier);
+  if (!data) throw new AppError('Banner not found', 404);
+  sendSuccess(res, data);
+});
+
+const getBannersInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.banners.getBannersInternal();
+  sendSuccess(res, data);
+});
+
+const getBannerInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.banners.getBannerByIdInternal(req.params.id);
+  if (!data) throw new AppError('Banner not found', 404);
+  sendSuccess(res, data);
+});
+
+const createBanner = asyncHandler(async (req, res) => {
+  const data = await platformService.banners.createBanner(req.body);
+  sendCreated(res, data);
+});
+
+const updateBanner = asyncHandler(async (req, res) => {
+  const data = await platformService.banners.updateBanner(req.params.id, req.body);
+  if (!data) throw new AppError('Banner not found', 404);
+  sendSuccess(res, data);
+});
+
+const deleteBanner = asyncHandler(async (req, res) => {
+  const ok = await platformService.banners.deleteBanner(req.params.id);
+  if (!ok) throw new AppError('Banner not found', 404);
+  sendNoContent(res);
+});
+
 module.exports = {
   getHome,
   getHomeInternal,
@@ -511,6 +563,8 @@ module.exports = {
   updatePlan,
   togglePlanPopular,
   deletePlan,
+  getPlanLinkedCoursesInternal,
+  listPlansByIdsInternal,
   getComparisonFeatures,
   createComparisonFeature,
   updateComparisonFeature,
@@ -543,4 +597,11 @@ module.exports = {
   getMediaAssets,
   createMediaAsset,
   deleteMediaAsset,
+  getBanners,
+  getBannerByIdentifier,
+  getBannersInternal,
+  getBannerInternal,
+  createBanner,
+  updateBanner,
+  deleteBanner,
 };

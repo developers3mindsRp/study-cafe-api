@@ -41,14 +41,48 @@ const getInvoice = asyncHandler(async (req, res) => {
 const listAllInternal = asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
   const offset = parseInt(req.query.offset || '0', 10);
-  const rows = await ordersService.listAllOrders(limit, offset);
-  sendSuccess(res, rows);
+  const { search, sortBy, sortOrder, dateFrom, dateTo, courseId, type } = req.query;
+  
+  const result = await ordersService.listAllOrders({ 
+    limit, 
+    offset, 
+    search, 
+    sortBy, 
+    sortOrder, 
+    dateFrom, 
+    dateTo, 
+    courseId, 
+    type 
+  });
+  sendSuccess(res, result);
+});
+
+const refundOrder = asyncHandler(async (req, res) => {
+  const result = await ordersService.refundOrder(req.params.id, req.body);
+  sendSuccess(res, result);
 });
 
 const getByOrderIdInternal = asyncHandler(async (req, res) => {
   const order = await ordersService.getOrderByOrderId(req.params.orderId);
   if (!order) throw new AppError('Order not found', 404);
   sendSuccess(res, order);
+});
+
+const createManualOrder = asyncHandler(async (req, res) => {
+  const result = await ordersService.createManualOrder(req.body);
+  sendCreated(res, result);
+});
+
+const updateOrder = asyncHandler(async (req, res) => {
+  const result = await ordersService.updateOrder(req.params.id, req.body);
+  if (!result) throw new AppError('Order not found', 404);
+  sendSuccess(res, result);
+});
+
+const deleteOrder = asyncHandler(async (req, res) => {
+  const result = await ordersService.deleteOrder(req.params.id);
+  if (!result) throw new AppError('Order not found', 404);
+  sendNoContent(res);
 });
 
 const webhook = asyncHandler(async (req, res) => {
@@ -108,6 +142,13 @@ const deleteCoupon = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+const getUserPurchasesInternal = asyncHandler(async (req, res) => {
+  const userId = req.params.userId;
+  if (!userId) throw new AppError('userId is required', 400);
+  const rows = await ordersService.listMyPurchases(userId);
+  sendSuccess(res, rows);
+});
+
 module.exports = {
   create,
   verify,
@@ -126,4 +167,9 @@ module.exports = {
   webhook,
   createPaymentLink,
   verifyPaymentLink,
+  createManualOrder,
+  updateOrder,
+  deleteOrder,
+  refundOrder,
+  getUserPurchasesInternal,
 };

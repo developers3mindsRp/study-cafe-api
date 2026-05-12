@@ -1,4 +1,4 @@
-const { UserCourse, UserMembership, sequelize } = require('../models');
+const { UserCourse, UserMembership, User, sequelize } = require('../models');
 const { QueryTypes, Op } = require('sequelize');
 const authService = require('./auth.service');
 const config = require('../config');
@@ -130,13 +130,55 @@ async function grantMembership({ userId, membershipType, orderId, startsAt, expi
     starts_at: startsAt,
     expires_at: expiresAt,
   });
+
+  // Sync the main User table columns so the profile UI reflects the change immediately.
+  await User.update(
+    {
+      membership: 1, // mark as member
+      plan: membershipType,
+    },
+    { where: { id: userId } }
+  );
+
   return { granted: true };
+}
+
+async function revokeCourse({ userId, courseId, orderId }) {
+  // We remove the user_courses entry to revoke access. 
+  // If orderId is provided, we try to match it, but generally, we remove the course access entirely for this user.
+  const where = { user_id: userId, course_id: courseId };
+  if (orderId) where.order_id = orderId;
+  
+  await UserCourse.destroy({ where });
+  return { revoked: true };
+}
+
+async function revokeMembership({ userId, orderId }) {
+  // Expire the membership associated with this order
+  await UserMembership.update(
+    { expires_at: new Date() },
+    { where: { user_id: userId, order_id: orderId } }
+  );
+  
+  // After expiring, check if user still has ANY active membership.
+  // If not, clear their membership status on the User table.
+  const active = await getActiveMembership(userId);
+  if (!active) {
+    await User.update(
+      { membership: 0, plan: null },
+      { where: { id: userId } }
+    );
+  }
+  
+  return { revoked: true };
 }
 
 module.exports = {
   checkAccess,
   isAuthorizedForGrant,
   grantCourse,
+  revokeCourse,
   grantMembership,
+  revokeMembership,
   getActiveMembership,
 };

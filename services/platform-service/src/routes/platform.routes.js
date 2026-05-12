@@ -33,6 +33,8 @@ function register(router) {
   router.get('/platform/seo-metadata/slug/:slug', validate(schemas.slugParam), controller.getSeoMetadataBySlugPublic);
   router.get('/platform/cms-pages/:slug', validate(schemas.slugParam), controller.getCmsPageBySlug);
   router.post('/platform/contact-us', validate(schemas.createContactInquiry), controller.createContactInquiry);
+  router.get('/platform/banners', controller.getBanners);
+  router.get('/platform/banners/:identifier', controller.getBannerByIdentifier);
 
   // ── Internal routes (admin proxy) ────────────────────────────────
   router.get('/internal/platform/home', internalAuth, controller.getHomeInternal);
@@ -63,6 +65,8 @@ function register(router) {
   router.put('/internal/platform/plans/:id', internalAuth, validate(schemas.updatePlan), controller.updatePlan);
   router.put('/internal/platform/plans/:id/popular', internalAuth, validate(schemas.idParam), controller.togglePlanPopular);
   router.delete('/internal/platform/plans/:id', internalAuth, validate(schemas.idParam), controller.deletePlan);
+  router.get('/internal/platform/plans/:id/linked-courses', internalAuth, validate(schemas.idParam), controller.getPlanLinkedCoursesInternal);
+  router.get('/internal/platform/plans/list-by-ids', internalAuth, controller.listPlansByIdsInternal);
   router.get('/internal/platform/contact-inquiries', internalAuth, controller.getContactInquiryInternal);
 
   // ── Comparison Features ──────────────────────────────────────────
@@ -95,6 +99,13 @@ function register(router) {
   router.get('/internal/platform/media-assets', internalAuth, controller.getMediaAssets);
   router.post('/internal/platform/media-assets', internalAuth, controller.createMediaAsset);
   router.delete('/internal/platform/media-assets/:id', internalAuth, controller.deleteMediaAsset);
+
+  // ── Banners ─────────────────────────────────────────────────────────
+  router.get('/internal/platform/banners', internalAuth, controller.getBannersInternal);
+  router.get('/internal/platform/banners/:id', internalAuth, validate(schemas.idParam), controller.getBannerInternal);
+  router.post('/internal/platform/banners', internalAuth, validate(schemas.createBanner), controller.createBanner);
+  router.put('/internal/platform/banners/:id', internalAuth, validate(schemas.updateBanner), controller.updateBanner);
+  router.delete('/internal/platform/banners/:id', internalAuth, validate(schemas.idParam), controller.deleteBanner);
 }
 
 module.exports = { register };

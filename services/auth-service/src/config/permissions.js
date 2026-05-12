@@ -14,6 +14,7 @@ const ALL_PERMISSIONS = [
   'affiliate:list', 'affiliate:view',
   'admin:access',
   'admin_users:list', 'admin_users:view', 'admin_users:create', 'admin_users:edit', 'admin_users:delete',
+  'banners:list', 'banners:view', 'banners:create', 'banners:edit', 'banners:delete',
 ];
 const MODULE_HIERARCHY = {
   articles: [
@@ -86,6 +87,12 @@ const MODULE_HIERARCHY = {
     ['admin_users:create'],
     ['admin_users:delete'],
   ],
+  banners: [
+    ['banners:list', 'banners:view'],
+    ['banners:edit'],
+    ['banners:create'],
+    ['banners:delete'],
+  ],
 };
 
 function expandPermissionHierarchy(permissionOverrides) {
@@ -126,7 +133,7 @@ const ROLE_PERMISSIONS = {
     'testimonials:list', 'testimonials:view',
     'faq:list', 'faq:view',
   ],
-  
+
   editor_articles: [
     'admin:access',
     'articles:list', 'articles:view', 'articles:create', 'articles:edit', 'articles:delete',

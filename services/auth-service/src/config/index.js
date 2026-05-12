@@ -33,7 +33,7 @@ module.exports = {
     from: process.env.SMTP_FROM || 'no-reply@studycafe.local',
   },
   cacheTtl: parseInt(process.env.CACHE_TTL || '300', 10),
-  internalApiKey: process.env.INTERNAL_API_KEY || '',
+  internalApiKey: process.env.INTERNAL_API_KEY || 'dev-internal',
   /** Used to hydrate course titles for /user/courses */
   courseServiceUrl: process.env.COURSE_SERVICE_URL || 'http://localhost:4002',
   /** Used to resolve plan course lists for membership courses */

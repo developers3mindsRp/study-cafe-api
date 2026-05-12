@@ -49,6 +49,7 @@ const ContactInquiry = require("./ContactInquiry")(sequelize);
 const UserMembership = require("./UserMembership")(sequelize);
 const NewsletterSubscriber = require("./NewsletterSubscriber")(sequelize);
 const NewsletterTemplate = require("./NewsletterTemplate")(sequelize);
+const Banner = require("./Banner")(sequelize);
 
 Article.associate({
   Comment,
@@ -89,6 +90,7 @@ const models = {
   UserMembership,
   NewsletterSubscriber,
   NewsletterTemplate,
+  Banner,
 };
 
 async function connect() {

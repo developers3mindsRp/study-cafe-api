@@ -19,7 +19,7 @@ module.exports = {
   platformServiceUrl: process.env.PLATFORM_SERVICE_URL || 'http://localhost:4005',
   adminServiceUrl: process.env.ADMIN_SERVICE_URL || 'http://localhost:4004',
   platformServiceUrl: process.env.PLATFORM_SERVICE_URL || 'http://localhost:4005',
-  internalApiKey: process.env.INTERNAL_API_KEY || '',
+  internalApiKey: process.env.INTERNAL_API_KEY || 'dev-internal',
   razorpay: {
     keyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_Se6xiUO30POWCb',
     keySecret: process.env.RAZORPAY_KEY_SECRET || 'WhuT8NpFxKnH4PXV02Kp2vkE',

@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const { logger } = require('../../../../shared');
+const { logger, AppError } = require('../../../../shared');
 const { getYearMonthParts } = require('../../../../shared/mediaUrl');
 const { useHostPersistentPath, platformUploadsPath } = require('../../../../shared/persistentDataRoot');
 
@@ -54,7 +54,7 @@ const imageStorage = multer.diskStorage({
 const imageFilter = (_req, file, cb) => {
   const allowed = /^image\/(jpeg|png|gif|webp|svg\+xml)$/i.test(file.mimetype);
   if (allowed) cb(null, true);
-  else cb(new Error('Only image files (JPEG, PNG, GIF, WebP, SVG) are allowed'), false);
+  else cb(new AppError('Only image files (JPEG, PNG, GIF, WebP, SVG) are allowed', 400), false);
 };
 
 const uploadImage = multer({
@@ -103,7 +103,7 @@ const fileFilter = (_req, file, cb) => {
   const extOk = ALLOWED_DOC_EXTENSIONS.test(ext);
   const mimeOk = ALLOWED_DOC_MIME_TYPES.has(file.mimetype);
   if (extOk && mimeOk) cb(null, true);
-  else cb(new Error('Only PDF and Office documents (.pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx) are allowed'), false);
+  else cb(new AppError('Only PDF and Office documents (.pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx) are allowed', 400), false);
 };
 
 const uploadFile = multer({

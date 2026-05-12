@@ -120,6 +120,21 @@ const idParam = {
     }),
 };
 
+const revokeCourse = {
+    body: Joi.object({
+        userId: Joi.number().integer().positive().required(),
+        courseId: Joi.number().integer().positive().required(),
+        orderId: Joi.string().allow('', null),
+    }),
+};
+
+const revokeMembership = {
+    body: Joi.object({
+        userId: Joi.number().integer().positive().required(),
+        orderId: Joi.string().required(),
+    }),
+};
+
 module.exports = {
     register,
     login,
@@ -130,7 +145,9 @@ module.exports = {
     changePassword,
     checkAccess,
     grantCourse,
+    revokeCourse,
     grantMembership,
+    revokeMembership,
     createAdminUser,
     updateAdminUser,
     idParam,

@@ -22,6 +22,11 @@ function register(router) {
   router.delete('/admin/course-cats/:id', requireAdmin, controller.deleteCourseCat);
   router.get('/admin/orders', requireAdmin, controller.getOrders);
   router.get('/admin/orders/:orderId', requireAdmin, controller.getOrderByOrderId);
+  router.post('/admin/orders', requireAdmin, controller.createOrder);
+  router.post('/admin/orders/apply-coupon', requireAdmin, controller.applyCouponAdmin);
+  router.put('/admin/orders/:id', requireAdmin, controller.updateOrder);
+  router.post('/admin/orders/:id/refund', requireAdmin, controller.refundOrder);
+  router.delete('/admin/orders/:id', requireAdmin, controller.deleteOrder);
 
   // Coupon management
   router.get('/admin/coupons', requireAdmin, controller.getCoupons);
@@ -135,6 +140,14 @@ function register(router) {
   router.put('/admin/platform/newsletter/templates/:id', requireAdmin, p.putNewsletterTemplate);
   router.delete('/admin/platform/newsletter/templates/:id', requireAdmin, p.deleteNewsletterTemplate);
   router.post('/admin/platform/newsletter/send', requireAdmin, p.sendNewsletter);
+
+  // ── Banners ─────────────────────────────────────────────────────────
+  router.get('/admin/platform/banners', requireAdmin, p.getBanners);
+  router.get('/admin/platform/banners/:id', requireAdmin, p.getBanner);
+  router.post('/admin/platform/banners', requireAdmin, p.postBanner);
+  router.put('/admin/platform/banners/:id', requireAdmin, p.putBanner);
+  router.delete('/admin/platform/banners/:id', requireAdmin, p.deleteBanner);
+
 
   // ── Affiliate routes ───────────────────────────────────────────────
   router.get('/admin/affiliate/history', requireAdmin, controller.getAffiliateHistory);

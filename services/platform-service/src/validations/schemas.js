@@ -264,6 +264,11 @@ const articleWriteBody = {
     blog_access_tier: Joi.string().valid('free', 'premium'),
     /** Downloadable asset URL (PDF / judgment). */
     rel_download_url: Joi.string().max(1000).allow('', null),
+    /** JSON payload for Case Citation metadata */
+    citation: Joi.alternatives().try(
+        Joi.string().allow('', null),
+        Joi.object().unknown(true).allow(null)
+    ).allow(null),
 };
 
 const createArticle = {
@@ -367,10 +372,41 @@ const sendNewsletter = {
     }),
 };
 
+// ── Banners ─────────────────────────────────────────────────────────
+
+const createBanner = {
+    body: Joi.object({
+        identifier: Joi.string().max(255).required(),
+        desktop_image_url: Joi.string().required(),
+        mobile_image_url: Joi.string().required(),
+        link_url: Joi.string().uri().allow('', null),
+        is_active: Joi.boolean().default(true),
+    }),
+};
+
+const updateBanner = {
+    params: idParam.params,
+    body: Joi.object({
+        identifier: Joi.string().max(255),
+        desktop_image_url: Joi.string(),
+        mobile_image_url: Joi.string(),
+        link_url: Joi.string().uri().allow('', null),
+        is_active: Joi.boolean(),
+    }),
+};
+
 /** Full URL path SEO lookup (?path=/blogs/foo), avoids single-segment :slug limitation */
 const seoByPathQuery = {
     query: Joi.object({
         path: Joi.string().max(500).default('/'),
+    }),
+};
+
+const createMediaAsset = {
+    body: Joi.object({
+        url: Joi.string().uri().required(),
+        label: Joi.string().max(255).allow('', null),
+        category: Joi.string().max(50).default('icon'),
     }),
 };
 
@@ -403,4 +439,7 @@ module.exports = {
     createNewsletterTemplate,
     updateNewsletterTemplate,
     sendNewsletter,
+    createBanner,
+    updateBanner,
+    createMediaAsset,
 };

@@ -20,7 +20,7 @@ module.exports = (sequelize) => {
     }
   );
   Batch.associate = (models) => {
-    Batch.belongsTo(models.Course, { foreignKey: 'course_id' });
+    Batch.belongsTo(models.Course, { foreignKey: 'course_id', as: 'Course' });
     Batch.hasMany(models.Session, { foreignKey: 'batch_id' });
   };
   return Batch;

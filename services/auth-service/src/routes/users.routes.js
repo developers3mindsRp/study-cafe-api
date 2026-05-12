@@ -1,5 +1,6 @@
 const express = require('express');
 const usersController = require('../controllers/users.controller');
+const { internalAuth } = require('../middleware');
 
 const router = express.Router();
 
@@ -8,6 +9,7 @@ router.get('/', usersController.list);
 router.get('/:id', usersController.getOne);
 router.put('/:id', usersController.update);
 router.delete('/:id', usersController.remove);
+router.post('/internal/list-by-ids', internalAuth, usersController.listByIds);
 
 const register = (rootRouter) => {
     rootRouter.use('/users', router);

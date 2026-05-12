@@ -8,6 +8,16 @@ const createOrder = {
         currency: Joi.string().length(3).uppercase().default('INR'),
         couponCode: Joi.string().max(64).allow('', null),
         referralCode: Joi.string().max(32).allow('', null),
+        buyer_name: Joi.string().max(250).allow('', null),
+        buyer_email: Joi.string().email().max(255).allow('', null),
+        buyer_mobile: Joi.string().max(20).allow('', null),
+        utm: Joi.object({
+            source: Joi.string().max(100).allow('', null),
+            medium: Joi.string().max(100).allow('', null),
+            campaign: Joi.string().max(100).allow('', null),
+            content: Joi.string().max(100).allow('', null),
+            term: Joi.string().max(100).allow('', null),
+        }).allow(null),
     }),
 };
 
@@ -49,6 +59,13 @@ const paymentLinkCreateOrder = {
     mobile: Joi.string().trim().min(8).max(24).required(),
     gstNumber: Joi.string().trim().max(32).allow('', null),
     referralCode: Joi.string().max(32).allow('', null),
+    utm: Joi.object({
+      source: Joi.string().max(100).allow('', null),
+      medium: Joi.string().max(100).allow('', null),
+      campaign: Joi.string().max(100).allow('', null),
+      content: Joi.string().max(100).allow('', null),
+      term: Joi.string().max(100).allow('', null),
+    }).allow(null),
   }),
 };
 

@@ -23,6 +23,12 @@ function register(router) {
   router.get('/orders/:orderId/invoice', requireUserId, validate(schemas.invoiceParam), ordersController.getInvoice);
   router.get('/internal/orders', internalAuth, ordersController.listAllInternal);
   router.get('/internal/orders/:orderId', internalAuth, ordersController.getByOrderIdInternal);
+  router.post('/internal/orders', internalAuth, ordersController.createManualOrder);
+  router.put('/internal/orders/:id', internalAuth, ordersController.updateOrder);
+  router.post('/internal/orders/:id/refund', internalAuth, ordersController.refundOrder);
+  router.delete('/internal/orders/:id', internalAuth, ordersController.deleteOrder);
+  router.get('/internal/users/:userId/purchases', internalAuth, ordersController.getUserPurchasesInternal);
+
 
   // Internal coupon management (called by admin-service)
   router.get('/internal/coupons', internalAuth, ordersController.listAllCoupons);

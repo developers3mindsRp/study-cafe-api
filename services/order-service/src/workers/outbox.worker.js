@@ -30,14 +30,10 @@ async function processEvent(record) {
           `${config.courseServiceUrl}/internal/courses/${data.courseId}/auto-enroll`,
           {
             user_id: data.userId,
-            // batch_id was resolved at order creation; enrollment reuses it if valid,
-            // otherwise course-service falls back to its own "select purchase batch" rule.
             batch_id: data.batchId || null,
           },
           { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
-        ).catch(err => {
-          logger.warn(`Failed to auto-enroll user ${data.userId} into batch for course ${data.courseId}: ${err.message}`);
-        })
+        )
       ]);
     } else if (event_type === 'MEMBERSHIP_ACTIVATED') {
       await axios.post(
@@ -67,6 +63,27 @@ async function processEvent(record) {
         logger.warn(`Failed to record affiliate commission for order ${data.orderId}: ${err.message}`);
         throw err;
       });
+    } else if (event_type === 'ORDER_REFUNDED') {
+      if (data.type === 'course') {
+        await Promise.all([
+          axios.post(
+            `${config.authServiceUrl}/access/revoke-course`,
+            { userId: data.userId, courseId: data.entityId, orderId: data.orderId },
+            { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
+          ),
+          axios.post(
+            `${config.courseServiceUrl}/internal/courses/${data.entityId}/unenroll`,
+            { user_id: data.userId },
+            { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
+          )
+        ]);
+      } else if (data.type === 'membership') {
+        await axios.post(
+          `${config.authServiceUrl}/access/revoke-membership`,
+          { userId: data.userId, orderId: data.orderId },
+          { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
+        );
+      }
     }
     await OutboxEvent.update(
       { status: 'processed', processed_at: new Date() },

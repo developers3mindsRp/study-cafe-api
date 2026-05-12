@@ -51,8 +51,9 @@ function register(router) {
   router.post('/internal/batches/:id/enrollments', internalAuth, validate(schemas.addBatchEnrollment), coursesController.addBatchEnrollment);
   router.delete('/internal/batch-enrollments/:id', internalAuth, validate(schemas.idParam), coursesController.removeBatchEnrollment);
   router.post('/internal/courses/:id/auto-enroll', internalAuth, validate(schemas.autoEnrollBatch), coursesController.autoEnrollBatch);
+  router.post('/internal/courses/:id/unenroll', internalAuth, coursesController.unenrollUser);
   router.get('/internal/courses/:id/select-purchase-batch', internalAuth, validate(schemas.idParam), coursesController.selectPurchaseBatch);
-  router.post('/internal/courses/:id/auto-enroll', internalAuth, validate(schemas.addBatchEnrollment), coursesController.autoEnrollBatch);
+  // router.post('/internal/courses/:id/auto-enroll', internalAuth, validate(schemas.addBatchEnrollment), coursesController.autoEnrollBatch);
   router.get('/internal/users/:userId/enrollments', internalAuth, coursesController.getUserEnrollments);
 
   // Batch list

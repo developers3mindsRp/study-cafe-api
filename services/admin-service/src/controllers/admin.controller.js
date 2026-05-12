@@ -231,9 +231,70 @@ const getBatchEnrollments = asyncHandler(async (req, res) => {
   sendSuccess(res, Array.isArray(data) ? data : data || []);
 });
 
+/** Same rules as study-cafe-web `isUserCourseOrderPurchase` — order-service also returns membership rows as synthetic "course" purchases. */
+function isUserCourseOrderPurchase(p) {
+  const cat = p.course?.category;
+  if (cat === 'membership') return false;
+  if (p.course?.title === 'Membership') return false;
+  return true;
+}
+
 const getUserEnrollments = asyncHandler(async (req, res) => {
-  const { data } = await courseClient.get(`/internal/users/${req.params.id}/enrollments`);
-  sendSuccess(res, Array.isArray(data) ? data : data || []);
+  const userId = req.params.id;
+
+  // Internal purchases = same payload as GET /orders/my-purchases (paid orders only).
+  let purchases = [];
+  try {
+    const { data: resData } = await orderClient.get(`/internal/users/${userId}/purchases`);
+    purchases = Array.isArray(resData) ? resData : (resData?.data || []);
+  } catch (err) {
+    logger.warn(`Failed to fetch purchases from order-service for user ${userId}: ${err.message}`);
+  }
+
+  // Enrich from course-service (batch titles, enrollment ids). Course rows may still exist after refund if cleanup lagged — do not use this list alone.
+  let enrollments = [];
+  try {
+    const { data: resData } = await courseClient.get(`/internal/users/${userId}/enrollments`);
+    enrollments = Array.isArray(resData) ? resData : (resData?.data || []);
+  } catch (err) {
+    logger.warn(`Failed to fetch enrollments from course-service for user ${userId}: ${err.message}`);
+  }
+
+  const enrollmentByCourseId = new Map();
+  for (const e of enrollments) {
+    if (e && e.course_id != null) {
+      enrollmentByCourseId.set(String(e.course_id), e);
+    }
+  }
+
+  // Authoritative course list = paid course purchases only (matches user "My Purchases" / my-purchases).
+  const resultsMap = new Map();
+  for (const p of purchases) {
+    if (!p.course || p.courseId == null) continue;
+    if (!isUserCourseOrderPurchase(p)) continue;
+
+    const cid = String(p.courseId);
+    if (resultsMap.has(cid)) continue;
+
+    const e = enrollmentByCourseId.get(cid);
+    resultsMap.set(cid, {
+      enrollment_id: e?.enrollment_id ?? null,
+      course_id: Number(cid),
+      course_title: e?.course_title ?? p.course?.title ?? 'Unknown Course',
+      batch_id: e?.batch_id ?? p.batchId ?? null,
+      batch_name: e?.batch_name ?? p.enrolledBatch?.name ?? null,
+      enrolled_at: e?.enrolled_at ?? p.purchaseDate ?? null,
+      order_id: p.id != null ? String(p.id) : null,
+      purchase_status: p.status ?? null,
+      from_purchase: true,
+    });
+  }
+
+  sendSuccess(res, Array.from(resultsMap.values()).sort((a, b) => {
+    const dateA = a.enrolled_at ? new Date(a.enrolled_at).getTime() : 0;
+    const dateB = b.enrolled_at ? new Date(b.enrolled_at).getTime() : 0;
+    return dateB - dateA;
+  }));
 });
 
 const getUserMemberships = asyncHandler(async (req, res) => {
@@ -299,14 +360,50 @@ const updateCoursePageSetting = asyncHandler(async (req, res) => {
 });
 
 const getOrders = asyncHandler(async (req, res) => {
-  const limit = req.query.limit || 100;
-  const offset = req.query.offset || 0;
-  const { data } = await orderClient.get('/internal/orders', { params: { limit, offset } });
+  const { data } = await orderClient.get('/internal/orders', { params: req.query });
+
+  if (data && typeof data === 'object' && 'data' in data && 'meta' in data) {
+    return sendPaginated(res, data);
+  }
+
   sendSuccess(res, Array.isArray(data) ? data : data || []);
 });
 
 const getOrderByOrderId = asyncHandler(async (req, res) => {
   const { data } = await orderClient.get(`/internal/orders/${encodeURIComponent(req.params.orderId)}`);
+  sendSuccess(res, data);
+});
+
+const createOrder = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await orderClient.post('/internal/orders', req.body);
+  await adminLogsService.logAction(adminId, 'CREATE_ORDER', 'order', String(data.id), { orderId: data.order_id }, req.ip);
+  sendCreated(res, data);
+});
+
+const applyCouponAdmin = asyncHandler(async (req, res) => {
+  const { data } = await orderClient.post('/order/apply-coupon', req.body);
+  sendSuccess(res, data);
+});
+
+const updateOrder = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await orderClient.put(`/internal/orders/${req.params.id}`, req.body);
+  await adminLogsService.logAction(adminId, 'UPDATE_ORDER', 'order', req.params.id, { status: req.body.status }, req.ip);
+  sendSuccess(res, data);
+});
+
+const deleteOrder = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await orderClient.delete(`/internal/orders/${req.params.id}`);
+  await adminLogsService.logAction(adminId, 'DELETE_ORDER', 'order', req.params.id, {}, req.ip);
+  sendSuccess(res, data);
+});
+
+const refundOrder = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await orderClient.post(`/internal/orders/${req.params.id}/refund`, req.body);
+  await adminLogsService.logAction(adminId, 'REFUND_ORDER', 'order', req.params.id, { amount: req.body.amount }, req.ip);
   sendSuccess(res, data);
 });
 
@@ -449,6 +546,11 @@ const platform = {
   putNewsletterTemplate: platformProxy((c, req) => c.put(`/internal/platform/newsletter/templates/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
   deleteNewsletterTemplate: platformProxy((c, req) => c.delete(`/internal/platform/newsletter/templates/${req.params.id}`).then(() => ({ status: 204 }))),
   sendNewsletter: platformProxy((c, req) => c.post('/internal/platform/newsletter/send', req.body).then((r) => ({ data: r.data }))),
+  getBanners: platformProxy((c) => c.get('/internal/platform/banners').then((r) => ({ data: r.data }))),
+  getBanner: platformProxy((c, req) => c.get(`/internal/platform/banners/${req.params.id}`).then((r) => ({ data: r.data }))),
+  postBanner: platformProxy((c, req) => c.post('/internal/platform/banners', req.body).then((r) => ({ data: r.data, status: 201 }))),
+  putBanner: platformProxy((c, req) => c.put(`/internal/platform/banners/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
+  deleteBanner: platformProxy((c, req) => c.delete(`/internal/platform/banners/${req.params.id}`).then(() => ({ status: 204 }))),
 };
 
 const uploadImage = asyncHandler(async (req, res) => {
@@ -639,6 +741,11 @@ module.exports = {
   updateCoursePageSetting,
   getOrders,
   getOrderByOrderId,
+  createOrder,
+  applyCouponAdmin,
+  updateOrder,
+  refundOrder,
+  deleteOrder,
   getCoupons,
   getCoupon,
   postCoupon,

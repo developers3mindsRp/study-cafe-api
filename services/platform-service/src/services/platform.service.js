@@ -97,6 +97,8 @@ const {
   PlanCourseCategory,
   PlanComparisonFeature,
   PlanFeatureAvailability,
+  NewsletterTemplate,
+  Banner,
   Faq,
   Article,
   ArticleCategoryMap,
@@ -651,6 +653,17 @@ async function togglePopular(id, is_popular) {
 async function deletePlan(id) {
   const deleted = await PremiumPlan.destroy({ where: { id } });
   return deleted > 0;
+}
+
+async function getPlanLinkedCoursesInternal(id) {
+  const [courseRows, catRows] = await Promise.all([
+    PlanCourse.findAll({ where: { plan_id: id }, attributes: ['course_id'] }),
+    PlanCourseCategory.findAll({ where: { plan_id: id }, attributes: ['course_cat_id'] }),
+  ]);
+  return {
+    course_ids: courseRows.map((r) => Number(r.course_id)),
+    course_cat_ids: catRows.map((r) => Number(r.course_cat_id)),
+  };
 }
 
 async function getArticlesPublic(options = {}) {
@@ -1267,12 +1280,38 @@ async function getArticleBySlugPublic(slug, viewer = null) {
   });
   if (!row) return null;
   const p = row.get({ plain: true });
+  
+  // Extract TOC and inject anchor IDs into the content
+  const tocItems = [];
+  let htmlWithIds = p.content || '';
+  if (typeof htmlWithIds === 'string') {
+    htmlWithIds = htmlWithIds.replace(/<(h[23])(?:\s+[^>]*)?>([\s\S]*?)<\/h[23]>/gi, (match, tag, inner) => {
+      const rawText = inner.replace(/<[^>]*>?/gm, "").trim();
+      if (rawText) {
+        const id = rawText
+          .toLowerCase()
+          .replace(/[^\w\s-]/g, "")
+          .replace(/\s+/g, "-")
+          .replace(/-+/g, "-")
+          .trim();
+        
+        tocItems.push({
+          id,
+          text: rawText,
+          level: tag.toLowerCase() === 'h2' ? 2 : 3,
+        });
+        return `<${tag} id="${id}">${inner}</${tag}>`;
+      }
+      return match;
+    });
+  }
+
   const blog_access_tier = normalizeBlogAccessTier(p.blog_access_tier);
   const access = canReadFullArticle(blog_access_tier, viewer);
   const authorName = await getAuthorDisplayName(p.author_id);
-  const fullBody = sanitizeArticleHtml(await embedRelatedArticles(p.content));
+  const fullBody = sanitizeArticleHtml(await embedRelatedArticles(htmlWithIds));
   const related_articles = access.can_read_full ? [] : await getRelatedArticlesForArticle(p.id, 4);
-  const body = access.can_read_full ? fullBody : buildPremiumPreviewHtml(p.excerpt, p.content);
+  const body = access.can_read_full ? fullBody : buildPremiumPreviewHtml(p.excerpt, htmlWithIds);
   const out = {
     ...p,
     blog_access_tier,
@@ -1286,6 +1325,7 @@ async function getArticleBySlugPublic(slug, viewer = null) {
         : false,
     },
     body,
+    toc: tocItems,
     cover_image_url: p.thumbnail_url,
     author_name: authorName ?? p.author_id,
     download_url: p.rel_download_url || p.upload_url || null,
@@ -1520,8 +1560,18 @@ async function getArticleByIdInternal(id) {
   // Single tags array { id, name } so client doesn't need to zip two arrays
   const tags = tagIds.map((id) => ({ id, name: tagNameById.get(id) ?? '' }));
 
+  let parsedCitation = null;
+  if (p.citation) {
+    try {
+      parsedCitation = JSON.parse(p.citation);
+    } catch (e) {
+      parsedCitation = { case_citation: p.citation };
+    }
+  }
+
   const result = {
     ...p,
+    citation: parsedCitation,
     category_ids: catRows.map((r) => Number(r.category_id)),
     tag_ids: tagIds,
     tags,
@@ -1548,6 +1598,7 @@ async function createArticle(data) {
     meta_title: data.meta_title || null,
     meta_description: data.meta_description || null,
     meta_keywords: data.meta_keywords || null,
+    citation: data.citation ? (typeof data.citation === 'string' ? data.citation : JSON.stringify(data.citation)) : null,
     blog_access_tier: normalizeBlogAccessTier(data.blog_access_tier),
   });
   const articleId = row.id;
@@ -1582,6 +1633,7 @@ async function updateArticle(id, data) {
   if (data.meta_keywords !== undefined) updates.meta_keywords = data.meta_keywords;
   if (data.blog_access_tier !== undefined) updates.blog_access_tier = normalizeBlogAccessTier(data.blog_access_tier);
   if (data.rel_download_url !== undefined) updates.rel_download_url = data.rel_download_url || null;
+  if (data.citation !== undefined) updates.citation = data.citation ? (typeof data.citation === 'string' ? data.citation : JSON.stringify(data.citation)) : null;
   await row.update(updates);
   if (data.category_ids !== undefined) {
     await ArticleCategoryMap.destroy({ where: { article_id: id } });
@@ -1903,6 +1955,16 @@ async function setFeatureAvailability(planId, featureId, available) {
   return row ? row.get({ plain: true }) : { plan_id: planId, feature_id: featureId, available };
 }
 
+async function listPlansByIds(ids) {
+  if (!ids || ids.length === 0) return [];
+  const rows = await PremiumPlan.findAll({
+    where: { id: { [Op.in]: ids.map(Number).filter(Boolean) } },
+    attributes: ['id', 'name', 'slug'],
+    raw: true,
+  });
+  return rows;
+}
+
 module.exports = {
   home: {
     getHomePublic,
@@ -1956,6 +2018,8 @@ module.exports = {
     updatePlan,
     togglePopular,
     deletePlan,
+    getPlanLinkedCoursesInternal,
+    listPlansByIds,
   },
   comparisonFeatures: {
     listComparisonFeatures,
@@ -1994,6 +2058,15 @@ module.exports = {
     getMediaAssetsInternal,
     createMediaAsset,
     deleteMediaAsset,
+  },
+  banners: {
+    getBannersPublic,
+    getBannerByIdentifierPublic,
+    getBannersInternal,
+    getBannerByIdInternal,
+    createBanner,
+    updateBanner,
+    deleteBanner,
   },
 };
 
@@ -2048,3 +2121,50 @@ async function deleteMediaAsset(id) {
   await row.destroy();
   return { id };
 }
+
+// ── Banners ─────────────────────────────────────────────────────────
+
+async function getBannersPublic() {
+  const rows = await Banner.findAll({
+    where: { is_active: true },
+    order: [["created_at", "DESC"]],
+  });
+  return rows.map((r) => r.get({ plain: true }));
+}
+
+async function getBannerByIdentifierPublic(identifier) {
+  const row = await Banner.findOne({
+    where: { identifier, is_active: true },
+  });
+  return row ? row.get({ plain: true }) : null;
+}
+
+async function getBannersInternal() {
+  const rows = await Banner.findAll({ order: [["created_at", "DESC"]] });
+  return rows.map((r) => r.get({ plain: true }));
+}
+
+async function getBannerByIdInternal(id) {
+  const row = await Banner.findByPk(id);
+  return row ? row.get({ plain: true }) : null;
+}
+
+async function createBanner(data) {
+  const row = await Banner.create(data);
+  return row.get({ plain: true });
+}
+
+async function updateBanner(id, data) {
+  const row = await Banner.findByPk(id);
+  if (!row) return null;
+  await row.update(data);
+  return row.get({ plain: true });
+}
+
+async function deleteBanner(id) {
+  const row = await Banner.findByPk(id);
+  if (!row) return null;
+  await row.destroy();
+  return { id };
+}
+

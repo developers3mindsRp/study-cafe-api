@@ -15,5 +15,5 @@ module.exports = {
   courseServiceUrl: process.env.COURSE_SERVICE_URL || 'http://localhost:4002',
   orderServiceUrl: process.env.ORDER_SERVICE_URL || 'http://localhost:4003',
   platformServiceUrl: process.env.PLATFORM_SERVICE_URL || 'http://localhost:4005',
-  internalApiKey: process.env.INTERNAL_API_KEY || '',
+  internalApiKey: process.env.INTERNAL_API_KEY || 'dev-internal',
 };

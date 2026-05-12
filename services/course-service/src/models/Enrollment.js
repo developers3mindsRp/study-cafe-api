@@ -1,7 +1,7 @@
 const { DataTypes } = require('sequelize');
 
 module.exports = (sequelize) => {
-    return sequelize.define(
+    const Enrollment = sequelize.define(
         'Enrollment',
         {
             id: { type: DataTypes.BIGINT.UNSIGNED, primaryKey: true, autoIncrement: true },
@@ -16,4 +16,8 @@ module.exports = (sequelize) => {
             timestamps: false,
         }
     );
+    Enrollment.associate = (models) => {
+        Enrollment.belongsTo(models.Course, { foreignKey: 'course_id', as: 'Course' });
+    };
+    return Enrollment;
 };

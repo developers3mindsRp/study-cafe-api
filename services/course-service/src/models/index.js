@@ -38,15 +38,8 @@ const AffiliateHistory = require('./AffiliateHistory')(sequelize);
 const WithdrawalRequest = require('./WithdrawalRequest')(sequelize);
 const AffiliateBalance = require('./AffiliateBalance')(sequelize);
 const UserCourseProgress = require('./UserCourseProgress')(sequelize);
+const UserCourse = require('./UserCourse')(sequelize);
 const CourseReview = require('./CourseReview')(sequelize);
-
-Course.associate({ Batch, Material, CourseCat, CourseCategory, CourseAuthor, Enrollment });
-Batch.associate({ Course, Session });
-Session.associate({ Batch, Recording });
-Recording.associate({ Session });
-Material.associate({ Course });
-BatchEnrollment.associate({ Batch });
-Batch.hasMany(BatchEnrollment, { foreignKey: 'batch_id', as: 'enrollments' });
 
 const models = { 
   Course, 
@@ -64,8 +57,19 @@ const models = {
   WithdrawalRequest,
   AffiliateBalance,
   UserCourseProgress,
+  UserCourse,
   CourseReview,
 };
+
+// Register associations
+Object.keys(models).forEach((modelName) => {
+  if (models[modelName].associate) {
+    models[modelName].associate(models);
+  }
+});
+
+// Extra specific associations
+Batch.hasMany(BatchEnrollment, { foreignKey: 'batch_id', as: 'enrollments' });
 
 async function connect() {
   try {

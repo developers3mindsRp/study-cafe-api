@@ -19,7 +19,7 @@ module.exports = (sequelize) => {
         }
     );
     BatchEnrollment.associate = (models) => {
-        BatchEnrollment.belongsTo(models.Batch, { foreignKey: 'batch_id' });
+        BatchEnrollment.belongsTo(models.Batch, { foreignKey: 'batch_id', as: 'Batch' });
     };
     return BatchEnrollment;
 };

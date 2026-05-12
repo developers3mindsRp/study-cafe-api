@@ -3,7 +3,7 @@ module.exports = {
   serviceName: 'course-service',
   /** Must reach auth-service (e.g. http://auth-service:4001 in a cluster, or http://127.0.0.1:4001 locally). */
   authServiceUrl: process.env.AUTH_SERVICE_URL || 'http://127.0.0.1:4001',
-  internalApiKey: process.env.INTERNAL_API_KEY || '',
+  internalApiKey: process.env.INTERNAL_API_KEY || 'dev-internal',
   mysql: {
     host: process.env.MYSQL_HOST || 'localhost',
     port: parseInt(process.env.MYSQL_PORT || '3306', 10),
