@@ -13,10 +13,19 @@ module.exports = (sequelize) => {
       sub_heading: { type: DataTypes.TEXT, allowNull: true },
       author_id: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
       thumbnail_url: { type: DataTypes.STRING(500), allowNull: true },
+      /** Featured image alt text (accessibility / SEO). */
+      thumbnail_alt: { type: DataTypes.STRING(500), allowNull: true },
+      thumbnail_link_url: { type: DataTypes.STRING(500), allowNull: true },
+      thumbnail_caption: { type: DataTypes.TEXT, allowNull: true },
       views: { type: DataTypes.INTEGER.UNSIGNED, defaultValue: 0 },
       meta_title: { type: DataTypes.STRING(500), allowNull: true },
       meta_description: { type: DataTypes.TEXT, allowNull: true },
       meta_keywords: { type: DataTypes.STRING(500), allowNull: true },
+      canonical_url: { type: DataTypes.STRING(1000), allowNull: true },
+      robots: { type: DataTypes.STRING(255), allowNull: true },
+      og_title: { type: DataTypes.STRING(255), allowNull: true },
+      og_description: { type: DataTypes.TEXT, allowNull: true },
+      og_image_url: { type: DataTypes.STRING(500), allowNull: true },
       case_name: { type: DataTypes.TEXT, allowNull: true },
       citation: { type: DataTypes.TEXT, allowNull: true },
       appeal_number: { type: DataTypes.STRING(500), allowNull: true },
@@ -32,6 +41,8 @@ module.exports = (sequelize) => {
       external_links: { type: DataTypes.TEXT, allowNull: true },
       status: { type: DataTypes.STRING(20), defaultValue: 'publish' },
       published_at: { type: DataTypes.DATE, allowNull: true },
+      /** When status is `scheduled`, the worker sets publish at this instant (UTC). */
+      scheduled_publish_at: { type: DataTypes.DATE, allowNull: true },
       /** `free` = full content for everyone; `premium` = full content only for members (or admins). */
       blog_access_tier: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'free' },
     },

@@ -150,6 +150,11 @@ const listCourseCatsPublic = asyncHandler(async (req, res) => {
   sendSuccess(res, rows);
 });
 
+const listCourseCatsAllPublic = asyncHandler(async (req, res) => {
+  const rows = await coursesService.listCourseCats();
+  sendSuccess(res, rows);
+});
+
 const listCourseCatsInternal = asyncHandler(async (req, res) => {
   const rows = await coursesService.listCourseCats();
   sendSuccess(res, rows);
@@ -298,6 +303,7 @@ module.exports = {
   listFeatured,
   listByCategory,
   listCourseCatsPublic,
+  listCourseCatsAllPublic,
   getById,
   getBySlug,
   getSessions,

@@ -15,6 +15,23 @@ function register(app) {
       '^/api/courses': '/courses',
       '^/api/course-cats': '/course-cats',
     },
+    /** Avoid 504 when MySQL is slow to answer (default proxy timeouts are short). */
+    timeout: 120000,
+    proxyTimeout: 120000,
+    onError(err, req, res) {
+      const code = err?.code || err?.errno;
+      const msg = err?.message || String(err);
+      console.error('[api-gateway] course proxy error:', code || msg, '→', config.courseServiceUrl, req.url);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            success: false,
+            error: `Course service unreachable: ${code || msg}. Target: ${config.courseServiceUrl}. Is course-service running? Check COURSE_SERVICE_URL and MySQL connectivity.`,
+          }),
+        );
+      }
+    },
   });
   const orderProxy = createProxyMiddleware({
     target: config.orderServiceUrl,
@@ -109,6 +126,7 @@ function register(app) {
     next();
   };
 
+  app.get('/api/course-cats/all', courseProxy);
   app.get('/api/course-cats', courseProxy);
   app.get('/api/courses/by-category', courseProxy);
   app.get('/api/courses/slug/:slug', optionalJWT, injectOptionalUserId, courseProxy);

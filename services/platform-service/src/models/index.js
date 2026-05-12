@@ -37,6 +37,7 @@ const CmsPage = require("./CmsPage")(sequelize);
 const State = require("./State")(sequelize);
 const Testimonial = require("./Testimonial")(sequelize);
 const FooterData = require("./FooterData")(sequelize);
+const GlobalSetting = require("./GlobalSetting")(sequelize);
 const PremiumPlan = require("./PremiumPlan")(sequelize);
 const PlanCourse = require("./PlanCourse")(sequelize);
 const PlanCourseCategory = require("./PlanCourseCategory")(sequelize);
@@ -78,6 +79,7 @@ const models = {
   State,
   Testimonial,
   FooterData,
+  GlobalSetting,
   PremiumPlan,
   PlanCourse,
   PlanCourseCategory,

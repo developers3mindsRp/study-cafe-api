@@ -18,7 +18,7 @@ const register = {
         designation: Joi.string().trim().max(200).allow('', null),
         city: Joi.string().trim().min(1).max(100).required(),
         state: Joi.string().trim().min(1).max(100).required(),
-        country: Joi.string().trim().min(1).max(100).required(),
+        country: Joi.string().trim().max(100).allow('', null),
         referralCode: Joi.string().max(32).allow('', null),
     }),
 };

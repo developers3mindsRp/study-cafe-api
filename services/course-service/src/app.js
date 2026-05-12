@@ -7,7 +7,8 @@ const { errorHandler } = require('./middleware');
 function createApp() {
   const app = express();
   app.use(cors());
-  app.use(express.json());
+  /** Large HTML/script blobs (Global Settings pixels, GTM) exceed the default ~100kb limit */
+  app.use(express.json({ limit: '15mb' }));
   app.use(logger.requestLogger);
   app.use(routes);
   app.use(errorHandler);

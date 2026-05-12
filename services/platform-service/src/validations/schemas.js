@@ -139,6 +139,9 @@ const createArticleCategory = {
         name: Joi.string().max(200).required(),
         slug: Joi.string().max(200).allow('', null),
         parent_id: Joi.number().integer().positive().allow(null),
+        whatsapp_links: Joi.array().items(Joi.string().uri().max(500)).allow(null),
+        telegram_links: Joi.array().items(Joi.string().uri().max(500)).allow(null),
+        google_news_url: Joi.string().uri().max(500).allow('', null),
     }),
 };
 
@@ -148,6 +151,9 @@ const updateArticleCategory = {
         name: Joi.string().max(200),
         slug: Joi.string().max(200).allow('', null),
         parent_id: Joi.number().integer().positive().allow(null),
+        whatsapp_links: Joi.array().items(Joi.string().uri().max(500)).allow(null),
+        telegram_links: Joi.array().items(Joi.string().uri().max(500)).allow(null),
+        google_news_url: Joi.string().uri().max(500).allow('', null),
     }),
 };
 
@@ -161,6 +167,24 @@ const upsertFooter = {
     })
         .min(1)
         .messages({ 'object.min': 'body must include at least one of data_value, meta' }),
+};
+
+/** Full site display-ads document; unknown keys ignored at service merge step. */
+const putSiteAds = {
+    body: Joi.object().unknown(true),
+};
+
+/** global_settings.setting_key rows (tracking HTML, JSON blobs, future keys) */
+const upsertGlobalSetting = {
+    params: Joi.object({
+        key: Joi.string().max(128).required(),
+    }),
+    body: Joi.object({
+        value: Joi.string().allow('', null),
+        meta: Joi.object().unknown(true).allow(null),
+    })
+        .min(1)
+        .messages({ 'object.min': 'body must include at least value or meta' }),
 };
 
 // ── Plans ───────────────────────────────────────────────────────────
@@ -227,7 +251,7 @@ const articleListQuery = {
     query: Joi.object({
         page: Joi.number().integer().min(1).default(1),
         limit: Joi.number().integer().min(1).max(100).default(10),
-        status: Joi.string().valid('draft', 'publish', 'archived').allow('', null),
+        status: Joi.string().valid('draft', 'publish', 'archived', 'scheduled').allow('', null),
         search: Joi.string().max(255).allow('', null),
         sortBy: Joi.string().max(64).allow('', null),
         sortOrder: Joi.string().valid('ASC', 'DESC', 'asc', 'desc').default('DESC'),
@@ -243,23 +267,34 @@ const articleWriteBody = {
     sub_heading: Joi.string().allow('', null),
     thumbnail: Joi.string().max(500).allow('', null),
     thumbnail_url: Joi.string().max(500).allow('', null),
-    status: Joi.string().valid('draft', 'publish', 'archived'),
+    status: Joi.string().valid('draft', 'publish', 'archived', 'scheduled'),
     seo_title: Joi.string().max(255).allow('', null),
     seo_description: Joi.string().allow('', null),
     seo_keywords: Joi.string().allow('', null),
     meta_title: Joi.string().max(500).allow('', null),
     meta_description: Joi.string().allow('', null),
     meta_keywords: Joi.string().max(500).allow('', null),
+    canonical_url: Joi.string().max(1000).allow('', null),
+    robots: Joi.string().max(255).allow('', null),
+    og_title: Joi.string().max(255).allow('', null),
+    og_description: Joi.string().allow('', null),
+    og_image_url: Joi.string().max(500).allow('', null),
+    thumbnail_alt: Joi.string().max(500).allow('', null),
+    thumbnail_link_url: Joi.string().max(500).allow('', null),
+    thumbnail_caption: Joi.string().allow('', null),
     categories: Joi.array().items(Joi.number().integer().positive()),
     tags: Joi.array().items(Joi.number().integer().positive()),
     types: Joi.array().items(Joi.number().integer().positive()),
     courts: Joi.array().items(Joi.number().integer().positive()),
     category_ids: Joi.array().items(Joi.number().integer().positive()),
     tag_ids: Joi.array().items(Joi.number().integer().positive()),
+    /** Comma-separated tag labels from admin; merged with tag_ids (tags are find-or-created by name). */
+    tag_labels: Joi.array().items(Joi.string().max(200)).optional(),
     article_type_ids: Joi.array().items(Joi.number().integer().positive()),
     court_ids: Joi.array().items(Joi.number().integer().positive()),
     author_id: Joi.number().integer().positive().allow(null),
     published_at: Joi.alternatives().try(Joi.date(), Joi.string().allow('', null)),
+    scheduled_publish_at: Joi.alternatives().try(Joi.date(), Joi.string().allow('', null)),
     /** Public blog: full HTML for everyone vs members-only full body. */
     blog_access_tier: Joi.string().valid('free', 'premium'),
     /** Downloadable asset URL (PDF / judgment). */
@@ -275,7 +310,7 @@ const createArticle = {
     body: Joi.object({
         ...articleWriteBody,
         title: Joi.string().max(500).required(),
-        status: Joi.string().valid('draft', 'publish', 'archived').default('draft'),
+        status: Joi.string().valid('draft', 'publish', 'archived', 'scheduled').default('draft'),
         blog_access_tier: Joi.string().valid('free', 'premium').default('free'),
     }),
 };
@@ -424,6 +459,8 @@ module.exports = {
     updateFaq,
     createContactInquiry,
     upsertFooter,
+    putSiteAds,
+    upsertGlobalSetting,
     createPlan,
     updatePlan,
     articleListQuery,

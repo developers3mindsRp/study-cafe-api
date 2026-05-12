@@ -9,7 +9,7 @@ const { uploadsDir } = require('./middleware/upload');
 function createApp() {
   const app = express();
   app.use(cors());
-  app.use(express.json());
+  app.use(express.json({ limit: '15mb' }));
   app.use(logger.requestLogger);
 
   // Serve uploaded files at /platform/uploads (gateway rewrites /api/uploads → here).

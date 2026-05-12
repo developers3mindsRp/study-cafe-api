@@ -13,8 +13,10 @@
  *   - SequelizeUnique   → 409 Conflict
  *   - SequelizeValid    → 400 Bad Request
  *   - SequelizeForeignKey → 400 Bad Request (invalid reference)
+ *   - SequelizeDatabaseError → often 400/413 (e.g. value too large for column)
  *   - JWT errors        → 401 Unauthorized
  *   - Axios errors      → forwards upstream status + message
+ *   - Request too large → 413 (express body limit)
  *   - Unknown           → 500 (never leaks stack to client)
  */
 
@@ -72,7 +74,38 @@ function errorHandler(err, req, res, _next) {
         return res.status(status).json({ success: false, error: message });
     }
 
-    // 8. Unknown / programming error — log full details, return generic message
+    // 8. Payload / body limits
+    if (err.status === 413 || err.statusCode === 413 || err.type === 'entity.too.large') {
+        return res.status(413).json({ success: false, error: err.message || 'Request body too large' });
+    }
+
+    // 9. Sequelize / general database errors (e.g. ER_DATA_TOO_LONG_VALUE)
+    if (err.name === 'SequelizeDatabaseError') {
+        const errno = err.parent?.errno ?? err.original?.errno;
+        const sqlMessage =
+            typeof err.parent?.sqlMessage === 'string' ? err.parent.sqlMessage : err.message || 'Database error';
+        logger.error('Database error', {
+            errno,
+            sqlMessage,
+            url: req.originalUrl,
+            method: req.method,
+        });
+        if (errno === 1406 || /Data too long/i.test(sqlMessage)) {
+            return res.status(413).json({
+                success: false,
+                error:
+                    'Stored value exceeds database column limit. Widen `sc_course_page_settings.setting_value` to LONGTEXT (see services/course-service/scripts/ensure-page-settings-longtext.sql in the API repo).',
+            });
+        }
+        return res.status(400).json({ success: false, error: sqlMessage });
+    }
+
+    // 10. Malformed JSON (express body parser)
+    if (err instanceof SyntaxError && 'body' in err) {
+        return res.status(400).json({ success: false, error: 'Invalid JSON body' });
+    }
+
+    // 11. Unknown / programming error — log full details, return generic message
     logger.error('Unhandled error', {
         message: err.message,
         stack: err.stack,

@@ -499,6 +499,14 @@ const platform = {
   deleteSeoMetadata: platformProxy((c, req) => c.delete(`/internal/platform/seo-metadata/${req.params.id}`).then(() => ({ status: 204 }))),
   getFooter: platformProxy((c) => c.get('/internal/platform/footer').then((r) => ({ data: r.data }))),
   putFooter: platformProxy((c, req) => c.put(`/internal/platform/footer/${req.params.key}`, req.body).then((r) => ({ data: r.data }))),
+  getSiteAds: platformProxy((c) => c.get('/internal/platform/site-ads').then((r) => ({ data: r.data }))),
+  putSiteAds: platformProxy((c, req) => c.put('/internal/platform/site-ads', req.body).then((r) => ({ data: r.data }))),
+  getGlobalSettings: platformProxy((c) =>
+    c.get('/internal/platform/global-settings').then((r) => ({ data: r.data }))
+  ),
+  putGlobalSetting: platformProxy((c, req) =>
+    c.put(`/internal/platform/global-settings/${encodeURIComponent(req.params.key)}`, req.body).then((r) => ({ data: r.data }))
+  ),
   getPlans: platformProxy((c) => c.get('/internal/platform/plans').then((r) => ({ data: r.data }))),
   getPlan: platformProxy((c, req) => c.get(`/internal/platform/plans/${req.params.id}`).then((r) => ({ data: r.data }))),
   postPlan: platformProxy((c, req) => c.post('/internal/platform/plans', req.body).then((r) => ({ data: r.data, status: 201 }))),

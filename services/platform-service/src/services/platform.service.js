@@ -86,12 +86,14 @@ function normalizeStructuredFeatures(raw) {
 }
 
 const { paginate, AppError } = require('../../../../shared');
+const articleScheduling = require('./article-scheduling.service');
 const {
   sequelize,
   CmsPage,
   State,
   Testimonial,
   FooterData,
+  GlobalSetting,
   PremiumPlan,
   PlanCourse,
   PlanCourseCategory,
@@ -395,11 +397,117 @@ async function deleteTestimonial(id) {
   return deleted > 0;
 }
 
+const SITE_DISPLAY_ADS_KEY = 'site_display_ads';
+
+const TRACKING_SNIPPET_KEYS = ['tracking_meta_pixel', 'tracking_google_analytics', 'tracking_linkedin_pixel'];
+
+/** Avoid 500s on public routes if `global_settings` was not created yet (run `npm run ensure-global-settings`). */
+let warnedMissingGlobalSettingsTable = false;
+function warnMissingGlobalSettingsTableOnce() {
+  if (warnedMissingGlobalSettingsTable) return;
+  warnedMissingGlobalSettingsTable = true;
+  console.warn(
+    '[platform-service] The `global_settings` table is missing. Run `npm run ensure-global-settings` from the study-cafe-api repo root, then restart. Public reads are degraded until then.',
+  );
+}
+
+function isMissingGlobalSettingsTableError(err) {
+  if (!err || err.name !== 'SequelizeDatabaseError') return false;
+  const code = err.parent?.code;
+  const msg = String(err.parent?.sqlMessage || err.message || '');
+  if (code === 'ER_NO_SUCH_TABLE') return true;
+  return /global_settings/i.test(msg) && /doesn't exist/i.test(msg);
+}
+
+async function getGlobalSettingValueString(key) {
+  try {
+    const row = await GlobalSetting.findOne({ where: { setting_key: key } });
+    return row ? row.setting_value : null;
+  } catch (err) {
+    if (isMissingGlobalSettingsTableError(err)) {
+      warnMissingGlobalSettingsTableOnce();
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function upsertGlobalSettingRow(key, rawValue, metaExplicit) {
+  let setting_value = rawValue;
+  if (setting_value !== undefined && setting_value !== null && typeof setting_value !== 'string') {
+    setting_value = JSON.stringify(setting_value);
+  }
+  let row = await GlobalSetting.findOne({ where: { setting_key: key } });
+  if (row) {
+    const patch = {};
+    if (setting_value !== undefined) patch.setting_value = setting_value;
+    if (metaExplicit !== undefined) patch.meta = metaExplicit;
+    await row.update(patch);
+    await row.reload();
+  } else {
+    row = await GlobalSetting.create({
+      setting_key: key,
+      setting_value: setting_value !== undefined ? setting_value : null,
+      meta: metaExplicit !== undefined ? metaExplicit : null,
+    });
+  }
+  return row.get({ plain: true });
+}
+
+async function getAllGlobalSettingsMap() {
+  let rows;
+  try {
+    rows = await GlobalSetting.findAll({ order: [['setting_key', 'ASC']] });
+  } catch (err) {
+    if (isMissingGlobalSettingsTableError(err)) {
+      warnMissingGlobalSettingsTableOnce();
+      return {};
+    }
+    throw err;
+  }
+  const out = {};
+  for (const r of rows) {
+    const p = r.get({ plain: true });
+    out[p.setting_key] = p.setting_value;
+  }
+  return out;
+}
+
+async function getPublicTrackingSnippets() {
+  let rows;
+  try {
+    rows = await GlobalSetting.findAll({ where: { setting_key: TRACKING_SNIPPET_KEYS } });
+  } catch (err) {
+    if (isMissingGlobalSettingsTableError(err)) {
+      warnMissingGlobalSettingsTableOnce();
+      rows = [];
+    } else {
+      throw err;
+    }
+  }
+  const byKey = new Map(rows.map((r) => {
+    const p = r.get({ plain: true });
+    return [p.setting_key, p.setting_value];
+  }));
+  const result = {};
+  for (const k of TRACKING_SNIPPET_KEYS) {
+    const v = byKey.get(k);
+    result[k] = v && String(v).trim() !== '' ? v : null;
+  }
+  return result;
+}
+
+async function upsertGlobalSettingFromAdmin(key, body) {
+  const { value, meta } = body || {};
+  return upsertGlobalSettingRow(key, value, meta !== undefined ? meta : undefined);
+}
+
 async function getFooterPublic() {
   const rows = await FooterData.findAll({ order: [['id', 'ASC']] });
   const footer = {};
   for (const r of rows) {
     const p = r.get({ plain: true });
+    if (p.data_key === SITE_DISPLAY_ADS_KEY) continue;
     footer[p.data_key] = p.data_value;
     if (p.meta) footer[`${p.data_key}_meta`] = p.meta;
   }
@@ -407,7 +515,10 @@ async function getFooterPublic() {
 }
 
 async function getFooterInternal() {
-  const rows = await FooterData.findAll({ order: [['data_key', 'ASC']] });
+  const rows = await FooterData.findAll({
+    where: { data_key: { [Op.ne]: SITE_DISPLAY_ADS_KEY } },
+    order: [['data_key', 'ASC']],
+  });
   return rows.map((r) => r.get({ plain: true }));
 }
 
@@ -448,6 +559,81 @@ async function upsertFooter(key, data) {
     });
   }
   return row.get({ plain: true });
+}
+
+/** Display ads JSON — stored in global_settings (migrated from footer_data) */
+
+function normalizeAdSlot(input) {
+  if (!input || typeof input !== 'object') return { image_url: '', link_url: '' };
+  return {
+    image_url: typeof input.image_url === 'string' ? input.image_url : typeof input.imageUrl === 'string' ? input.imageUrl : '',
+    link_url: typeof input.link_url === 'string' ? input.link_url : typeof input.linkUrl === 'string' ? input.linkUrl : '',
+  };
+}
+
+function defaultSiteDisplayAds() {
+  return {
+    popup: { enabled: true, ...normalizeAdSlot({}) },
+    article_detail_sidebar: [normalizeAdSlot({}), normalizeAdSlot({})],
+    article_listing_sidebar: normalizeAdSlot({}),
+    between_article: {
+      after_paragraph_3: normalizeAdSlot({}),
+      after_paragraph_6: normalizeAdSlot({}),
+      below_featured_post: normalizeAdSlot({}),
+    },
+  };
+}
+
+function mergeSiteDisplayAds(raw) {
+  const d = defaultSiteDisplayAds();
+  if (!raw || typeof raw !== 'object') return d;
+  if (raw.popup && typeof raw.popup === 'object') {
+    d.popup.enabled = raw.popup.enabled !== false;
+    const s = normalizeAdSlot(raw.popup);
+    d.popup.image_url = s.image_url;
+    d.popup.link_url = s.link_url;
+  }
+  const side = Array.isArray(raw.article_detail_sidebar) ? raw.article_detail_sidebar : raw.articleDetailSidebar;
+  if (Array.isArray(side)) {
+    d.article_detail_sidebar = [0, 1].map((i) => normalizeAdSlot(side[i]));
+  }
+  const listSide = raw.article_listing_sidebar || raw.articleListingSidebar;
+  if (listSide && typeof listSide === 'object') {
+    d.article_listing_sidebar = normalizeAdSlot(listSide);
+  }
+  const bet = raw.between_article || raw.betweenArticle;
+  if (bet && typeof bet === 'object') {
+    d.between_article.after_paragraph_3 = normalizeAdSlot(bet.after_paragraph_3 || bet.afterParagraph3);
+    d.between_article.after_paragraph_6 = normalizeAdSlot(bet.after_paragraph_6 || bet.afterParagraph6);
+    d.between_article.below_featured_post = normalizeAdSlot(bet.below_featured_post || bet.belowFeaturedPost);
+  }
+  return d;
+}
+
+function parseSiteDisplayAdsJson(str) {
+  if (!str || typeof str !== 'string') return null;
+  try {
+    return JSON.parse(str);
+  } catch {
+    return null;
+  }
+}
+
+async function getSiteAdsPublic() {
+  let raw = await getGlobalSettingValueString(SITE_DISPLAY_ADS_KEY);
+  if (!raw) {
+    const legacy = await FooterData.findOne({ where: { data_key: SITE_DISPLAY_ADS_KEY } });
+    raw = legacy?.data_value ?? null;
+  }
+  const parsed = parseSiteDisplayAdsJson(raw);
+  return mergeSiteDisplayAds(parsed);
+}
+
+async function putSiteAds(body) {
+  const merged = mergeSiteDisplayAds(body);
+  await upsertGlobalSettingRow(SITE_DISPLAY_ADS_KEY, JSON.stringify(merged), null);
+  await FooterData.destroy({ where: { data_key: SITE_DISPLAY_ADS_KEY } });
+  return merged;
 }
 
 async function getPlansPublic() {
@@ -668,6 +854,9 @@ async function getPlanLinkedCoursesInternal(id) {
 
 async function getArticlesPublic(options = {}) {
   const { page = 1, limit = 20, search, category } = options;
+  const normalizedCategory = category && String(category).trim()
+    ? String(category).trim().toLowerCase()
+    : undefined;
 
   const where = { status: 'publish' };
   if (search && String(search).trim()) {
@@ -678,9 +867,9 @@ async function getArticlesPublic(options = {}) {
     ];
   }
 
-  // If category slug provided, find the category id first and filter via subquery
-  if (category && String(category).trim()) {
-    const catRow = await Category.findOne({ where: { slug: String(category).trim() }, attributes: ['id'] });
+  // If category slug provided (except "all"), find category id and filter via mapping table.
+  if (normalizedCategory && normalizedCategory !== 'all') {
+    const catRow = await Category.findOne({ where: { slug: normalizedCategory }, attributes: ['id'] });
     if (!catRow) {
       return { data: [], total: 0, page, limit, totalPages: 0 };
     }
@@ -692,22 +881,29 @@ async function getArticlesPublic(options = {}) {
     where.id = { [Op.in]: articleIds };
   }
 
-  const result = await paginate(Article, {
+  const safePage = Math.max(1, Number(page) || 1);
+  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
+  const offset = (safePage - 1) * safeLimit;
+
+  const { count, rows } = await Article.findAndCountAll({
     where,
-    page,
-    limit,
-    sortBy: 'published_at',
-    sortOrder: 'DESC',
+    limit: safeLimit,
+    offset,
+    // Keep newest records first (latest created / last inserted)
+    order: [['created_at', 'DESC'], ['id', 'DESC']],
     attributes: ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'published_at', 'created_at'],
   });
 
+  const total = typeof count === 'number' ? count : count.length;
+  const totalPages = Math.ceil(total / safeLimit) || 0;
+
   // Flatten { data, meta } into { data, total, page, limit, totalPages }
   const out = {
-    data: result.data || [],
-    total: result.meta?.total ?? 0,
-    page: result.meta?.page ?? page,
-    limit: result.meta?.limit ?? limit,
-    totalPages: result.meta?.totalPages ?? 0,
+    data: rows.map((r) => (typeof r.get === 'function' ? r.get({ plain: true }) : r)),
+    total,
+    page: safePage,
+    limit: safeLimit,
+    totalPages,
   };
 
   if (out.data.length > 0) {
@@ -1118,6 +1314,43 @@ function buildPremiumPreviewHtml(excerpt, fullContent) {
   return `<p>${escapeHtmlText(cut)}</p>`;
 }
 
+/**
+ * Published articles sharing any of the given categories, globally newest first.
+ * Avoids ArticleCategoryMap.findAll + limit without ORDER BY, which returned an arbitrary
+ * slice of sibling rows (often oldest IDs) and made "related" / up-next look stale.
+ */
+async function findPublishedArticlesSharingCategories(excludeArticleId, catIds, attributes, resultLimit) {
+  const excludeId = Number(excludeArticleId);
+  const safeCatIds = [...new Set(catIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0))];
+  const lim = Math.min(500, Math.max(1, Number(resultLimit) || 1));
+  if (!safeCatIds.length || !Number.isFinite(excludeId)) return [];
+
+  const catPlaceholders = safeCatIds.map(() => '?').join(',');
+  const idRows = await sequelize.query(
+    `SELECT a.id FROM articles a
+     WHERE a.status = 'publish'
+       AND a.id != ?
+       AND EXISTS (
+         SELECT 1 FROM article_categories ac
+         WHERE ac.article_id = a.id AND ac.category_id IN (${catPlaceholders})
+       )
+     ORDER BY a.published_at IS NULL, a.published_at DESC, a.id DESC
+     LIMIT ?`,
+    { replacements: [excludeId, ...safeCatIds, lim], type: QueryTypes.SELECT },
+  );
+
+  const ids = idRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n));
+  if (!ids.length) return [];
+
+  const rows = await Article.findAll({
+    where: { id: { [Op.in]: ids } },
+    attributes,
+  });
+  const rank = new Map(ids.map((id, i) => [id, i]));
+  rows.sort((a, b) => (rank.get(Number(a.id)) ?? 0) - (rank.get(Number(b.id)) ?? 0));
+  return rows;
+}
+
 async function getRelatedArticlesForArticle(articleId, limit = 4) {
   const RELATED_ATTRS = [
     'id', 'title', 'slug', 'thumbnail_url', 'excerpt',
@@ -1132,22 +1365,9 @@ async function getRelatedArticlesForArticle(articleId, limit = 4) {
 
   let rows = [];
 
-  // Try same-category articles first
+  // Try same-category articles first (newest site-wide among siblings, not among an arbitrary map slice)
   if (catIds.length) {
-    const sibs = await ArticleCategoryMap.findAll({
-      where: { category_id: { [Op.in]: catIds }, article_id: { [Op.ne]: articleId } },
-      attributes: ['article_id'],
-      limit: 48,
-    });
-    const candidateIds = [...new Set(sibs.map((s) => Number(s.article_id)))].filter((n) => Number.isFinite(n));
-    if (candidateIds.length) {
-      rows = await Article.findAll({
-        where: { id: { [Op.in]: candidateIds }, status: 'publish' },
-        attributes: RELATED_ATTRS,
-        order: [['published_at', 'DESC']],
-        limit,
-      });
-    }
+    rows = await findPublishedArticlesSharingCategories(articleId, catIds, RELATED_ATTRS, limit);
   }
 
   // Fallback: latest published articles (excluding current)
@@ -1269,6 +1489,14 @@ function sanitizeArticleHtml(html) {
   return out.trim();
 }
 
+/**
+ * Returns one element picked at random from the array, or null if empty.
+ */
+function pickRandom(arr) {
+  if (!arr || !arr.length) return null;
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 async function getArticleBySlugPublic(slug, viewer = null) {
   const row = await Article.findOne({
     where: { slug, status: 'publish' },
@@ -1311,7 +1539,36 @@ async function getArticleBySlugPublic(slug, viewer = null) {
   const authorName = await getAuthorDisplayName(p.author_id);
   const fullBody = sanitizeArticleHtml(await embedRelatedArticles(htmlWithIds));
   const related_articles = access.can_read_full ? [] : await getRelatedArticlesForArticle(p.id, 4);
-  const body = access.can_read_full ? fullBody : buildPremiumPreviewHtml(p.excerpt, htmlWithIds);
+  // const body = access.can_read_full ? fullBody : buildPremiumPreviewHtml(p.excerpt, htmlWithIds);
+  const body = access.can_read_full ? fullBody : buildPremiumPreviewHtml(p.excerpt, p.content);
+
+  // Fetch all categories for this article (with social link fields)
+  const catMapRows = await ArticleCategoryMap.findAll({
+    where: { article_id: p.id },
+    attributes: ['category_id'],
+  });
+  const catIds = catMapRows.map((m) => Number(m.category_id)).filter((n) => Number.isFinite(n));
+  let whatsapp_link = null;
+  let telegram_link = null;
+  let google_news_url = null;
+  if (catIds.length) {
+    const catRows = await Category.findAll({
+      where: { id: { [Op.in]: catIds } },
+      attributes: ['id', 'whatsapp_links', 'telegram_links', 'google_news_url'],
+    });
+    const allWhatsapp = [];
+    const allTelegram = [];
+    for (const cat of catRows) {
+      const c = cat.get({ plain: true });
+      if (Array.isArray(c.whatsapp_links)) allWhatsapp.push(...c.whatsapp_links);
+      if (Array.isArray(c.telegram_links)) allTelegram.push(...c.telegram_links);
+      if (!google_news_url && c.google_news_url) google_news_url = c.google_news_url;
+    }
+    // Pick one random link from the full pool on every request
+    whatsapp_link = pickRandom([...new Set(allWhatsapp.filter(Boolean))]);
+    telegram_link = pickRandom([...new Set(allTelegram.filter(Boolean))]);
+  }
+
   const out = {
     ...p,
     blog_access_tier,
@@ -1329,6 +1586,9 @@ async function getArticleBySlugPublic(slug, viewer = null) {
     cover_image_url: p.thumbnail_url,
     author_name: authorName ?? p.author_id,
     download_url: p.rel_download_url || p.upload_url || null,
+    whatsapp_link,
+    telegram_link,
+    google_news_url,
   };
   if (related_articles.length) out.related_articles = related_articles;
   return out;
@@ -1379,21 +1639,13 @@ async function getUpNextArticlesBySlugPublic(slug, viewer = null, rawLimit) {
   const catIds = [...new Set(maps.map((m) => Number(m.category_id)))].filter((n) => Number.isFinite(n));
 
   if (picked.length < limit && catIds.length) {
-    const sibs = await ArticleCategoryMap.findAll({
-      where: { category_id: { [Op.in]: catIds }, article_id: { [Op.ne]: articleId } },
-      attributes: ['article_id'],
-      limit: 240,
-      raw: true,
-    });
-    const candidateIds = [...new Set(sibs.map((s) => Number(s.article_id)))].filter((n) => Number.isFinite(n));
-    if (candidateIds.length) {
-      const rows = await Article.findAll({
-        where: { id: { [Op.in]: candidateIds }, status: 'publish' },
-        attributes: UP_NEXT_LIST_ATTRS,
-        order: [['published_at', 'DESC'], ['id', 'DESC']],
-      });
-      takeFromRows(rows);
-    }
+    const rows = await findPublishedArticlesSharingCategories(
+      articleId,
+      catIds,
+      UP_NEXT_LIST_ATTRS,
+      Math.max(limit * 10, 60),
+    );
+    takeFromRows(rows);
   }
 
   if (picked.length < limit && authorId != null) {
@@ -1455,8 +1707,30 @@ async function getUpNextArticlesBySlugPublic(slug, viewer = null, rawLimit) {
   return attachAccessAndAuthorsToArticles(enrichedPlain, authorNameMap, articleCats, viewer);
 }
 
-const ARTICLE_LIST_ATTRS = ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'status', 'published_at', 'created_at', 'updated_at', 'blog_access_tier'];
-const SORTABLE_ARTICLE_COLUMNS = ['id', 'title', 'slug', 'created_at', 'updated_at', 'status', 'published_at'];
+const ARTICLE_LIST_ATTRS = ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'status', 'published_at', 'scheduled_publish_at', 'created_at', 'updated_at', 'blog_access_tier'];
+const SORTABLE_ARTICLE_COLUMNS = ['id', 'title', 'slug', 'created_at', 'updated_at', 'status', 'published_at', 'scheduled_publish_at'];
+
+function normalizeArticleAdminStatus(raw) {
+  if (raw === undefined || raw === null || raw === '') return 'draft';
+  const s = String(raw).toLowerCase().trim();
+  if (s === 'published') return 'publish';
+  if (['draft', 'publish', 'archived', 'scheduled'].includes(s)) return s;
+  return 'draft';
+}
+
+function assertValidArticleSchedule(status, scheduledAt) {
+  if (status !== 'scheduled') return;
+  if (!scheduledAt) {
+    throw new AppError('scheduled_publish_at is required when status is scheduled', 400);
+  }
+  const t = new Date(scheduledAt).getTime();
+  if (Number.isNaN(t)) {
+    throw new AppError('scheduled_publish_at must be a valid date', 400);
+  }
+  if (t <= Date.now()) {
+    throw new AppError('scheduled_publish_at must be in the future', 400);
+  }
+}
 
 function buildArticlesWhere(options = {}) {
   const { status, search } = options;
@@ -1583,39 +1857,128 @@ async function getArticleByIdInternal(id) {
   return result;
 }
 
+async function getExistingArticleTagIds(articleId) {
+  const rows = await ArticleTagMap.findAll({
+    where: { article_id: articleId },
+    attributes: ['tag_id'],
+    raw: true,
+  });
+  return [...new Set(rows.map((r) => Number(r.tag_id)).filter((n) => Number.isFinite(n) && n > 0))];
+}
+
+/** Match/create Tag by human-readable name (case-insensitive) for comma-separated admin tags. */
+async function findOrCreateTagIdForLabel(rawLabel) {
+  const name = String(rawLabel || '').trim();
+  if (!name) return null;
+  const lower = name.toLowerCase();
+  const existing = await Tag.findOne({
+    where: sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), lower),
+    attributes: ['id'],
+  });
+  if (existing) return Number(existing.get('id'));
+  let slug = slugify(name);
+  if (!slug) slug = `tag-${Date.now()}`;
+  const row = await Tag.create({ name, slug });
+  return Number(row.get('id'));
+}
+
+async function mergeArticleTagIdsFromPayload({ tag_ids: chipIdsRaw, tag_labels: labelsRaw }) {
+  const chipIds = (Array.isArray(chipIdsRaw) ? chipIdsRaw : [])
+    .map((id) => Number(id))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  const labels = (Array.isArray(labelsRaw) ? labelsRaw : [])
+    .map((s) => String(s || '').trim())
+    .filter(Boolean);
+  const fromLabels = [];
+  for (const label of labels) {
+    const tid = await findOrCreateTagIdForLabel(label);
+    if (tid != null) fromLabels.push(tid);
+  }
+  return [...new Set([...chipIds, ...fromLabels])];
+}
+
 async function createArticle(data) {
   const slugVal = data.slug || slugify(data.title);
+  const statusNorm = normalizeArticleAdminStatus(data.status);
+  const scheduledAt =
+    data.scheduled_publish_at != null && data.scheduled_publish_at !== ''
+      ? new Date(data.scheduled_publish_at)
+      : null;
+
+  assertValidArticleSchedule(statusNorm, scheduledAt);
+
+  let published_at = null;
+  let scheduled_publish_at = null;
+  if (statusNorm === 'publish') {
+    published_at = data.published_at ? new Date(data.published_at) : new Date();
+  } else if (statusNorm === 'scheduled') {
+    scheduled_publish_at = scheduledAt;
+  }
+
   const row = await Article.create({
     title: data.title || '',
     slug: slugVal,
     excerpt: data.excerpt || null,
     content: data.content ?? data.body ?? null,
     thumbnail_url: data.thumbnail_url ?? data.cover_image_url ?? null,
+    thumbnail_alt: data.thumbnail_alt || null,
+    thumbnail_link_url: data.thumbnail_link_url || null,
+    thumbnail_caption: data.thumbnail_caption || null,
     author_id: data.author_id ?? null,
     sub_heading: data.sub_heading ?? null,
-    status: data.status || 'draft',
-    published_at: data.published_at || null,
+    status: statusNorm,
+    published_at,
+    scheduled_publish_at,
     meta_title: data.meta_title || null,
     meta_description: data.meta_description || null,
     meta_keywords: data.meta_keywords || null,
     citation: data.citation ? (typeof data.citation === 'string' ? data.citation : JSON.stringify(data.citation)) : null,
+    canonical_url: data.canonical_url || null,
+    robots: data.robots || null,
+    og_title: data.og_title || null,
+    og_description: data.og_description || null,
+    og_image_url: data.og_image_url || null,
+    rel_download_url: data.rel_download_url ?? null,
     blog_access_tier: normalizeBlogAccessTier(data.blog_access_tier),
+    rel_download_url: data.rel_download_url !== undefined ? (data.rel_download_url || null) : null,
   });
   const articleId = row.id;
   const category_ids = Array.isArray(data.category_ids) ? data.category_ids : [];
-  const tag_ids = Array.isArray(data.tag_ids) ? data.tag_ids : [];
+  const mergedTagIds = await mergeArticleTagIdsFromPayload({
+    tag_ids: data.tag_ids,
+    tag_labels: data.tag_labels,
+  });
   const article_type_ids = Array.isArray(data.article_type_ids) ? data.article_type_ids : [];
   const court_ids = Array.isArray(data.court_ids) ? data.court_ids : [];
   if (category_ids.length) await ArticleCategoryMap.bulkCreate(category_ids.map((category_id) => ({ article_id: articleId, category_id })));
-  if (tag_ids.length) await ArticleTagMap.bulkCreate(tag_ids.map((tag_id) => ({ article_id: articleId, tag_id })));
+  if (mergedTagIds.length) await ArticleTagMap.bulkCreate(mergedTagIds.map((tag_id) => ({ article_id: articleId, tag_id })));
   if (article_type_ids.length) await ArticleTypeMap.bulkCreate(article_type_ids.map((article_type_id) => ({ article_id: articleId, article_type_id })));
   if (court_ids.length) await ArticleCourtMap.bulkCreate(court_ids.map((court_id) => ({ article_id: articleId, court_id })));
-  return getArticleByIdInternal(articleId);
+
+  const out = await getArticleByIdInternal(articleId);
+  console.log('[createArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
+  await articleScheduling.syncArticlePublishJob(out).catch((err) => {
+    console.error('[createArticle] sync schedule failed', err.message, err.stack);
+  });
+  return out;
 }
 
 async function updateArticle(id, data) {
   const row = await Article.findByPk(id);
   if (!row) return null;
+  const cur = row.get({ plain: true });
+  const nextStatus = data.status !== undefined ? normalizeArticleAdminStatus(data.status) : cur.status;
+
+  let nextScheduled = cur.scheduled_publish_at;
+  if (data.scheduled_publish_at !== undefined) {
+    nextScheduled =
+      data.scheduled_publish_at != null && data.scheduled_publish_at !== ''
+        ? new Date(data.scheduled_publish_at)
+        : null;
+  }
+
+  assertValidArticleSchedule(nextStatus, nextStatus === 'scheduled' ? nextScheduled : null);
+
   const updates = {};
   if (data.title !== undefined) updates.title = data.title;
   if (data.slug !== undefined) updates.slug = data.slug;
@@ -1624,26 +1987,64 @@ async function updateArticle(id, data) {
   if (data.body !== undefined) updates.content = data.body;
   if (data.thumbnail_url !== undefined) updates.thumbnail_url = data.thumbnail_url;
   if (data.cover_image_url !== undefined) updates.thumbnail_url = data.cover_image_url;
+  if (data.thumbnail_alt !== undefined) updates.thumbnail_alt = data.thumbnail_alt || null;
+  if (data.thumbnail_link_url !== undefined) updates.thumbnail_link_url = data.thumbnail_link_url || null;
+  if (data.thumbnail_caption !== undefined) updates.thumbnail_caption = data.thumbnail_caption || null;
   if (data.author_id !== undefined) updates.author_id = data.author_id;
   if (data.sub_heading !== undefined) updates.sub_heading = data.sub_heading;
-  if (data.status !== undefined) updates.status = data.status;
-  if (data.published_at !== undefined) updates.published_at = data.published_at;
+  if (data.status !== undefined) updates.status = nextStatus;
   if (data.meta_title !== undefined) updates.meta_title = data.meta_title;
   if (data.meta_description !== undefined) updates.meta_description = data.meta_description;
   if (data.meta_keywords !== undefined) updates.meta_keywords = data.meta_keywords;
+  if (data.canonical_url !== undefined) updates.canonical_url = data.canonical_url || null;
+  if (data.robots !== undefined) updates.robots = data.robots || null;
+  if (data.og_title !== undefined) updates.og_title = data.og_title || null;
+  if (data.og_description !== undefined) updates.og_description = data.og_description || null;
+  if (data.og_image_url !== undefined) updates.og_image_url = data.og_image_url || null;
   if (data.blog_access_tier !== undefined) updates.blog_access_tier = normalizeBlogAccessTier(data.blog_access_tier);
   if (data.rel_download_url !== undefined) updates.rel_download_url = data.rel_download_url || null;
   if (data.citation !== undefined) updates.citation = data.citation ? (typeof data.citation === 'string' ? data.citation : JSON.stringify(data.citation)) : null;
+
+  if (data.status !== undefined || data.scheduled_publish_at !== undefined || data.published_at !== undefined) {
+    if (nextStatus === 'publish') {
+      const wasPublished = String(cur.status).toLowerCase() === 'publish';
+      if (!wasPublished || data.published_at !== undefined) {
+        updates.published_at =
+          data.published_at != null && data.published_at !== ''
+            ? new Date(data.published_at)
+            : new Date();
+      }
+      updates.scheduled_publish_at = null;
+    } else if (nextStatus === 'scheduled') {
+      updates.scheduled_publish_at = nextScheduled;
+      updates.published_at = null;
+    } else {
+      updates.scheduled_publish_at = null;
+      if (data.published_at !== undefined) {
+        updates.published_at = data.published_at ? new Date(data.published_at) : null;
+      }
+    }
+  }
+
   await row.update(updates);
   if (data.category_ids !== undefined) {
     await ArticleCategoryMap.destroy({ where: { article_id: id } });
     const ids = Array.isArray(data.category_ids) ? data.category_ids : [];
     if (ids.length) await ArticleCategoryMap.bulkCreate(ids.map((category_id) => ({ article_id: id, category_id })));
   }
-  if (data.tag_ids !== undefined) {
+  if (data.tag_ids !== undefined || data.tag_labels !== undefined) {
     await ArticleTagMap.destroy({ where: { article_id: id } });
-    const ids = Array.isArray(data.tag_ids) ? data.tag_ids : [];
-    if (ids.length) await ArticleTagMap.bulkCreate(ids.map((tag_id) => ({ article_id: id, tag_id })));
+    const chipIds =
+      data.tag_ids !== undefined
+        ? (Array.isArray(data.tag_ids) ? data.tag_ids : [])
+        : await getExistingArticleTagIds(id);
+    const labels =
+      data.tag_labels !== undefined ? (Array.isArray(data.tag_labels) ? data.tag_labels : []) : [];
+    const mergedTagIds = await mergeArticleTagIdsFromPayload({
+      tag_ids: chipIds,
+      tag_labels: labels,
+    });
+    if (mergedTagIds.length) await ArticleTagMap.bulkCreate(mergedTagIds.map((tag_id) => ({ article_id: id, tag_id })));
   }
   if (data.article_type_ids !== undefined) {
     await ArticleTypeMap.destroy({ where: { article_id: id } });
@@ -1655,10 +2056,16 @@ async function updateArticle(id, data) {
     const ids = Array.isArray(data.court_ids) ? data.court_ids : [];
     if (ids.length) await ArticleCourtMap.bulkCreate(ids.map((court_id) => ({ article_id: id, court_id })));
   }
-  return getArticleByIdInternal(id);
+  const out = await getArticleByIdInternal(id);
+  console.log('[updateArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
+  await articleScheduling.syncArticlePublishJob(out).catch((err) => {
+    console.error('[updateArticle] sync schedule failed', err.message, err.stack);
+  });
+  return out;
 }
 
 async function deleteArticle(id) {
+  await articleScheduling.removeScheduledPublishJob(id).catch(() => {});
   const deleted = await Article.destroy({ where: { id } });
   return deleted > 0;
 }
@@ -1682,6 +2089,9 @@ async function createArticleCategory(data) {
     name: data.name || '',
     slug: slugVal,
     parent_id: data.parent_id || null,
+    whatsapp_links: Array.isArray(data.whatsapp_links) ? data.whatsapp_links : [],
+    telegram_links: Array.isArray(data.telegram_links) ? data.telegram_links : [],
+    google_news_url: data.google_news_url || null,
   });
   return row.get({ plain: true });
 }
@@ -1693,6 +2103,9 @@ async function updateArticleCategory(id, data) {
     ...(data.name !== undefined && { name: data.name }),
     ...(data.slug !== undefined && { slug: data.slug }),
     ...(data.parent_id !== undefined && { parent_id: data.parent_id }),
+    ...(data.whatsapp_links !== undefined && { whatsapp_links: Array.isArray(data.whatsapp_links) ? data.whatsapp_links : [] }),
+    ...(data.telegram_links !== undefined && { telegram_links: Array.isArray(data.telegram_links) ? data.telegram_links : [] }),
+    ...(data.google_news_url !== undefined && { google_news_url: data.google_news_url || null }),
   });
   return row.get({ plain: true });
 }
@@ -2008,6 +2421,15 @@ module.exports = {
     getFooterPublic,
     getFooterInternal,
     upsertFooter,
+  },
+  siteAds: {
+    getSiteAdsPublic,
+    putSiteAds,
+  },
+  globalSettings: {
+    getPublicSnippets: getPublicTrackingSnippets,
+    getAllMap: getAllGlobalSettingsMap,
+    upsert: upsertGlobalSettingFromAdmin,
   },
   plans: {
     getPlansPublic,
