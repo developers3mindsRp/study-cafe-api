@@ -396,7 +396,8 @@ async function recordCouponUsage(couponId, userId, orderId, transaction) {
 }
 
 /** Outbox: enrollment / membership + affiliate (only when order amount &gt; 0). */
-async function emitPurchaseOutbox(locked, t) {
+async function emitPurchaseOutbox(locked, t, options = {}) {
+  const skipAffiliate = options && options.skipAffiliate === true;
   const oid = locked.order_id;
   const existingCourseIds = await fetchUserEnrolledCourseIds(locked.user_id);
 
@@ -492,7 +493,7 @@ async function emitPurchaseOutbox(locked, t) {
   }
 
   const orderAmt = parseFloat(locked.amount);
-  if (locked.affiliate && Number.isFinite(orderAmt) && orderAmt > 0) {
+  if (!skipAffiliate && locked.affiliate && Number.isFinite(orderAmt) && orderAmt > 0) {
     await OutboxEvent.create(
       {
         aggregate_type: 'order',
@@ -1210,7 +1211,13 @@ async function listMyPurchases(userId) {
   return out;
 }
 
-async function listAllOrders({ limit = 100, offset = 0, search = '', sortBy = 'created_at', sortOrder = 'DESC', dateFrom, dateTo, courseId, type }) {
+function parseAmountFilter(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+async function listAllOrders({ limit = 100, offset = 0, search = '', sortBy = 'created_at', sortOrder = 'DESC', dateFrom, dateTo, courseId, type, amountMin, amountMax }) {
   const where = {};
 
   if (search) {
@@ -1235,6 +1242,14 @@ async function listAllOrders({ limit = 100, offset = 0, search = '', sortBy = 'c
 
   if (type) {
     where.type = type.toLowerCase();
+  }
+
+  const minAmount = parseAmountFilter(amountMin);
+  const maxAmount = parseAmountFilter(amountMax);
+  if (minAmount != null || maxAmount != null) {
+    where.amount = {};
+    if (minAmount != null) where.amount[Op.gte] = minAmount;
+    if (maxAmount != null) where.amount[Op.lte] = maxAmount;
   }
 
   const { rows, count } = await Order.findAndCountAll({
@@ -1737,42 +1752,198 @@ async function updateOrder(id, data) {
 
     if (!order) return null;
 
-    const oldStatus = order.status;
-    const newStatus = data.status;
+    const oldPlain = order.get({ plain: true });
+    const oldStatus = (order.status || '').toLowerCase().trim();
+    const fulfilledBefore = oldStatus === 'paid' || oldStatus === 'completed';
 
-    // Update allowable fields
-    const updatableFields = ['buyer_name', 'buyer_email', 'buyer_mobile', 'buyer_gst', 'affiliate', 'amount', 'utm'];
+    const orderType = (order.type || '').toLowerCase();
+    let entityChanged = false;
+
+    // Admin may switch course/plan (same order.type only — never change type here).
+    if (data.entity_id !== undefined && data.entity_id !== null && String(data.entity_id).trim() !== '') {
+      const newEid = String(data.entity_id).trim();
+      const oldEid = order.entity_id != null ? String(order.entity_id) : '';
+      if (newEid !== oldEid) {
+        if (orderType !== 'course' && orderType !== 'membership') {
+          throw new AppError('Entity can only be changed for course or membership orders', 400);
+        }
+        entityChanged = true;
+
+        // Critical: remove fulfillment for the previous course/plan before re-pointing the order.
+        if (fulfilledBefore && order.user_id) {
+          logger.info(
+            `[orders] admin entity swap — revoking prior access order=${order.order_id} oldEntity=${oldEid} newEntity=${newEid}`
+          );
+          await revokeAccessForOrder(oldPlain);
+        }
+
+        order.entity_id = newEid;
+
+        if (orderType === 'course') {
+          if (data.batch_id !== undefined && data.batch_id !== null && data.batch_id !== '') {
+            order.batch_id = Number(data.batch_id);
+          } else {
+            order.batch_id = await fetchPurchaseBatchId(newEid);
+          }
+        }
+      }
+    }
+
+    if (
+      !entityChanged &&
+      data.batch_id !== undefined &&
+      orderType === 'course'
+    ) {
+      order.batch_id =
+        data.batch_id === null || data.batch_id === '' ? null : Number(data.batch_id);
+    }
+
+    const updatableFields = [
+      'buyer_name',
+      'buyer_email',
+      'buyer_mobile',
+      'buyer_gst',
+      'amount',
+      'utm',
+      'refund_amount',
+      'refund_remarks',
+    ];
     for (const field of updatableFields) {
       if (data[field] !== undefined) {
         order[field] = data[field];
       }
     }
 
-    if (newStatus && newStatus !== oldStatus) {
-      order.status = newStatus;
+    if (data.coupon_code !== undefined) {
+      order.coupon_code = data.coupon_code === '' || data.coupon_code === null ? null : String(data.coupon_code).trim();
+    }
+    if (data.coupon_discount !== undefined) {
+      const v = data.coupon_discount;
+      order.coupon_discount =
+        v === '' || v === null ? 0 : Number(v);
+    }
+    if (data.original_amount !== undefined) {
+      const v = data.original_amount;
+      order.original_amount = v === '' || v === null ? null : Number(v);
+    }
+
+    if (data.affiliate !== undefined) {
+      order.affiliate = normalizeReferralForOrder(data.affiliate);
+    }
+
+    let newStatus = oldStatus;
+    if (data.status !== undefined) {
+      order.status = data.status;
+      newStatus = String(data.status).toLowerCase().trim();
     }
 
     await order.save({ transaction: t });
 
-    // If status changed from something else to 'paid', trigger fulfillment
-    if (newStatus === 'paid' && oldStatus !== 'paid') {
-      const manualRef = `manual:${order.order_id}`;
+    let reloaded = await Order.findOne({
+      where: { id: order.id },
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+
+    if (data.amount !== undefined && reloaded) {
+      const pay = await Payment.findOne({
+        where: { order_id: reloaded.id },
+        order: [['id', 'DESC']],
+        transaction: t,
+      });
+      if (pay && pay.status === 'captured') {
+        await pay.update({ amount: reloaded.amount }, { transaction: t });
+      }
+    }
+
+    const fulfilledAfter =
+      newStatus === 'paid' || newStatus === 'completed';
+    const notCancelledLike =
+      newStatus !== 'refunded' &&
+      newStatus !== 'failed' &&
+      newStatus !== 'cancelled';
+
+    // First transition to paid (manual fulfillment path).
+    if (
+      newStatus === 'paid' &&
+      oldStatus !== 'paid' &&
+      oldStatus !== 'completed'
+    ) {
+      const manualRef = `manual:${reloaded.order_id}`;
       await Payment.findOrCreate({
-        where: { order_id: order.id, source: 'manual' },
+        where: { order_id: reloaded.id, source: 'manual' },
         defaults: {
-          order_id: order.id,
+          order_id: reloaded.id,
           razorpay_payment_id: manualRef,
           razorpay_signature: null,
-          amount: order.amount,
+          amount: reloaded.amount,
           status: 'captured',
           source: 'manual',
         },
         transaction: t,
       });
-      await emitPurchaseOutbox(order, t);
+      await emitPurchaseOutbox(reloaded, t);
     }
 
-    return order.get({ plain: true });
+    // Paid/completed order had item swapped: grant new course/plan without duplicate affiliate commission.
+    if (
+      entityChanged &&
+      fulfilledAfter &&
+      notCancelledLike &&
+      fulfilledBefore
+    ) {
+      logger.info(
+        `[orders] admin entity swap — re-emit fulfillment order=${reloaded.order_id} entity=${reloaded.entity_id}`
+      );
+      await emitPurchaseOutbox(reloaded, t, { skipAffiliate: true });
+    }
+
+    if (newStatus === 'refunded' && oldStatus !== 'refunded') {
+      if (reloaded.user_id) {
+        await revokeAccessForOrder(reloaded.get({ plain: true }));
+      }
+      const patch = {};
+      if (
+        (data.refund_amount === undefined || data.refund_amount === null) &&
+        !reloaded.refund_amount
+      ) {
+        patch.refund_amount = Number(reloaded.amount);
+      }
+      if (
+        (data.refund_remarks === undefined || data.refund_remarks === null) &&
+        !reloaded.refund_remarks
+      ) {
+        patch.refund_remarks = 'Admin refund (order edit)';
+      }
+      if (Object.keys(patch).length) {
+        await reloaded.update(patch, { transaction: t });
+        reloaded = await Order.findOne({
+          where: { id: reloaded.id },
+          transaction: t,
+          lock: t.LOCK.UPDATE,
+        });
+      }
+
+      const refundAmt =
+        reloaded.refund_amount != null ? Number(reloaded.refund_amount) : Number(reloaded.amount);
+      await OutboxEvent.create(
+        {
+          aggregate_type: 'order',
+          aggregate_id: reloaded.order_id,
+          event_type: 'ORDER_REFUNDED',
+          payload: {
+            userId: reloaded.user_id,
+            orderId: reloaded.order_id,
+            type: reloaded.type,
+            entityId: reloaded.entity_id,
+            refundAmount: refundAmt,
+          },
+        },
+        { transaction: t }
+      );
+    }
+
+    return reloaded.get({ plain: true });
   });
 }
 
