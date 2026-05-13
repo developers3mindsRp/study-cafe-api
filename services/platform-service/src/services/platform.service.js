@@ -114,6 +114,7 @@ const {
   MediaAsset,
   ContactInquiry,
   SeoMetadata,
+  SiteSeoRoute,
 } = require('../models');
 
 /** Get display_name for one author from users table (same DB). */
@@ -2225,6 +2226,115 @@ function canonicalSlug(slug) {
   return raw.startsWith('/') ? raw : `/${raw}`;
 }
 
+/** Another seo_metadata row already uses this path (normalized), excluding optional id (for updates). */
+async function findConflictingSeoMetadataRow(pageSlug, excludeId) {
+  const key = canonicalSlug(pageSlug);
+  if (!key) return null;
+  const candidates = normalizeSlugCandidates(key);
+  const slugList = candidates.length ? [...new Set(candidates)] : [key];
+  const rows = await SeoMetadata.findAll({
+    where: { page_slug: { [Op.in]: slugList } },
+    raw: true,
+  });
+  for (const r of rows) {
+    if (excludeId != null && Number(r.id) === Number(excludeId)) continue;
+    if (canonicalSlug(r.page_slug) === key) return r;
+  }
+  return null;
+}
+
+async function getSeoEligiblePagesInternal() {
+  const rows = await SiteSeoRoute.findAll({
+    order: [
+      ['sort_order', 'ASC'],
+      ['path', 'ASC'],
+    ],
+    raw: true,
+  });
+  const mapped = rows.map((r) => ({
+    path: canonicalSlug(r.path),
+    label: String(r.label || '').trim() || canonicalSlug(r.path),
+  }));
+  return mapped.sort((a, b) => {
+    if (a.path === '/') return -1;
+    if (b.path === '/') return 1;
+    return a.path.localeCompare(b.path);
+  });
+}
+
+async function listSiteSeoRoutesInternal() {
+  const rows = await SiteSeoRoute.findAll({
+    order: [
+      ['sort_order', 'ASC'],
+      ['path', 'ASC'],
+    ],
+  });
+  return rows.map((r) => r.get({ plain: true }));
+}
+
+async function siteSeoRoutePathExists(normalizedPath, excludeId) {
+  const candidates = normalizeSlugCandidates(normalizedPath);
+  if (!candidates.length) return null;
+  const rows = await SiteSeoRoute.findAll({
+    where: { path: { [Op.in]: candidates } },
+    raw: true,
+  });
+  for (const r of rows) {
+    if (excludeId != null && Number(r.id) === Number(excludeId)) continue;
+    if (canonicalSlug(r.path) === canonicalSlug(normalizedPath)) return r;
+  }
+  return null;
+}
+
+async function createSiteSeoRoute(data) {
+  const normalized = canonicalSlug(data.path);
+  if (!normalized) {
+    throw new AppError('Path is required', 400);
+  }
+  const clash = await siteSeoRoutePathExists(normalized, null);
+  if (clash) {
+    throw new AppError(`A route with path '${canonicalSlug(clash.path)}' already exists`, 409);
+  }
+  const row = await SiteSeoRoute.create({
+    path: normalized,
+    label: String(data.label ?? '').trim() || normalized,
+    sort_order: data.sort_order != null ? Number(data.sort_order) : 0,
+  });
+  return row.get({ plain: true });
+}
+
+async function updateSiteSeoRoute(id, data) {
+  const row = await SiteSeoRoute.findByPk(id);
+  if (!row) return null;
+  const patch = {};
+
+  if (data.path !== undefined) {
+    const normalized = canonicalSlug(data.path);
+    if (!normalized) throw new AppError('Path cannot be empty', 400);
+    const clash = await siteSeoRoutePathExists(normalized, id);
+    if (clash) {
+      throw new AppError(`Another route already uses path '${canonicalSlug(clash.path)}'`, 409);
+    }
+    patch.path = normalized;
+  }
+  if (data.label !== undefined) {
+    const t = String(data.label).trim();
+    if (!t) throw new AppError('Label cannot be empty', 400);
+    patch.label = t;
+  }
+  if (data.sort_order !== undefined) {
+    patch.sort_order = Number(data.sort_order);
+  }
+
+  await row.update(patch);
+  return row.get({ plain: true });
+}
+
+async function deleteSiteSeoRoute(id) {
+  const deleted = await SiteSeoRoute.destroy({ where: { id } });
+  return deleted > 0;
+}
+
 async function checkSlugNotUsedByModule(slug) {
   const candidates = normalizeSlugCandidates(slug);
   if (!candidates.length) return { conflict: false };
@@ -2283,6 +2393,14 @@ async function createSeoMetadata(data) {
     );
   }
 
+  const dupSeo = await findConflictingSeoMetadataRow(data.page_slug, null);
+  if (dupSeo) {
+    throw new AppError(
+      `SEO metadata already exists for path '${canonicalSlug(dupSeo.page_slug)}'. Edit that entry instead of creating a new one.`,
+      409
+    );
+  }
+
   const row = await SeoMetadata.create({
     page_name: data.page_name,
     page_slug: data.page_slug,
@@ -2310,6 +2428,13 @@ async function updateSeoMetadata(id, data) {
       if (conflict.conflict) {
         throw new AppError(
           `Slug '${conflict.slug}' is already used by a ${conflict.type}. Use the ${conflict.type}'s own SEO meta fields instead.`,
+          409
+        );
+      }
+      const dupSeo = await findConflictingSeoMetadataRow(data.page_slug, id);
+      if (dupSeo) {
+        throw new AppError(
+          `SEO metadata already exists for path '${canonicalSlug(dupSeo.page_slug)}'. Each page may only have one SEO record.`,
           409
         );
       }
@@ -2413,9 +2538,16 @@ module.exports = {
     getSeoMetadataInternal,
     getSeoMetadataByIdInternal,
     getSeoMetadataBySlugPublic,
+    getSeoEligiblePagesInternal,
     createSeoMetadata,
     updateSeoMetadata,
     deleteSeoMetadata,
+  },
+  siteSeoRoutes: {
+    listSiteSeoRoutesInternal,
+    createSiteSeoRoute,
+    updateSiteSeoRoute,
+    deleteSiteSeoRoute,
   },
   footer: {
     getFooterPublic,

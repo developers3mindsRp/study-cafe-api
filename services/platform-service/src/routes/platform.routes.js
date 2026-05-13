@@ -17,6 +17,7 @@ function register(router) {
   router.get('/platform/plans', controller.getPlans);
   router.get('/platform/plans/:slug', validate(schemas.slugParam), controller.getPlanBySlug);
   router.get('/platform/memberships', controller.getPlans);
+  router.post('/platform/membership/upgrade-summary', controller.getMembershipUpgradeSummary);
   router.get('/platform/articles', controller.getArticles);
   router.get('/platform/articles/blog-spotlight', optionalWebUser, controller.getBlogSpotlightFeed);
   router.get(
@@ -54,11 +55,31 @@ function register(router) {
   router.put('/internal/platform/faqs/:id', internalAuth, validate(schemas.updateFaq), controller.updateFaq);
   router.delete('/internal/platform/faqs/:id', internalAuth, validate(schemas.idParam), controller.deleteFaq);
   router.get('/internal/platform/seo-metadata', internalAuth, controller.getSeoMetadataInternal);
+  router.get('/internal/platform/seo-metadata/eligible-pages', internalAuth, controller.getSeoEligiblePagesInternal);
   router.get('/internal/platform/seo-metadata/:id', internalAuth, validate(schemas.idParam), controller.getSeoMetadataByIdInternal);
   router.get('/internal/platform/seo-metadata/slug/:slug', internalAuth, validate(schemas.slugParam), controller.getSeoMetadataBySlugPublic);
   router.post('/internal/platform/seo-metadata', internalAuth, validate(schemas.createSeoMetadata), controller.createSeoMetadata);
   router.put('/internal/platform/seo-metadata/:id', internalAuth, validate(schemas.updateSeoMetadata), controller.updateSeoMetadata);
   router.delete('/internal/platform/seo-metadata/:id', internalAuth, validate(schemas.idParam), controller.deleteSeoMetadata);
+  router.get('/internal/platform/site-seo-routes', internalAuth, controller.listSiteSeoRoutesInternal);
+  router.post(
+    '/internal/platform/site-seo-routes',
+    internalAuth,
+    validate(schemas.createSiteSeoRoute),
+    controller.createSiteSeoRoute
+  );
+  router.put(
+    '/internal/platform/site-seo-routes/:id',
+    internalAuth,
+    validate(schemas.updateSiteSeoRoute),
+    controller.updateSiteSeoRoute
+  );
+  router.delete(
+    '/internal/platform/site-seo-routes/:id',
+    internalAuth,
+    validate(schemas.idParam),
+    controller.deleteSiteSeoRoute
+  );
   router.get('/internal/platform/footer', internalAuth, controller.getFooterInternal);
   router.put('/internal/platform/footer/:key', internalAuth, validate(schemas.upsertFooter), controller.upsertFooter);
   router.get('/internal/platform/global-settings', internalAuth, controller.getGlobalSettingsInternal);

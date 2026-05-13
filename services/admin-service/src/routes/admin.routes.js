@@ -83,11 +83,16 @@ function register(router) {
   router.put('/admin/platform/faqs/:id', requireAdmin, p.putFaq);
   router.delete('/admin/platform/faqs/:id', requireAdmin, p.deleteFaq);
   router.get('/admin/platform/seo-metadata', requireAdmin, p.getSeoMetadata);
+  router.get('/admin/platform/seo-metadata/eligible-pages', requireAdmin, p.getSeoEligiblePages);
   router.get('/admin/platform/seo-metadata/:id', requireAdmin, p.getSeoMetadataById);
   router.get('/admin/platform/seo-metadata/slug/:slug', requireAdmin, p.getSeoMetadataBySlug);
   router.post('/admin/platform/seo-metadata', requireAdmin, p.postSeoMetadata);
   router.put('/admin/platform/seo-metadata/:id', requireAdmin, p.putSeoMetadata);
   router.delete('/admin/platform/seo-metadata/:id', requireAdmin, p.deleteSeoMetadata);
+  router.get('/admin/platform/site-seo-routes', requireAdmin, p.listSiteSeoRoutes);
+  router.post('/admin/platform/site-seo-routes', requireAdmin, p.postSiteSeoRoute);
+  router.put('/admin/platform/site-seo-routes/:id', requireAdmin, p.putSiteSeoRoute);
+  router.delete('/admin/platform/site-seo-routes/:id', requireAdmin, p.deleteSiteSeoRoute);
   router.get('/admin/platform/footer', requireAdmin, p.getFooter);
   router.put('/admin/platform/footer/:key', requireAdmin, p.putFooter);
   router.get('/admin/platform/site-ads', requireAdmin, p.getSiteAds);

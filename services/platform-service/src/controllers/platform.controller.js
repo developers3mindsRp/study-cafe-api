@@ -1,4 +1,5 @@
 const platformService = require('../services/platform.service');
+const membershipUpgradeService = require('../services/membership-upgrade.service');
 const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, sendPaginated, logger } = require('../../../../shared');
 const { uploadsDir } = require('../middleware/upload');
 const { relativePathFromFile, publicMediaUrl } = require('../../../../shared/mediaUrl');
@@ -125,6 +126,15 @@ const getPlans = asyncHandler(async (req, res) => {
 const getPlanBySlug = asyncHandler(async (req, res) => {
   const data = await platformService.plans.getPlanBySlugPublic(req.params.slug);
   if (!data) throw new AppError('Plan not found', 404);
+  sendSuccess(res, data);
+});
+
+const getMembershipUpgradeSummary = asyncHandler(async (req, res) => {
+  const userId = req.headers['x-user-id'];
+  if (!userId) throw new AppError('Authentication required', 401);
+  const { targetPlanId } = req.body;
+  if (!targetPlanId) throw new AppError('targetPlanId is required', 400);
+  const data = await membershipUpgradeService.calculateMembershipUpgrade(userId, targetPlanId);
   sendSuccess(res, data);
 });
 
@@ -470,6 +480,11 @@ const getSeoMetadataInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+const getSeoEligiblePagesInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.seo.getSeoEligiblePagesInternal();
+  sendSuccess(res, data);
+});
+
 const getSeoMetadataByIdInternal = asyncHandler(async (req, res) => {
   const data = await platformService.seo.getSeoMetadataByIdInternal(req.params.id);
   if (!data) throw new AppError('SEO Metadata not found', 404);
@@ -505,6 +520,28 @@ const updateSeoMetadata = asyncHandler(async (req, res) => {
 const deleteSeoMetadata = asyncHandler(async (req, res) => {
   const ok = await platformService.seo.deleteSeoMetadata(req.params.id);
   if (!ok) throw new AppError('SEO Metadata not found', 404);
+  sendNoContent(res);
+});
+
+const listSiteSeoRoutesInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.siteSeoRoutes.listSiteSeoRoutesInternal();
+  sendSuccess(res, data);
+});
+
+const createSiteSeoRoute = asyncHandler(async (req, res) => {
+  const data = await platformService.siteSeoRoutes.createSiteSeoRoute(req.body);
+  sendCreated(res, data);
+});
+
+const updateSiteSeoRoute = asyncHandler(async (req, res) => {
+  const data = await platformService.siteSeoRoutes.updateSiteSeoRoute(req.params.id, req.body);
+  if (!data) throw new AppError('Site route not found', 404);
+  sendSuccess(res, data);
+});
+
+const deleteSiteSeoRoute = asyncHandler(async (req, res) => {
+  const ok = await platformService.siteSeoRoutes.deleteSiteSeoRoute(req.params.id);
+  if (!ok) throw new AppError('Site route not found', 404);
   sendNoContent(res);
 });
 
@@ -571,12 +608,17 @@ module.exports = {
   createContactInquiry,
   getContactInquiryInternal,
   getSeoMetadataInternal,
+  getSeoEligiblePagesInternal,
   getSeoMetadataByIdInternal,
   getSeoMetadataBySlugPublic,
   getSeoMetadataByPathPublic,
   createSeoMetadata,
   updateSeoMetadata,
   deleteSeoMetadata,
+  listSiteSeoRoutesInternal,
+  createSiteSeoRoute,
+  updateSiteSeoRoute,
+  deleteSiteSeoRoute,
   getFooter,
   getFooterInternal,
   upsertFooter,
@@ -587,6 +629,7 @@ module.exports = {
   putSiteAds,
   getPlans,
   getPlanBySlug,
+  getMembershipUpgradeSummary,
   getPlansInternal,
   getPlanByIdInternal,
   createPlan,

@@ -5,7 +5,7 @@ const { Op } = require('sequelize');
 const { getRedis } = require('../config/redis');
 const config = require('../config');
 const { getRazorpayInstance, getRazorpayConfig } = require('./payment.service');
-const { AppError, logger } = require('../../../../shared');
+const { AppError, logger, computeMembershipUpgradeCredit } = require('../../../../shared');
 
 // GST rate applied on top of the post-discount price before charging via Razorpay
 const GST_RATE = 0.18;
@@ -591,6 +591,7 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
   const originalAmount = await resolveAmountForEntity(typeUpper, entityId);
 
   // 1b. Membership upgrade guard — enforce one-active-membership and upgrade-only direction
+  let upgradeDeduction = 0;
   if (typeUpper === 'MEMBERSHIP') {
     const [newPlan, activeMembership] = await Promise.all([
       fetchPlanDetails(entityId),
@@ -611,17 +612,37 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
           400
         );
       }
+
+      // Pro-rated deduction: unused value of current plan (capped at one term; see shared helper)
+      if (
+        activePlan &&
+        !activePlan.is_lifetime &&
+        activePlan.duration_days &&
+        activePlan.duration_days > 0
+      ) {
+        const { upgradeDeduction: credit } = computeMembershipUpgradeCredit({
+          planPrice: activePlan.price,
+          durationDays: activePlan.duration_days,
+          expiresAt: activeMembership.expires_at,
+          now: new Date(),
+          isLifetime: !!activePlan.is_lifetime,
+        });
+        upgradeDeduction = credit;
+      }
     }
   }
 
-  // 2. Validate coupon (throws on invalid/expired/over-limit)
+  // Adjusted base amount after pro-rated upgrade deduction (floored at 0)
+  const adjustedAmount = Number(Math.max(0, originalAmount - upgradeDeduction).toFixed(2));
+
+  // 2. Validate coupon (throws on invalid/expired/over-limit) — applied on adjusted amount
   let couponResult = null;
   if (couponCode && String(couponCode).trim()) {
-    couponResult = await validateCouponForOrder(userId, couponCode, originalAmount, typeUpper);
+    couponResult = await validateCouponForOrder(userId, couponCode, adjustedAmount, typeUpper);
   }
 
   const discountAmount = couponResult ? couponResult.discountAmount : 0;
-  const afterDiscount = couponResult ? couponResult.finalAmount : originalAmount;
+  const afterDiscount = couponResult ? couponResult.finalAmount : adjustedAmount;
 
   // 3. Apply 18% GST on the post-discount amount
   const gstAmount = Number((afterDiscount * GST_RATE).toFixed(2));
@@ -700,6 +721,8 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
         razorpayOrderId: null,
         amount: 0,
         originalAmount: Math.round(originalAmount * 100),
+        upgradeAdjustment: Math.round(upgradeDeduction * 100),
+        adjustedMembershipAmount: Math.round(adjustedAmount * 100),
         discountAmount: Math.round(discountAmount * 100),
         gstAmount: Math.round(gstAmount * 100),
         grandTotal: 0,
@@ -765,6 +788,8 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
       razorpayOrderId: rpOrder.id,
       amount: amountPaise,
       originalAmount: Math.round(originalAmount * 100),
+      upgradeAdjustment: Math.round(upgradeDeduction * 100),
+      adjustedMembershipAmount: Math.round(adjustedAmount * 100),
       discountAmount: Math.round(discountAmount * 100),
       gstAmount: Math.round(gstAmount * 100),
       grandTotal: Math.round(grandTotal * 100),
