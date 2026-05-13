@@ -41,7 +41,7 @@ const getInvoice = asyncHandler(async (req, res) => {
 const listAllInternal = asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
   const offset = parseInt(req.query.offset || '0', 10);
-  const { search, sortBy, sortOrder, dateFrom, dateTo, courseId, type } = req.query;
+  const { search, sortBy, sortOrder, dateFrom, dateTo, courseId, type, amountMin, amountMax } = req.query;
   
   const result = await ordersService.listAllOrders({ 
     limit, 
@@ -52,7 +52,9 @@ const listAllInternal = asyncHandler(async (req, res) => {
     dateFrom, 
     dateTo, 
     courseId, 
-    type 
+    type,
+    amountMin,
+    amountMax,
   });
   sendSuccess(res, result);
 });

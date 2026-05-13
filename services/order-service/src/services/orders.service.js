@@ -113,6 +113,39 @@ async function fetchPlanBySlug(slug) {
   }
 }
 
+/** Resolve display name for admin order rows (numeric plan id or public slug). */
+async function resolveMembershipPlanDisplayName(entityId) {
+  if (entityId == null || String(entityId).trim() === '') return null;
+  const raw = String(entityId).trim();
+  let plan = await fetchPlanDetails(raw);
+  if (plan && plan.name) return plan.name;
+  plan = await fetchPlanBySlug(raw);
+  if (plan && plan.name) return plan.name;
+  const numericId = Number(raw);
+  if (Number.isFinite(numericId) && numericId > 0) {
+    try {
+      const { data: planRes } = await axios.get(
+        `${config.platformServiceUrl}/internal/platform/plans/list-by-ids`,
+        {
+          params: { ids: String(numericId) },
+          headers: { 'X-Internal-API-Key': config.internalApiKey },
+          timeout: 8000,
+          validateStatus: (s) => s === 200,
+        }
+      );
+      const body = planRes && typeof planRes === 'object' && planRes.data !== undefined ? planRes.data : planRes;
+      const plans = body && typeof body === 'object' && body.data !== undefined ? body.data : body;
+      if (Array.isArray(plans) && plans.length) {
+        const row = plans.find((r) => String(r.id) === String(numericId)) || plans[0];
+        if (row && row.name) return row.name;
+      }
+    } catch (err) {
+      logger.warn(`[orders] resolveMembershipPlanDisplayName list-by-ids: ${err.message}`);
+    }
+  }
+  return null;
+}
+
 function buildMembershipPayload(order, plan) {
   const now = new Date();
   const payload = { userId: order.user_id, orderId: order.order_id };
@@ -395,8 +428,23 @@ async function recordCouponUsage(couponId, userId, orderId, transaction) {
   );
 }
 
+/** When reusing the same checkout row, keep coupon_usages in sync with the new coupon (unique per coupon+order). */
+async function syncCouponUsageForReusedOrder(orderPublicId, userId, previousCouponCode, couponResult, transaction) {
+  const prev =
+    previousCouponCode != null && String(previousCouponCode).trim() !== ''
+      ? String(previousCouponCode).trim()
+      : null;
+  const next = couponResult ? String(couponResult.coupon.code).trim() : null;
+  if (prev === next) return;
+  await CouponUsage.destroy({ where: { order_id: orderPublicId }, transaction });
+  if (couponResult) {
+    await recordCouponUsage(couponResult.coupon.id, userId, orderPublicId, transaction);
+  }
+}
+
 /** Outbox: enrollment / membership + affiliate (only when order amount &gt; 0). */
-async function emitPurchaseOutbox(locked, t) {
+async function emitPurchaseOutbox(locked, t, options = {}) {
+  const skipAffiliate = options && options.skipAffiliate === true;
   const oid = locked.order_id;
   const existingCourseIds = await fetchUserEnrolledCourseIds(locked.user_id);
 
@@ -492,7 +540,7 @@ async function emitPurchaseOutbox(locked, t) {
   }
 
   const orderAmt = parseFloat(locked.amount);
-  if (locked.affiliate && Number.isFinite(orderAmt) && orderAmt > 0) {
+  if (!skipAffiliate && locked.affiliate && Number.isFinite(orderAmt) && orderAmt > 0) {
     await OutboxEvent.create(
       {
         aggregate_type: 'order',
@@ -582,6 +630,8 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
 // ─── createOrder ─────────────────────────────────────────────────────────────
 // SECURITY: Always fetches price from backend. Client-supplied `amount` is IGNORED.
 // Coupon is validated server-side and discount recorded on the order row.
+// IDEMPOTENCY: Reuses a single pending/failed checkout row per (user, type, entity) so
+// repeat /orders/create calls do not insert duplicate orders for the same purchase intent.
 
 async function createOrder(userId, { type, entityId, couponCode, referralCode, currency = 'INR', utm, buyer_name, buyer_email, buyer_mobile }) {
   const typeUpper = normalizeOrderType(type);
@@ -653,8 +703,8 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
   const gotLock = await redis.set(lockKey, '1', { NX: true, EX: 30 });
   if (!gotLock) throw new AppError('Duplicate order in progress', 429);
 
-  const orderId = generateOrderId();
-  const amountPaise = Math.round(grandTotal * 100);
+  const typeLower = typeUpper.toLowerCase();
+  const entityIdStr = String(entityId);
 
   let resolvedBatchId = null;
   if (typeUpper === 'COURSE') {
@@ -664,37 +714,76 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
   try {
     if (grandTotal <= 0) {
       const contact = await fetchUserContact(userId);
+      let outOrderId;
       await sequelize.transaction(async (t) => {
-        const created = await Order.create(
-          {
-            order_id: orderId,
+        let row = await Order.findOne({
+          where: {
             user_id: userId,
-            type: typeUpper.toLowerCase(),
-            entity_id: String(entityId),
-            batch_id: resolvedBatchId,
-            original_amount: originalAmount,
-            coupon_code: couponResult ? couponResult.coupon.code : null,
-            coupon_discount: discountAmount,
-            amount: grandTotal,
-            currency,
-            status: 'pending',
-            affiliate: normalizeReferralForOrder(referralCode),
-            gateway: 'free',
-            utm,
-            buyer_name,
-            buyer_email,
-            buyer_mobile,
+            type: typeLower,
+            entity_id: entityIdStr,
+            status: { [Op.in]: ['pending', 'failed'] },
           },
-          { transaction: t }
-        );
+          lock: t.LOCK.UPDATE,
+          transaction: t,
+        });
+        let reused = false;
+        if (row) {
+          reused = true;
+          await syncCouponUsageForReusedOrder(row.order_id, userId, row.coupon_code, couponResult, t);
+          await row.update(
+            {
+              status: 'pending',
+              batch_id: resolvedBatchId,
+              original_amount: originalAmount,
+              coupon_code: couponResult ? couponResult.coupon.code : null,
+              coupon_discount: discountAmount,
+              amount: grandTotal,
+              currency,
+              affiliate: normalizeReferralForOrder(referralCode),
+              gateway: 'free',
+              utm: utm !== undefined ? utm : row.utm,
+              buyer_name: buyer_name != null ? buyer_name : row.buyer_name,
+              buyer_email: buyer_email != null ? buyer_email : row.buyer_email,
+              buyer_mobile: buyer_mobile != null ? buyer_mobile : row.buyer_mobile,
+            },
+            { transaction: t }
+          );
+          row = await Order.findByPk(row.id, { transaction: t, lock: t.LOCK.UPDATE });
+          outOrderId = row.order_id;
+        } else {
+          const oid = generateOrderId();
+          outOrderId = oid;
+          row = await Order.create(
+            {
+              order_id: oid,
+              user_id: userId,
+              type: typeLower,
+              entity_id: entityIdStr,
+              batch_id: resolvedBatchId,
+              original_amount: originalAmount,
+              coupon_code: couponResult ? couponResult.coupon.code : null,
+              coupon_discount: discountAmount,
+              amount: grandTotal,
+              currency,
+              status: 'pending',
+              affiliate: normalizeReferralForOrder(referralCode),
+              gateway: 'free',
+              utm,
+              buyer_name,
+              buyer_email,
+              buyer_mobile,
+            },
+            { transaction: t }
+          );
+        }
         const locked = await Order.findOne({
-          where: { id: created.id },
+          where: { id: row.id },
           lock: t.LOCK.UPDATE,
           transaction: t,
         });
         if (!locked) throw new AppError('Order not found after create', 500);
         await locked.update({ status: 'paid' }, { transaction: t });
-        const freeRef = `free:${orderId}`;
+        const freeRef = `free:${locked.order_id}`;
         await Payment.findOrCreate({
           where: { order_id: locked.id, source: 'free' },
           defaults: {
@@ -708,13 +797,13 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
           transaction: t,
         });
         await emitPurchaseOutbox(locked, t);
-        if (couponResult) {
-          await recordCouponUsage(couponResult.coupon.id, userId, orderId, t);
+        if (couponResult && !reused) {
+          await recordCouponUsage(couponResult.coupon.id, userId, locked.order_id, t);
         }
       });
       await redis.del(lockKey);
       return {
-        orderId,
+        orderId: outOrderId,
         free: true,
         paid: true,
         razorpayOrderId: null,
@@ -738,41 +827,84 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
     const razorpay = await getRazorpayInstance();
     if (!razorpay) throw new AppError('Payment not configured', 503);
 
-    const order = await Order.create({
-      order_id: orderId,
-      user_id: userId,
-      type: typeUpper.toLowerCase(),
-      entity_id: String(entityId),
-      batch_id: resolvedBatchId,
-      original_amount: originalAmount,
-      coupon_code: couponResult ? couponResult.coupon.code : null,
-      coupon_discount: discountAmount,
-      amount: grandTotal,
-      currency,
-      status: 'pending',
-      affiliate: normalizeReferralForOrder(referralCode),
-      utm,
-      buyer_name,
-      buyer_email,
-      buyer_mobile,
+    const amountPaise = Math.round(grandTotal * 100);
+    let order;
+    let isReuse = false;
+
+    await sequelize.transaction(async (t) => {
+      order = await Order.findOne({
+        where: {
+          user_id: userId,
+          type: typeLower,
+          entity_id: entityIdStr,
+          status: { [Op.in]: ['pending', 'failed'] },
+        },
+        lock: t.LOCK.UPDATE,
+        transaction: t,
+      });
+      if (order) {
+        isReuse = true;
+        await syncCouponUsageForReusedOrder(order.order_id, userId, order.coupon_code, couponResult, t);
+        await order.update(
+          {
+            status: 'pending',
+            batch_id: resolvedBatchId != null ? resolvedBatchId : order.batch_id,
+            original_amount: originalAmount,
+            coupon_code: couponResult ? couponResult.coupon.code : null,
+            coupon_discount: discountAmount,
+            amount: grandTotal,
+            currency,
+            affiliate: normalizeReferralForOrder(referralCode),
+            utm: utm !== undefined ? utm : order.utm,
+            buyer_name: buyer_name != null ? buyer_name : order.buyer_name,
+            buyer_email: buyer_email != null ? buyer_email : order.buyer_email,
+            buyer_mobile: buyer_mobile != null ? buyer_mobile : order.buyer_mobile,
+          },
+          { transaction: t }
+        );
+        order = await Order.findByPk(order.id, { transaction: t, lock: t.LOCK.UPDATE });
+      } else {
+        const oid = generateOrderId();
+        order = await Order.create(
+          {
+            order_id: oid,
+            user_id: userId,
+            type: typeLower,
+            entity_id: entityIdStr,
+            batch_id: resolvedBatchId,
+            original_amount: originalAmount,
+            coupon_code: couponResult ? couponResult.coupon.code : null,
+            coupon_discount: discountAmount,
+            amount: grandTotal,
+            currency,
+            status: 'pending',
+            affiliate: normalizeReferralForOrder(referralCode),
+            utm,
+            buyer_name,
+            buyer_email,
+            buyer_mobile,
+          },
+          { transaction: t }
+        );
+      }
     });
 
     const rpOrder = await razorpay.orders.create({
       amount: amountPaise,
       currency,
-      receipt: orderId,
+      receipt: order.order_id,
       notes: {
-        orderId,
+        orderId: order.order_id,
         userId: String(userId),
         type: typeUpper,
-        entityId: String(entityId),
+        entityId: entityIdStr,
       },
     });
 
     await order.update({ razorpay_order_id: rpOrder.id });
 
-    if (couponResult) {
-      await recordCouponUsage(couponResult.coupon.id, userId, orderId, null);
+    if (couponResult && !isReuse) {
+      await recordCouponUsage(couponResult.coupon.id, userId, order.order_id, null);
     }
 
     await redis.del(lockKey);
@@ -781,7 +913,7 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
     const contact = await fetchUserContact(userId);
 
     return {
-      orderId,
+      orderId: order.order_id,
       free: false,
       paid: false,
       razorpayOrderId: rpOrder.id,
@@ -866,42 +998,75 @@ async function createPaymentLinkOrder(userId, body) {
   const gotLock = await redis.set(lockKey, '1', { NX: true, EX: 45 });
   if (!gotLock) throw new AppError('Duplicate order in progress', 429);
 
-  const orderId = generateOrderId();
-  const amountPaise = Math.round(grandTotal * 100);
+  const emailLower = email.trim().toLowerCase();
 
   try {
     if (grandTotal <= 0) {
+      let outOrderId;
       await sequelize.transaction(async (t) => {
-        const created = await Order.create(
-          {
-            order_id: orderId,
-            user_id: userId || null,
-            type: 'payment_link',
-            entity_id: String(paymentLinkId),
-            batch_id: null,
-            original_amount: listAmount,
-            coupon_code: null,
-            coupon_discount: 0,
-            amount: grandTotal,
-            currency: 'INR',
-            status: 'pending',
-            affiliate: normalizeReferralForOrder(body.referralCode),
-            gateway: 'free',
-            buyer_name: fullName,
-            buyer_email: email,
-            buyer_mobile: mobile,
-            buyer_gst: gstNumber,
+        let row = await Order.findOne({
+          where: {
+            [Op.and]: [
+              { type: 'payment_link', entity_id: String(paymentLinkId), status: { [Op.in]: ['pending', 'failed'] } },
+              sequelize.where(sequelize.fn('LOWER', sequelize.col('buyer_email')), emailLower),
+            ],
           },
-          { transaction: t }
-        );
+          lock: t.LOCK.UPDATE,
+          transaction: t,
+        });
+        if (row) {
+          await row.update(
+            {
+              status: 'pending',
+              user_id: userId != null ? userId : row.user_id,
+              original_amount: listAmount,
+              amount: grandTotal,
+              affiliate: normalizeReferralForOrder(body.referralCode),
+              gateway: 'free',
+              buyer_name: fullName,
+              buyer_email: emailLower,
+              buyer_mobile: mobile,
+              buyer_gst: gstNumber,
+              utm: body.utm != null ? body.utm : row.utm,
+            },
+            { transaction: t }
+          );
+          row = await Order.findByPk(row.id, { transaction: t, lock: t.LOCK.UPDATE });
+          outOrderId = row.order_id;
+        } else {
+          const oid = generateOrderId();
+          outOrderId = oid;
+          row = await Order.create(
+            {
+              order_id: oid,
+              user_id: userId || null,
+              type: 'payment_link',
+              entity_id: String(paymentLinkId),
+              batch_id: null,
+              original_amount: listAmount,
+              coupon_code: null,
+              coupon_discount: 0,
+              amount: grandTotal,
+              currency: 'INR',
+              status: 'pending',
+              affiliate: normalizeReferralForOrder(body.referralCode),
+              gateway: 'free',
+              buyer_name: fullName,
+              buyer_email: emailLower,
+              buyer_mobile: mobile,
+              buyer_gst: gstNumber,
+            },
+            { transaction: t }
+          );
+        }
         const locked = await Order.findOne({
-          where: { id: created.id },
+          where: { id: row.id },
           lock: t.LOCK.UPDATE,
           transaction: t,
         });
         if (!locked) throw new AppError('Order not found after create', 500);
         await locked.update({ status: 'paid' }, { transaction: t });
-        const freeRef = `free:${orderId}`;
+        const freeRef = `free:${locked.order_id}`;
         await Payment.findOrCreate({
           where: { order_id: locked.id, source: 'free' },
           defaults: {
@@ -919,7 +1084,7 @@ async function createPaymentLinkOrder(userId, body) {
       await redis.del(lockKey);
       const rpConfig = await getRazorpayConfig();
       return {
-        orderId,
+        orderId: outOrderId,
         free: true,
         paid: true,
         razorpayOrderId: null,
@@ -937,32 +1102,73 @@ async function createPaymentLinkOrder(userId, body) {
     const razorpay = await getRazorpayInstance();
     if (!razorpay) throw new AppError('Payment not configured', 503);
 
-    const order = await Order.create({
-      order_id: orderId,
-      user_id: userId || null,
-      type: 'payment_link',
-      entity_id: String(paymentLinkId),
-      batch_id: null,
-      original_amount: listAmount,
-      coupon_code: null,
-      coupon_discount: discountAmount,
-      amount: grandTotal,
-      currency: 'INR',
-      status: 'pending',
-      affiliate: normalizeReferralForOrder(body.referralCode),
-      buyer_name: fullName,
-      buyer_email: email,
-      buyer_mobile: mobile,
-      buyer_gst: gstNumber,
-      utm: body.utm || null,
+    const amountPaise = Math.round(grandTotal * 100);
+    let order;
+
+    await sequelize.transaction(async (t) => {
+      order = await Order.findOne({
+        where: {
+          [Op.and]: [
+            { type: 'payment_link', entity_id: String(paymentLinkId), status: { [Op.in]: ['pending', 'failed'] } },
+            sequelize.where(sequelize.fn('LOWER', sequelize.col('buyer_email')), emailLower),
+          ],
+        },
+        lock: t.LOCK.UPDATE,
+        transaction: t,
+      });
+      if (order) {
+        await order.update(
+          {
+            status: 'pending',
+            user_id: userId != null ? userId : order.user_id,
+            original_amount: listAmount,
+            coupon_code: null,
+            coupon_discount: discountAmount,
+            amount: grandTotal,
+            currency: 'INR',
+            affiliate: normalizeReferralForOrder(body.referralCode),
+            buyer_name: fullName,
+            buyer_email: emailLower,
+            buyer_mobile: mobile,
+            buyer_gst: gstNumber,
+            utm: body.utm != null ? body.utm : order.utm,
+          },
+          { transaction: t }
+        );
+        order = await Order.findByPk(order.id, { transaction: t, lock: t.LOCK.UPDATE });
+      } else {
+        const oid = generateOrderId();
+        order = await Order.create(
+          {
+            order_id: oid,
+            user_id: userId || null,
+            type: 'payment_link',
+            entity_id: String(paymentLinkId),
+            batch_id: null,
+            original_amount: listAmount,
+            coupon_code: null,
+            coupon_discount: discountAmount,
+            amount: grandTotal,
+            currency: 'INR',
+            status: 'pending',
+            affiliate: normalizeReferralForOrder(body.referralCode),
+            buyer_name: fullName,
+            buyer_email: emailLower,
+            buyer_mobile: mobile,
+            buyer_gst: gstNumber,
+            utm: body.utm || null,
+          },
+          { transaction: t }
+        );
+      }
     });
 
     const rpOrder = await razorpay.orders.create({
       amount: amountPaise,
       currency: 'INR',
-      receipt: orderId,
+      receipt: order.order_id,
       notes: {
-        orderId,
+        orderId: order.order_id,
         userId: userId != null ? String(userId) : '',
         type: 'PAYMENT_LINK',
         entityId: String(paymentLinkId),
@@ -976,7 +1182,7 @@ async function createPaymentLinkOrder(userId, body) {
     const rpConfig = await getRazorpayConfig();
 
     return {
-      orderId,
+      orderId: order.order_id,
       free: false,
       paid: false,
       razorpayOrderId: rpOrder.id,
@@ -1235,7 +1441,13 @@ async function listMyPurchases(userId) {
   return out;
 }
 
-async function listAllOrders({ limit = 100, offset = 0, search = '', sortBy = 'created_at', sortOrder = 'DESC', dateFrom, dateTo, courseId, type }) {
+function parseAmountFilter(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+async function listAllOrders({ limit = 100, offset = 0, search = '', sortBy = 'created_at', sortOrder = 'DESC', dateFrom, dateTo, courseId, type, amountMin, amountMax }) {
   const where = {};
 
   if (search) {
@@ -1260,6 +1472,14 @@ async function listAllOrders({ limit = 100, offset = 0, search = '', sortBy = 'c
 
   if (type) {
     where.type = type.toLowerCase();
+  }
+
+  const minAmount = parseAmountFilter(amountMin);
+  const maxAmount = parseAmountFilter(amountMax);
+  if (minAmount != null || maxAmount != null) {
+    where.amount = {};
+    if (minAmount != null) where.amount[Op.gte] = minAmount;
+    if (maxAmount != null) where.amount[Op.lte] = maxAmount;
   }
 
   const { rows, count } = await Order.findAndCountAll({
@@ -1342,19 +1562,20 @@ async function listAllOrders({ limit = 100, offset = 0, search = '', sortBy = 'c
     } catch (err) { logger.warn(`Bulk course fetch failed: ${err.message}`); }
   }
 
-  // Bulk fetch plans if any
+  // Resolve membership plan titles (entity_id may be numeric id or public slug — list-by-ids is numeric-only).
   if (planIds.length > 0) {
     try {
-      // Assuming platform-service has a similar endpoint
-      const { data: planRes } = await axios.get(`${config.platformServiceUrl}/internal/platform/plans/list-by-ids`, {
-        params: { ids: planIds.join(',') },
-        headers: { 'X-Internal-API-Key': config.internalApiKey }
-      });
-      const plans = planRes.data || planRes;
-      if (Array.isArray(plans)) {
-        for (const p of plans) entityNameMap[`membership_${p.id}`] = p.name;
+      const settled = await Promise.all(
+        planIds.map((pid) =>
+          resolveMembershipPlanDisplayName(pid).then((name) => ({ pid: String(pid), name }))
+        )
+      );
+      for (const { pid, name } of settled) {
+        if (name) entityNameMap[`membership_${pid}`] = name;
       }
-    } catch (err) { logger.warn(`Bulk plan fetch failed: ${err.message}`); }
+    } catch (err) {
+      logger.warn(`Bulk plan resolve failed: ${err.message}`);
+    }
   }
 
   const enrichedData = orders.map((o) => {
@@ -1502,15 +1723,90 @@ async function refundOrder(id, { amount, remarks }) {
   });
 }
 
+/**
+ * Align admin GET/PUT order payloads with list rows: payment_id, buyer_* from linked user when empty, entity_name.
+ */
+async function enrichAdminOrderResponse(p) {
+  if (!p || p.id == null) return p;
+
+  const payment = await Payment.findOne({
+    where: { order_id: p.id },
+    order: [['id', 'DESC']],
+  });
+
+  let user = null;
+  if (p.user_id) {
+    try {
+      const { data: usersBody } = await axios.post(
+        `${config.authServiceUrl}/users/internal/list-by-ids`,
+        { ids: [p.user_id] },
+        { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 5000 }
+      );
+      const arr =
+        usersBody && typeof usersBody === 'object' && usersBody.data !== undefined ? usersBody.data : usersBody;
+      if (Array.isArray(arr) && arr.length) {
+        user = arr.find((u) => String(u.id) === String(p.user_id)) || arr[0];
+      }
+    } catch (err) {
+      logger.warn(`[orders] enrichAdminOrderResponse user fetch: ${err.message}`);
+    }
+  }
+
+  let entity_name = null;
+  const t = (p.type || '').toLowerCase();
+  if (t === 'course' && p.entity_id) {
+    try {
+      const { data: courseRes } = await axios.post(
+        `${config.courseServiceUrl}/internal/courses/by-ids`,
+        { ids: [String(p.entity_id)] },
+        { headers: { 'X-Internal-API-Key': config.internalApiKey } }
+      );
+      const courses = courseRes.data || courseRes;
+      if (Array.isArray(courses) && courses[0]) entity_name = courses[0].title;
+    } catch (err) {
+      logger.warn(`[orders] enrichAdminOrderResponse course: ${err.message}`);
+    }
+  } else if (t === 'membership' && p.entity_id) {
+    try {
+      entity_name = await resolveMembershipPlanDisplayName(p.entity_id);
+    } catch (err) {
+      logger.warn(`[orders] enrichAdminOrderResponse plan: ${err.message}`);
+    }
+  } else if (t === 'payment_link' && p.entity_id) {
+    try {
+      const { data: body, status } = await axios.get(
+        `${config.adminServiceUrl}/internal/payment-links/${encodeURIComponent(p.entity_id)}`,
+        { headers: { 'x-internal-api-key': config.internalApiKey }, timeout: 8000, validateStatus: () => true }
+      );
+      const payload =
+        body && typeof body === 'object' && body.success === true && body.data !== undefined ? body.data : body;
+      if (status === 200 && payload && typeof payload === 'object') {
+        entity_name = payload.title || payload.name || null;
+      }
+    } catch (err) {
+      logger.warn(`[orders] enrichAdminOrderResponse payment_link: ${err.message}`);
+    }
+  }
+
+  const paymentId = payment ? payment.razorpay_payment_id : p.rp_payment_id || null;
+
+  return {
+    ...p,
+    payment_id: paymentId,
+    buyer_name: p.buyer_name || (user ? user.name : null),
+    buyer_email: p.buyer_email || (user ? user.email : null),
+    buyer_mobile: p.buyer_mobile || (user ? user.phone : null),
+    entity_name:
+      entity_name ||
+      p.entity_name ||
+      (t === 'membership' ? 'Plan' : t === 'course' ? 'Course' : t === 'payment_link' ? 'Payment link' : null),
+  };
+}
+
 async function getOrderByOrderId(orderId) {
   const order = await Order.findOne({ where: { order_id: orderId } });
   if (!order) return null;
-  const payment = await Payment.findOne({
-    where: { order_id: order.id },
-    order: [['id', 'DESC']],
-  });
-  const p = order.get({ plain: true });
-  return { ...p, payment_id: payment ? payment.razorpay_payment_id : null };
+  return enrichAdminOrderResponse(order.get({ plain: true }));
 }
 
 async function getInvoice(userId, orderId) {
@@ -1753,7 +2049,7 @@ async function createManualOrder(data) {
 }
 
 async function updateOrder(id, data) {
-  return await sequelize.transaction(async (t) => {
+  const plain = await sequelize.transaction(async (t) => {
     const order = await Order.findOne({
       where: { id },
       lock: t.LOCK.UPDATE,
@@ -1762,43 +2058,201 @@ async function updateOrder(id, data) {
 
     if (!order) return null;
 
-    const oldStatus = order.status;
-    const newStatus = data.status;
+    const oldPlain = order.get({ plain: true });
+    const oldStatus = (order.status || '').toLowerCase().trim();
+    const fulfilledBefore = oldStatus === 'paid' || oldStatus === 'completed';
 
-    // Update allowable fields
-    const updatableFields = ['buyer_name', 'buyer_email', 'buyer_mobile', 'buyer_gst', 'affiliate', 'amount', 'utm'];
+    const orderType = (order.type || '').toLowerCase();
+    let entityChanged = false;
+
+    // Admin may switch course/plan (same order.type only — never change type here).
+    if (data.entity_id !== undefined && data.entity_id !== null && String(data.entity_id).trim() !== '') {
+      const newEid = String(data.entity_id).trim();
+      const oldEid = order.entity_id != null ? String(order.entity_id) : '';
+      if (newEid !== oldEid) {
+        if (orderType !== 'course' && orderType !== 'membership') {
+          throw new AppError('Entity can only be changed for course or membership orders', 400);
+        }
+        entityChanged = true;
+
+        // Critical: remove fulfillment for the previous course/plan before re-pointing the order.
+        if (fulfilledBefore && order.user_id) {
+          logger.info(
+            `[orders] admin entity swap — revoking prior access order=${order.order_id} oldEntity=${oldEid} newEntity=${newEid}`
+          );
+          await revokeAccessForOrder(oldPlain);
+        }
+
+        order.entity_id = newEid;
+
+        if (orderType === 'course') {
+          if (data.batch_id !== undefined && data.batch_id !== null && data.batch_id !== '') {
+            order.batch_id = Number(data.batch_id);
+          } else {
+            order.batch_id = await fetchPurchaseBatchId(newEid);
+          }
+        }
+      }
+    }
+
+    if (
+      !entityChanged &&
+      data.batch_id !== undefined &&
+      orderType === 'course'
+    ) {
+      order.batch_id =
+        data.batch_id === null || data.batch_id === '' ? null : Number(data.batch_id);
+    }
+
+    const updatableFields = [
+      'buyer_name',
+      'buyer_email',
+      'buyer_mobile',
+      'buyer_gst',
+      'amount',
+      'utm',
+      'refund_amount',
+      'refund_remarks',
+    ];
     for (const field of updatableFields) {
       if (data[field] !== undefined) {
         order[field] = data[field];
       }
     }
 
-    if (newStatus && newStatus !== oldStatus) {
-      order.status = newStatus;
+    if (data.coupon_code !== undefined) {
+      order.coupon_code = data.coupon_code === '' || data.coupon_code === null ? null : String(data.coupon_code).trim();
+    }
+    if (data.coupon_discount !== undefined) {
+      const v = data.coupon_discount;
+      order.coupon_discount =
+        v === '' || v === null ? 0 : Number(v);
+    }
+    if (data.original_amount !== undefined) {
+      const v = data.original_amount;
+      order.original_amount = v === '' || v === null ? null : Number(v);
+    }
+
+    if (data.affiliate !== undefined) {
+      order.affiliate = normalizeReferralForOrder(data.affiliate);
+    }
+
+    let newStatus = oldStatus;
+    if (data.status !== undefined) {
+      order.status = data.status;
+      newStatus = String(data.status).toLowerCase().trim();
     }
 
     await order.save({ transaction: t });
 
-    // If status changed from something else to 'paid', trigger fulfillment
-    if (newStatus === 'paid' && oldStatus !== 'paid') {
-      const manualRef = `manual:${order.order_id}`;
+    let reloaded = await Order.findOne({
+      where: { id: order.id },
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+
+    if (data.amount !== undefined && reloaded) {
+      const pay = await Payment.findOne({
+        where: { order_id: reloaded.id },
+        order: [['id', 'DESC']],
+        transaction: t,
+      });
+      if (pay && pay.status === 'captured') {
+        await pay.update({ amount: reloaded.amount }, { transaction: t });
+      }
+    }
+
+    const fulfilledAfter =
+      newStatus === 'paid' || newStatus === 'completed';
+    const notCancelledLike =
+      newStatus !== 'refunded' &&
+      newStatus !== 'failed' &&
+      newStatus !== 'cancelled';
+
+    // First transition to paid (manual fulfillment path).
+    if (
+      newStatus === 'paid' &&
+      oldStatus !== 'paid' &&
+      oldStatus !== 'completed'
+    ) {
+      const manualRef = `manual:${reloaded.order_id}`;
       await Payment.findOrCreate({
-        where: { order_id: order.id, source: 'manual' },
+        where: { order_id: reloaded.id, source: 'manual' },
         defaults: {
-          order_id: order.id,
+          order_id: reloaded.id,
           razorpay_payment_id: manualRef,
           razorpay_signature: null,
-          amount: order.amount,
+          amount: reloaded.amount,
           status: 'captured',
           source: 'manual',
         },
         transaction: t,
       });
-      await emitPurchaseOutbox(order, t);
+      await emitPurchaseOutbox(reloaded, t);
     }
 
-    return order.get({ plain: true });
+    // Paid/completed order had item swapped: grant new course/plan without duplicate affiliate commission.
+    if (
+      entityChanged &&
+      fulfilledAfter &&
+      notCancelledLike &&
+      fulfilledBefore
+    ) {
+      logger.info(
+        `[orders] admin entity swap — re-emit fulfillment order=${reloaded.order_id} entity=${reloaded.entity_id}`
+      );
+      await emitPurchaseOutbox(reloaded, t, { skipAffiliate: true });
+    }
+
+    if (newStatus === 'refunded' && oldStatus !== 'refunded') {
+      if (reloaded.user_id) {
+        await revokeAccessForOrder(reloaded.get({ plain: true }));
+      }
+      const patch = {};
+      if (
+        (data.refund_amount === undefined || data.refund_amount === null) &&
+        !reloaded.refund_amount
+      ) {
+        patch.refund_amount = Number(reloaded.amount);
+      }
+      if (
+        (data.refund_remarks === undefined || data.refund_remarks === null) &&
+        !reloaded.refund_remarks
+      ) {
+        patch.refund_remarks = 'Admin refund (order edit)';
+      }
+      if (Object.keys(patch).length) {
+        await reloaded.update(patch, { transaction: t });
+        reloaded = await Order.findOne({
+          where: { id: reloaded.id },
+          transaction: t,
+          lock: t.LOCK.UPDATE,
+        });
+      }
+
+      const refundAmt =
+        reloaded.refund_amount != null ? Number(reloaded.refund_amount) : Number(reloaded.amount);
+      await OutboxEvent.create(
+        {
+          aggregate_type: 'order',
+          aggregate_id: reloaded.order_id,
+          event_type: 'ORDER_REFUNDED',
+          payload: {
+            userId: reloaded.user_id,
+            orderId: reloaded.order_id,
+            type: reloaded.type,
+            entityId: reloaded.entity_id,
+            refundAmount: refundAmt,
+          },
+        },
+        { transaction: t }
+      );
+    }
+
+    return reloaded.get({ plain: true });
   });
+  if (!plain) return null;
+  return enrichAdminOrderResponse(plain);
 }
 
 async function deleteOrder(id) {
