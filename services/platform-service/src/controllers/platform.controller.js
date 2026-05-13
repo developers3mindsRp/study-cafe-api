@@ -132,9 +132,13 @@ const getPlanBySlug = asyncHandler(async (req, res) => {
 const getMembershipUpgradeSummary = asyncHandler(async (req, res) => {
   const userId = req.headers['x-user-id'];
   if (!userId) throw new AppError('Authentication required', 401);
-  const { targetPlanId } = req.body;
+  const { targetPlanId, couponCode } = req.body;
   if (!targetPlanId) throw new AppError('targetPlanId is required', 400);
-  const data = await membershipUpgradeService.calculateMembershipUpgrade(userId, targetPlanId);
+  const data = await membershipUpgradeService.calculateMembershipUpgrade(
+    userId,
+    targetPlanId,
+    couponCode || null
+  );
   sendSuccess(res, data);
 });
 

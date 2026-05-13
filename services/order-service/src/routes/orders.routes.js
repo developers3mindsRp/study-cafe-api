@@ -35,6 +35,8 @@ function register(router) {
   router.post('/internal/coupons', internalAuth, ordersController.createCoupon);
   router.put('/internal/coupons/:id', internalAuth, ordersController.updateCoupon);
   router.delete('/internal/coupons/:id', internalAuth, ordersController.deleteCoupon);
+  // Preview-only coupon validation for upgrade-summary (no usage recorded)
+  router.post('/internal/coupons/validate-preview', internalAuth, ordersController.validateCouponPreviewInternal);
 }
 
 module.exports = { register };
