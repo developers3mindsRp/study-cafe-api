@@ -178,15 +178,16 @@ const listBatches = asyncHandler(async (req, res) => {
       },
     })
   ).data;
+  // courseClient interceptor spreads meta fields to root: { data, total, page, limit, ... }
   sendPaginated(res, {
-    data: payload.data,
+    data: Array.isArray(payload.data) ? payload.data : [],
     meta: {
-      total: payload.total,
-      page: payload.page,
-      limit: payload.limit,
-      totalPages: payload.totalPages,
-      hasNextPage: payload.hasNextPage,
-      hasPreviousPage: payload.hasPreviousPage,
+      total: payload.total ?? 0,
+      page: payload.page ?? 1,
+      limit: payload.limit ?? 10,
+      totalPages: payload.totalPages ?? 0,
+      hasNextPage: payload.hasNextPage ?? false,
+      hasPreviousPage: payload.hasPreviousPage ?? false,
     },
   });
 });

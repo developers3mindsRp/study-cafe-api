@@ -517,24 +517,26 @@ const coursesService = {
     const row = await Course.findOne({ where: { id, is_published: true } });
     if (!row) return null;
     const d = row.get({ plain: true });
-    const visible = await allowPublicCourseDetail(d.hide_from_public, id, opts.authorization);
+    const coursePk = d.id;
+    const visible = await allowPublicCourseDetail(d.hide_from_public, coursePk, opts.authorization);
     if (!visible) return null;
     d.language = normalizeLanguage(d.language);
     const enriched = await this.enrichCourseWithAuthors(d);
-    const allowed = await checkCourseAccess(opts.authorization, id);
+    const allowed = await checkCourseAccess(opts.authorization, coursePk);
     const batchOpts = allowed
       ? { visibleOnly: true }
       : { visibleOnly: true, stripRecordings: true };
-    const batches = await this._getBatchesSessionsRecordings(id, batchOpts);
+    const batchesRaw = await this._getBatchesSessionsRecordings(coursePk, batchOpts);
+    const batches = Array.isArray(batchesRaw) ? batchesRaw : [];
 
     const materials = await Material.findAll({
-      where: { course_id: id },
+      where: { course_id: coursePk },
       order: [["id", "ASC"]],
       attributes: ["id", "title", "url", "type"],
     });
 
     const catLinks = await CourseCategory.findAll({
-      where: { course_id: id },
+      where: { course_id: coursePk },
       attributes: ["course_cat_id"],
       raw: true,
     });
@@ -567,20 +569,22 @@ const coursesService = {
     if (!visible) return null;
     d.language = normalizeLanguage(d.language);
     const enriched = await this.enrichCourseWithAuthors(d);
-    const allowed = await checkCourseAccess(opts.authorization, d.id);
+    const coursePk = d.id;
+    const allowed = await checkCourseAccess(opts.authorization, coursePk);
     const batchOpts = allowed
       ? { visibleOnly: true }
       : { visibleOnly: true, stripRecordings: true };
-    const batches = await this._getBatchesSessionsRecordings(d.id, batchOpts);
+    const batchesRaw = await this._getBatchesSessionsRecordings(coursePk, batchOpts);
+    const batches = Array.isArray(batchesRaw) ? batchesRaw : [];
 
     const materials = await Material.findAll({
-      where: { course_id: d.id },
+      where: { course_id: coursePk },
       order: [["id", "ASC"]],
       attributes: ["id", "title", "url", "type"],
     });
 
     const catLinks = await CourseCategory.findAll({
-      where: { course_id: d.id },
+      where: { course_id: coursePk },
       attributes: ["course_cat_id"],
       raw: true,
     });
@@ -659,7 +663,10 @@ const coursesService = {
     if (!row) return null;
     const d = row.get({ plain: true });
     const enriched = await this.enrichCourseWithAuthors(d);
-    return this.attachCourseCatIds(enriched);
+    const withCats = await this.attachCourseCatIds(enriched);
+    const batchesRaw = await this._getBatchesSessionsRecordings(d.id, { visibleOnly: false });
+    const batches = Array.isArray(batchesRaw) ? batchesRaw : [];
+    return { ...withCats, batches };
   },
 
   async getSessionsByCourseId(courseId, opts = {}) {
@@ -756,7 +763,7 @@ const coursesService = {
       order: [["created_at", "DESC"]],
       limit: safeLimit,
       offset,
-      include: [{ model: Course, attributes: ["id", "title"] }],
+      include: [{ model: Course, as: "Course", attributes: ["id", "title"] }],
     });
 
     const data = [];
@@ -798,7 +805,7 @@ const coursesService = {
   /** Admin / internal: single batch with owning course slug (for order-service enrichment). */
   async getBatchByIdInternal(batchId) {
     const row = await Batch.findByPk(batchId, {
-      include: [{ model: Course, attributes: ["id", "title", "slug"] }],
+      include: [{ model: Course, as: "Course", attributes: ["id", "title", "slug"] }],
     });
     if (!row) return null;
     const plain = row.get({ plain: true });
