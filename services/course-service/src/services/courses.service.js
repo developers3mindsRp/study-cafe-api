@@ -1728,8 +1728,13 @@ const coursesService = {
       order = [["id", "ASC"]];
     } else if (sort === "newest") {
       order = [["id", "DESC"]];
+    } else if (sort === "popular") {
+      order = [
+        ["enrolled_count", "DESC"],
+        ["created_at", "DESC"],
+      ];
     } else {
-      // 'latest' (default) — newest first (matches public "Latest" label)
+      // 'latest' (default on /courses) — newest first
       order = [
         ["created_at", "DESC"],
         ["id", "DESC"],
