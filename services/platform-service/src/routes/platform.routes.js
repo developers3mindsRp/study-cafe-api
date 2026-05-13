@@ -14,6 +14,8 @@ function register(router) {
   router.get('/platform/footer', controller.getFooter);
   router.get('/platform/global-settings/snippets', controller.getGlobalSettingsSnippetsPublic);
   router.get('/platform/site-ads', controller.getSiteAds);
+  /** Same payload as site-ads — neutral path so browser extensions are less likely to block the request. */
+  router.get('/platform/cms-display-placements', controller.getSiteAds);
   router.get('/platform/plans', controller.getPlans);
   router.get('/platform/plans/:slug', validate(schemas.slugParam), controller.getPlanBySlug);
   router.get('/platform/memberships', controller.getPlans);
