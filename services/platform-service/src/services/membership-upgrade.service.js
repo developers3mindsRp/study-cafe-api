@@ -40,6 +40,7 @@ async function calculateMembershipUpgrade(userId, targetPlanId) {
     const gstAmount = Number((targetPrice * GST_RATE).toFixed(2));
     const grandTotal = Number((targetPrice + gstAmount).toFixed(2));
     return {
+      canUpgrade: true,
       currentPlan: null,
       targetPlan: {
         id: targetPlan.id,
@@ -63,16 +64,41 @@ async function calculateMembershipUpgrade(userId, targetPlanId) {
 
   const activeSortOrder = currentPlan ? Number(currentPlan.sort_order ?? 0) : 0;
 
-  // Validate upgrade direction
+  // Validate upgrade direction — return as success with canUpgrade: false instead of throwing
   if (targetSortOrder === activeSortOrder && currentPlan && currentPlan.id === Number(targetPlanId)) {
-    throw new AppError('You are already on this plan.', 400);
+    return {
+      canUpgrade: false,
+      message: 'You are already on this plan.',
+      currentPlan: {
+        id: currentPlan.id,
+        name: currentPlan.name,
+        slug: activeMembership.membership_type,
+        price: Number(currentPlan.price),
+      },
+      targetPlan: {
+        id: targetPlan.id,
+        name: targetPlan.name,
+        price: targetPrice,
+      },
+    };
   }
   if (targetSortOrder <= activeSortOrder) {
     const activeName = currentPlan ? currentPlan.name : activeMembership.membership_type;
-    throw new AppError(
-      `You can only upgrade to a higher tier. You currently have "${activeName}".`,
-      400
-    );
+    return {
+      canUpgrade: false,
+      message: `You can only upgrade to a higher tier. You currently have "${activeName}".`,
+      currentPlan: {
+        id: currentPlan?.id ?? null,
+        name: activeName,
+        slug: activeMembership.membership_type,
+        price: currentPlan ? Number(currentPlan.price) : 0,
+      },
+      targetPlan: {
+        id: targetPlan.id,
+        name: targetPlan.name,
+        price: targetPrice,
+      },
+    };
   }
 
   // Pro-rated deduction — skip for lifetime plans or plans without duration_days
@@ -99,6 +125,7 @@ async function calculateMembershipUpgrade(userId, targetPlanId) {
   const grandTotal = Number((finalAmount + gstAmount).toFixed(2));
 
   return {
+    canUpgrade: true,
     currentPlan: {
       id: currentPlan?.id ?? null,
       name: currentPlan?.name ?? activeMembership.membership_type,
