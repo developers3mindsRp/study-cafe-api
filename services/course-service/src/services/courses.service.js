@@ -12,11 +12,55 @@ const {
   Enrollment,
   UserCourse,
 } = require("../models");
-const { QueryTypes } = require("sequelize");
+const { QueryTypes, Op } = require("sequelize");
 const axios = require("axios");
 const config = require("../config");
 const { logger, AppError } = require("../../../../shared");
 const { checkCourseAccess } = require("./accessClient");
+
+const COURSE_SLUG_MAX_LEN = 200;
+
+/** Normalize slug for storage / uniqueness checks (ASCII-ish segment). */
+function normalizeCourseSlugSegment(raw) {
+  if (raw == null) return "";
+  return String(raw)
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Ensures `courses.slug` is globally unique. On update, pass excludeCourseId so the
+ * current row does not count as a conflict. Appends -2, -3, … if needed (max length 200).
+ */
+async function allocateUniqueCourseSlug(rawSlug, excludeCourseId) {
+  const base = normalizeCourseSlugSegment(rawSlug);
+  if (!base) return null;
+
+  let n = 0;
+  for (;;) {
+    const suffix = n === 0 ? "" : `-${n + 1}`;
+    let candidate = base + suffix;
+    if (candidate.length > COURSE_SLUG_MAX_LEN) {
+      const room = COURSE_SLUG_MAX_LEN - suffix.length;
+      candidate = (room > 0 ? base.slice(0, room) : "c") + suffix;
+      candidate = candidate.replace(/-+$/g, "");
+    }
+    const where = { slug: candidate };
+    if (excludeCourseId != null) {
+      where.id = { [Op.ne]: excludeCourseId };
+    }
+    const existing = await Course.findOne({ where, attributes: ["id"], raw: true });
+    if (!existing) return candidate;
+    n += 1;
+    if (n > 2000) {
+      throw new AppError("Could not allocate a unique course slug", 500);
+    }
+  }
+}
 
 /** Grant auth-service user_courses row so access/check + dashboard work (admin batch enroll, auto-enroll). */
 async function syncUserCourseGrant(userId, courseId) {
@@ -848,10 +892,15 @@ const coursesService = {
         ? Number(data.affiliate_commission)
         : 0;
 
+    let slug = data.slug != null && String(data.slug).trim() !== "" ? String(data.slug).trim() : null;
+    if (slug) {
+      slug = await allocateUniqueCourseSlug(slug, null);
+    }
+
     const row = await Course.create({
       title: data.title || "",
       short_title: data.short_title || null,
-      slug: data.slug || null,
+      slug,
       brief_description: data.brief_description || null,
       description: data.description || null,
       curriculum: data.curriculum || null,
@@ -960,7 +1009,14 @@ const coursesService = {
     ];
     const updatePayload = {};
     for (const field of updatableFields) {
-      if (data[field] !== undefined) {
+      if (data[field] === undefined) continue;
+      if (field === "slug") {
+        const raw =
+          data.slug === null || data.slug === undefined || String(data.slug).trim() === ""
+            ? null
+            : String(data.slug).trim();
+        updatePayload.slug = raw ? await allocateUniqueCourseSlug(raw, id) : null;
+      } else {
         updatePayload[field] = data[field];
       }
     }
@@ -1575,36 +1631,48 @@ const coursesService = {
 
   // ---- Course Page Settings ----
   async getAllPageSettings() {
-    const rows = await CoursePageSetting.findAll({
-      order: [["setting_key", "ASC"]],
-    });
-    const result = {};
-    for (const r of rows) {
-      result[r.setting_key] = r.setting_value;
+    try {
+      const rows = await CoursePageSetting.findAll({
+        order: [["setting_key", "ASC"]],
+      });
+      const result = {};
+      for (const r of rows) {
+        result[r.setting_key] = r.setting_value;
+      }
+      return result;
+    } catch (err) {
+      throw mapCoursePageSettingsDbError(err);
     }
-    return result;
   },
 
   async getPageSetting(key) {
-    const row = await CoursePageSetting.findOne({
-      where: { setting_key: key },
-    });
-    return row ? row.setting_value : null;
+    try {
+      const row = await CoursePageSetting.findOne({
+        where: { setting_key: key },
+      });
+      return row ? row.setting_value : null;
+    } catch (err) {
+      throw mapCoursePageSettingsDbError(err);
+    }
   },
 
   async upsertPageSetting(key, value) {
     const normalizedValue = value === undefined || value === null ? null : String(value);
-    let row = await CoursePageSetting.findOne({ where: { setting_key: key } });
-    if (row) {
-      row.setting_value = normalizedValue;
-      await row.save();
-    } else {
-      row = await CoursePageSetting.create({
-        setting_key: key,
-        setting_value: normalizedValue,
-      });
+    try {
+      let row = await CoursePageSetting.findOne({ where: { setting_key: key } });
+      if (row) {
+        row.setting_value = normalizedValue;
+        await row.save();
+      } else {
+        row = await CoursePageSetting.create({
+          setting_key: key,
+          setting_value: normalizedValue,
+        });
+      }
+      return row.get({ plain: true });
+    } catch (err) {
+      throw mapCoursePageSettingsDbError(err);
     }
-    return row.get({ plain: true });
   },
 
   async createCourseCat(data) {
@@ -1872,5 +1940,29 @@ const coursesService = {
     });
   },
 };
+
+let warnedMissingCoursePageSettingsTable = false;
+
+function isMissingCoursePageSettingsTableError(err) {
+  if (!err || err.name !== "SequelizeDatabaseError") return false;
+  const code = err.parent?.code;
+  const msg = String(err.parent?.sqlMessage || err.message || "");
+  if (code === "ER_NO_SUCH_TABLE") return /sc_course_page_settings/i.test(msg);
+  return /sc_course_page_settings/i.test(msg) && /doesn't exist/i.test(msg);
+}
+
+function mapCoursePageSettingsDbError(err) {
+  if (!isMissingCoursePageSettingsTableError(err)) return err;
+  if (!warnedMissingCoursePageSettingsTable) {
+    warnedMissingCoursePageSettingsTable = true;
+    logger.warn(
+      "[course-service] Table sc_course_page_settings is missing. Run `npm run ensure-course-page-settings` from study-cafe-api, then restart.",
+    );
+  }
+  return new AppError(
+    "Course page settings storage is not initialized. Ask ops to run: npm run ensure-course-page-settings",
+    503,
+  );
+}
 
 module.exports = coursesService;

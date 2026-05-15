@@ -1,3 +1,4 @@
+const fs = require('fs');
 const platformService = require('../services/platform.service');
 const membershipUpgradeService = require('../services/membership-upgrade.service');
 const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, sendPaginated, logger } = require('../../../../shared');
@@ -385,6 +386,10 @@ const putCmsPageBySlug = asyncHandler(async (req, res) => {
 
 const uploadImage = asyncHandler(async (req, res) => {
   if (!req.file || !req.file.filename) throw new AppError('No file uploaded', 400);
+  if (!req.file.path || !fs.existsSync(req.file.path)) {
+    logger.error(`[uploadImage] file missing on disk after multer — path: ${req.file.path}`);
+    throw new AppError('Upload failed: file was not written to storage', 500);
+  }
   logger.info(`[uploadImage] saved → path: ${req.file.path}, size: ${req.file.size} bytes`);
   const rel = relativePathFromFile(uploadsDir, req.file.path);
   const url = publicMediaUrl(rel, 'platform');
@@ -393,6 +398,10 @@ const uploadImage = asyncHandler(async (req, res) => {
 
 const uploadFile = asyncHandler(async (req, res) => {
   if (!req.file || !req.file.filename) throw new AppError('No file uploaded', 400);
+  if (!req.file.path || !fs.existsSync(req.file.path)) {
+    logger.error(`[uploadFile] file missing on disk after multer — path: ${req.file.path}`);
+    throw new AppError('Upload failed: file was not written to storage', 500);
+  }
   logger.info(`[uploadFile] saved → path: ${req.file.path}, size: ${req.file.size} bytes`);
   const rel = relativePathFromFile(uploadsDir, req.file.path);
   const url = publicMediaUrl(rel, 'platform');

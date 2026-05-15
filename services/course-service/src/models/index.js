@@ -71,9 +71,12 @@ Object.keys(models).forEach((modelName) => {
 // Extra specific associations
 Batch.hasMany(BatchEnrollment, { foreignKey: 'batch_id', as: 'enrollments' });
 
+const { ensureCoursePageSettingsTable } = require('../db/ensureCoursePageSettingsTable');
+
 async function connect() {
   try {
     await sequelize.authenticate();
+    await ensureCoursePageSettingsTable(sequelize);
   } catch (err) {
     console.error('Sequelize auth failed:', err.message);
     throw err;

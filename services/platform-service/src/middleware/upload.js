@@ -6,6 +6,9 @@ const { getYearMonthParts } = require('../../../../shared/mediaUrl');
 const { useHostPersistentPath, platformUploadsPath } = require('../../../../shared/persistentDataRoot');
 
 // Precedence: UPLOADS_DIR (override) → /var/www/.../study-cafe-media/uploads in production → <repo>/uploads in dev
+// The URL returned to clients (see shared/mediaUrl publicMediaUrl) must be served from the same
+// tree nginx/CDN exposes (e.g. ASSETS_BASE_URL + /uploads/). If files are missing on disk, verify
+// UPLOADS_DIR on this service matches that static root (shared volume in Docker, etc.).
 function resolveUploadsDir() {
   if (process.env.UPLOADS_DIR) {
     return path.resolve(process.env.UPLOADS_DIR);

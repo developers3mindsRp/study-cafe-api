@@ -1,3 +1,13 @@
+const path = require('path');
+try {
+  require('dotenv').config({
+    path: path.join(__dirname, '../../../.env'),
+    override: true,
+  });
+} catch (_) {
+  /* optional */
+}
+
 const config = require('./config');
 const { createApp } = require('./app');
 const { connect } = require('./models');

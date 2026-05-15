@@ -710,7 +710,7 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
   if (typeUpper === 'COURSE') {
     resolvedBatchId = await fetchPurchaseBatchId(entityId);
   }
-
+                          
   try {
     if (grandTotal <= 0) {
       const contact = await fetchUserContact(userId);
