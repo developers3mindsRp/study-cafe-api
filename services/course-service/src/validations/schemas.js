@@ -209,7 +209,7 @@ const listBatchesQuery = {
     query: Joi.object({
         course_id: Joi.number().integer().positive().optional(),
         page: Joi.number().integer().min(1).optional(),
-        limit: Joi.number().integer().min(1).max(50).optional(),
+        limit: Joi.number().integer().min(1).max(100).optional(),
     }),
 };
 

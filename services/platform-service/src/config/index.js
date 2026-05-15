@@ -61,6 +61,7 @@ module.exports = {
   },
 
   internalApiKey: optional('INTERNAL_API_KEY', ''),
+  orderServiceUrl: optional('ORDER_SERVICE_URL', 'http://localhost:4003'),
 
   smtp: {
     host: optional('SMTP_HOST', ''),

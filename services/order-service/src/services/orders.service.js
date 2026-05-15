@@ -2321,4 +2321,23 @@ module.exports = {
   updateOrder,
   deleteOrder,
   refundOrder,
+  validateCouponForPreview,
 };
+
+/**
+ * Validate a coupon for preview / summary purposes only — no usage recorded.
+ * Used by platform-service upgrade-summary endpoint.
+ * Returns { couponCode, discountAmount, afterDiscount } or null.
+ */
+async function validateCouponForPreview(userId, couponCode, amount, type) {
+  const typeUpper = normalizeOrderType(type);
+  const result = await validateCouponForOrder(userId, couponCode, amount, typeUpper);
+  if (!result) return null;
+  const { coupon, discountAmount, finalAmount } = result;
+  const plain = coupon.get ? coupon.get({ plain: true }) : coupon;
+  return {
+    couponCode: plain.code,
+    discountAmount: Number(discountAmount.toFixed(2)),
+    afterDiscount: Number(finalAmount.toFixed(2)),
+  };
+}

@@ -178,15 +178,16 @@ const listBatches = asyncHandler(async (req, res) => {
       },
     })
   ).data;
+  // courseClient interceptor spreads meta fields to root: { data, total, page, limit, ... }
   sendPaginated(res, {
-    data: payload.data,
+    data: Array.isArray(payload.data) ? payload.data : [],
     meta: {
-      total: payload.total,
-      page: payload.page,
-      limit: payload.limit,
-      totalPages: payload.totalPages,
-      hasNextPage: payload.hasNextPage,
-      hasPreviousPage: payload.hasPreviousPage,
+      total: payload.total ?? 0,
+      page: payload.page ?? 1,
+      limit: payload.limit ?? 10,
+      totalPages: payload.totalPages ?? 0,
+      hasNextPage: payload.hasNextPage ?? false,
+      hasPreviousPage: payload.hasPreviousPage ?? false,
     },
   });
 });
@@ -312,6 +313,83 @@ const addBatchEnrollment = asyncHandler(async (req, res) => {
   const { data } = await courseClient.post(`/internal/batches/${req.params.id}/enrollments`, req.body);
   await adminLogsService.logAction(adminId, 'ADD_BATCH_ENROLLMENT', 'batch_enrollment', String(data.id), { batchId: req.params.id, userId: req.body.user_id }, req.ip);
   sendCreated(res, data);
+});
+
+const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const batchId = req.params.id;
+  const emails = Array.isArray(req.body.emails) ? req.body.emails : [];
+
+  if (emails.length === 0) {
+    return sendSuccess(res, []);
+  }
+
+  // Resolve emails → user ids via auth service
+  const { data: users } = await authClient.post('/internal/users/by-emails', { emails });
+  const userMap = new Map((Array.isArray(users) ? users : []).map((u) => [u.email.toLowerCase(), u]));
+
+  const results = await Promise.all(
+    emails.map(async (email) => {
+      const normalized = email.toLowerCase();
+      const user = userMap.get(normalized);
+      if (!user) {
+        return { email: normalized, status: 'user_not_found' };
+      }
+      try {
+        const { data } = await courseClient.post(`/internal/batches/${batchId}/enrollments`, { user_id: user.id });
+        const status = data.created === false ? 'already_enrolled' : 'enrolled';
+        if (status === 'enrolled') {
+          await adminLogsService.logAction(adminId, 'ADD_BATCH_ENROLLMENT', 'batch_enrollment', String(data.id), { batchId, userId: user.id }, req.ip);
+        }
+        return { email: normalized, status };
+      } catch (err) {
+        return { email: normalized, status: 'error', message: err?.response?.data?.error || err.message };
+      }
+    })
+  );
+
+  sendSuccess(res, results);
+});
+
+const bulkGrantMembershipByEmails = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { emails, membershipType, startsAt, expiresAt } = req.body;
+
+  if (!Array.isArray(emails) || emails.length === 0) {
+    return sendSuccess(res, []);
+  }
+  if (!membershipType || !startsAt || !expiresAt) {
+    throw new AppError('membershipType, startsAt and expiresAt are required', 400);
+  }
+
+  // Resolve emails → user ids
+  const { data: users } = await authClient.post('/internal/users/by-emails', { emails });
+  const userMap = new Map((Array.isArray(users) ? users : []).map((u) => [u.email.toLowerCase(), u]));
+
+  const results = await Promise.all(
+    emails.map(async (email) => {
+      const normalized = email.toLowerCase();
+      const user = userMap.get(normalized);
+      if (!user) {
+        return { email: normalized, status: 'user_not_found' };
+      }
+      try {
+        await authClient.post('/access/grant-membership', {
+          userId: user.id,
+          membershipType,
+          startsAt,
+          expiresAt,
+          orderId: null,
+        });
+        await adminLogsService.logAction(adminId, 'BULK_GRANT_MEMBERSHIP', 'user_membership', String(user.id), { membershipType, startsAt, expiresAt }, req.ip);
+        return { email: normalized, status: 'granted' };
+      } catch (err) {
+        return { email: normalized, status: 'error', message: err?.response?.data?.error || err.message };
+      }
+    })
+  );
+
+  sendSuccess(res, results);
 });
 
 const removeBatchEnrollment = asyncHandler(async (req, res) => {
@@ -565,6 +643,7 @@ const platform = {
   putNewsletterTemplate: platformProxy((c, req) => c.put(`/internal/platform/newsletter/templates/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
   deleteNewsletterTemplate: platformProxy((c, req) => c.delete(`/internal/platform/newsletter/templates/${req.params.id}`).then(() => ({ status: 204 }))),
   sendNewsletter: platformProxy((c, req) => c.post('/internal/platform/newsletter/send', req.body).then((r) => ({ data: r.data }))),
+  syncMembershipSubscribers: platformProxy((c, req) => c.post('/internal/platform/newsletter/sync-members', req.body).then((r) => ({ data: r.data }))),
   getBanners: platformProxy((c) => c.get('/internal/platform/banners').then((r) => ({ data: r.data }))),
   getBanner: platformProxy((c, req) => c.get(`/internal/platform/banners/${req.params.id}`).then((r) => ({ data: r.data }))),
   postBanner: platformProxy((c, req) => c.post('/internal/platform/banners', req.body).then((r) => ({ data: r.data, status: 201 }))),
@@ -743,6 +822,8 @@ module.exports = {
   deleteBatch,
   getBatchEnrollments,
   addBatchEnrollment,
+  bulkAddBatchEnrollmentByEmails,
+  bulkGrantMembershipByEmails,
   removeBatchEnrollment,
   getUserEnrollments,
   getUserMemberships,

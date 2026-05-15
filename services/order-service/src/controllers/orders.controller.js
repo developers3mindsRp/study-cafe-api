@@ -151,6 +151,15 @@ const getUserPurchasesInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, rows);
 });
 
+const validateCouponPreviewInternal = asyncHandler(async (req, res) => {
+  const { userId, couponCode, amount, type } = req.body;
+  if (!couponCode || amount == null || !type) {
+    throw new AppError('couponCode, amount and type are required', 400);
+  }
+  const result = await ordersService.validateCouponForPreview(userId, couponCode, amount, type);
+  sendSuccess(res, result);
+});
+
 module.exports = {
   create,
   verify,
@@ -174,4 +183,5 @@ module.exports = {
   deleteOrder,
   refundOrder,
   getUserPurchasesInternal,
+  validateCouponPreviewInternal,
 };

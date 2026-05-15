@@ -1,8 +1,39 @@
+const axios = require('axios');
 const { Op } = require('sequelize');
 const { PremiumPlan, UserMembership } = require('../models');
 const { AppError, computeMembershipUpgradeCredit } = require('../../../../shared');
+const config = require('../config');
 
 const GST_RATE = 0.18;
+
+/**
+ * Call order-service to validate a coupon without recording usage.
+ * Returns { couponCode, discountAmount, afterDiscount } or null if no coupon given.
+ * Throws AppError (forwarded from order-service) on invalid coupon.
+ */
+async function validateCouponPreview(userId, couponCode, amount) {
+  if (!couponCode || !String(couponCode).trim()) return null;
+  try {
+    const { data: body } = await axios.post(
+      `${config.orderServiceUrl}/internal/coupons/validate-preview`,
+      { userId, couponCode, amount, type: 'MEMBERSHIP' },
+      {
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        timeout: 5000,
+        validateStatus: () => true,
+      }
+    );
+    const payload = body?.data !== undefined ? body.data : body;
+    if (body?.success === false || body?.error) {
+      const msg = body?.message || body?.error || 'Coupon validation failed';
+      throw new AppError(msg, 400);
+    }
+    return payload;
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    throw new AppError('Could not validate coupon at this time', 502);
+  }
+}
 
 /**
  * Calculate the pro-rated upgrade pricing for a user moving from their current
@@ -12,7 +43,7 @@ const GST_RATE = 0.18;
  * @param {number|string} targetPlanId
  * @returns {object} Pricing breakdown
  */
-async function calculateMembershipUpgrade(userId, targetPlanId) {
+async function calculateMembershipUpgrade(userId, targetPlanId, couponCode = null) {
   if (!targetPlanId) throw new AppError('targetPlanId is required', 400);
 
   // Load target plan
@@ -37,8 +68,11 @@ async function calculateMembershipUpgrade(userId, targetPlanId) {
 
   // No active membership — new purchase at full price
   if (!activeMembership) {
-    const gstAmount = Number((targetPrice * GST_RATE).toFixed(2));
-    const grandTotal = Number((targetPrice + gstAmount).toFixed(2));
+    const couponResult = await validateCouponPreview(userId, couponCode, targetPrice);
+    const couponDiscount = couponResult ? couponResult.discountAmount : 0;
+    const afterCoupon = couponResult ? couponResult.afterDiscount : targetPrice;
+    const gstAmount = Number((afterCoupon * GST_RATE).toFixed(2));
+    const grandTotal = Number((afterCoupon + gstAmount).toFixed(2));
     return {
       canUpgrade: true,
       currentPlan: null,
@@ -47,10 +81,14 @@ async function calculateMembershipUpgrade(userId, targetPlanId) {
         name: targetPlan.name,
         price: targetPrice,
       },
+      coupon: couponResult
+        ? { code: couponResult.couponCode, discountAmount: couponDiscount }
+        : null,
       pricing: {
         targetAmount: targetPrice,
         deductAmount: 0,
-        finalAmount: targetPrice,
+        couponDiscount,
+        finalAmount: afterCoupon,
         gstAmount,
         grandTotal,
       },
@@ -120,9 +158,15 @@ async function calculateMembershipUpgrade(userId, targetPlanId) {
     remainingCalendarDays = calDays;
   }
 
-  const finalAmount = Number(Math.max(0, targetPrice - deductAmount).toFixed(2));
-  const gstAmount = Number((finalAmount * GST_RATE).toFixed(2));
-  const grandTotal = Number((finalAmount + gstAmount).toFixed(2));
+  const subtotalAfterUpgrade = Number(Math.max(0, targetPrice - deductAmount).toFixed(2));
+
+  // Apply coupon on the post-upgrade subtotal
+  const couponResult = await validateCouponPreview(userId, couponCode, subtotalAfterUpgrade);
+  const couponDiscount = couponResult ? couponResult.discountAmount : 0;
+  const afterCoupon = couponResult ? couponResult.afterDiscount : subtotalAfterUpgrade;
+
+  const gstAmount = Number((afterCoupon * GST_RATE).toFixed(2));
+  const grandTotal = Number((afterCoupon + gstAmount).toFixed(2));
 
   return {
     canUpgrade: true,
@@ -142,10 +186,14 @@ async function calculateMembershipUpgrade(userId, targetPlanId) {
       name: targetPlan.name,
       price: targetPrice,
     },
+    coupon: couponResult
+      ? { code: couponResult.couponCode, discountAmount: couponDiscount }
+      : null,
     pricing: {
       targetAmount: targetPrice,
       deductAmount,
-      finalAmount,
+      couponDiscount,
+      finalAmount: afterCoupon,
       gstAmount,
       grandTotal,
     },

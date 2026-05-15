@@ -53,9 +53,10 @@ function register(router) {
   router.delete('/admin/recordings/:id', requireAdmin, controller.deleteRecording);
   router.delete('/admin/sessions/:id', requireAdmin, controller.deleteSession);
   router.delete('/admin/batches/:id', requireAdmin, controller.deleteBatch);
-  router.get('/admin/batches', requireAdmin, controller.getBatches);
   router.get('/admin/batches/:id/enrollments', requireAdmin, controller.getBatchEnrollments);
   router.post('/admin/batches/:id/enrollments', requireAdmin, controller.addBatchEnrollment);
+  router.post('/admin/batches/:id/enrollments/bulk', requireAdmin, controller.bulkAddBatchEnrollmentByEmails);
+  router.post('/admin/memberships/bulk', requireAdmin, controller.bulkGrantMembershipByEmails);
   router.delete('/admin/batch-enrollments/:id', requireAdmin, controller.removeBatchEnrollment);
   router.get('/admin/users/:id/enrollments', requireAdmin, controller.getUserEnrollments);
   router.get('/admin/users/:id/memberships', requireAdmin, controller.getUserMemberships);
@@ -149,6 +150,7 @@ function register(router) {
   router.put('/admin/platform/newsletter/templates/:id', requireAdmin, p.putNewsletterTemplate);
   router.delete('/admin/platform/newsletter/templates/:id', requireAdmin, p.deleteNewsletterTemplate);
   router.post('/admin/platform/newsletter/send', requireAdmin, p.sendNewsletter);
+  router.post('/admin/platform/newsletter/sync-members', requireAdmin, p.syncMembershipSubscribers);
 
   // ── Banners ─────────────────────────────────────────────────────────
   router.get('/admin/platform/banners', requireAdmin, p.getBanners);

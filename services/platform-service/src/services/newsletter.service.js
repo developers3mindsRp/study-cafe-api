@@ -206,6 +206,66 @@ async function sendNewsletter({ template_id, custom_subject, custom_content, sen
   return { recipients_count: recipients.length, sent_count: sent, failed_count: failed };
 }
 
+// ── Sync membership members ──────────────────────────────────────────
+
+async function syncMembershipSubscribers(planSlugs) {
+  const { QueryTypes } = require('sequelize');
+  const { sequelize } = require('../models');
+
+  // Build a WHERE clause for the requested plan slugs
+  const slugPlaceholders = planSlugs.map(() => '?').join(', ');
+  const now = new Date();
+
+  logger.info(`[newsletter] sync-members start: plans=${JSON.stringify(planSlugs)} slugPlaceholders=${slugPlaceholders}`);
+
+  let rows;
+  try {
+    rows = await sequelize.query(
+      `SELECT DISTINCT u.email
+       FROM user_memberships um
+       JOIN users u ON u.id = um.user_id
+       WHERE um.membership_type IN (${slugPlaceholders})
+         AND um.expires_at > ?
+         AND u.email IS NOT NULL
+         AND u.email != ''`,
+      { replacements: [...planSlugs, now], type: QueryTypes.SELECT }
+    );
+    logger.info(`[newsletter] sync-members query returned ${rows.length} rows`);
+  } catch (err) {
+    logger.error(`[newsletter] sync-members SQL error: ${err.message}`, { stack: err.stack, sql: err.sql });
+    throw err;
+  }
+
+  const emails = Array.isArray(rows) ? rows.map((r) => r.email).filter(Boolean) : [];
+
+  if (emails.length === 0) {
+    return { synced_count: 0, already_subscribed_count: 0 };
+  }
+
+  const normalizedEmails = [...new Set(emails.map((e) => String(e).trim().toLowerCase()))];
+
+  // Fetch all already-subscribed emails in one query
+  const existing = await NewsletterSubscriber.findAll({
+    where: { email: { [Op.in]: normalizedEmails } },
+    attributes: ['email'],
+  });
+  const existingSet = new Set(existing.map((r) => r.email));
+
+  const toInsert = normalizedEmails
+    .filter((e) => !existingSet.has(e))
+    .map((e) => ({ email: e, is_verified: true, unsubscribe_token: randomToken() }));
+
+  if (toInsert.length > 0) {
+    await NewsletterSubscriber.bulkCreate(toInsert, { ignoreDuplicates: true });
+  }
+
+  const syncedCount = toInsert.length;
+  const alreadyCount = normalizedEmails.length - syncedCount;
+
+  logger.info(`[newsletter] sync-members: synced=${syncedCount} already=${alreadyCount} plans=${planSlugs.join(',')}`);
+  return { synced_count: syncedCount, already_subscribed_count: alreadyCount };
+}
+
 module.exports = {
   subscribe,
   unsubscribeByToken,
@@ -216,4 +276,5 @@ module.exports = {
   updateTemplate,
   deleteTemplate,
   sendNewsletter,
+  syncMembershipSubscribers,
 };

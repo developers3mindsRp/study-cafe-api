@@ -13,6 +13,15 @@ function register(router) {
   router.post('/access/grant-membership', requireGrantAuth, validate(schemas.grantMembership), accessController.grantMembership);
   router.post('/access/revoke-membership', requireGrantAuth, validate(schemas.revokeMembership), accessController.revokeMembership);
 
+  router.post('/internal/users/by-emails', requireGrantAuth, asyncHandler(async (req, res) => {
+    const emails = Array.isArray(req.body.emails) ? req.body.emails : [];
+    const rows = await User.findAll({
+      where: { email: emails },
+      attributes: ['id', 'name', 'email'],
+    });
+    sendSuccess(res, rows.map((r) => r.get({ plain: true })));
+  }));
+
   router.get('/internal/users/by-referral-code/:code', requireGrantAuth, asyncHandler(async (req, res) => {
     const user = await User.findOne({
       where: { referral_code: req.params.code },
