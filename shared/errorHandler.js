@@ -63,14 +63,22 @@ function errorHandler(err, req, res, _next) {
         return res.status(401).json({ success: false, error: 'Invalid or expired token' });
     }
 
-    // 7. Axios errors (admin-service proxy failures)
+    // 7. Axios errors (service-to-service HTTP client failures)
     if (err.isAxiosError) {
         const status = err.response?.status || 502;
         const upstream = err.response?.data;
-        const message =
+        let message =
             (typeof upstream === 'object' && upstream?.error) ||
+            (typeof upstream === 'object' && upstream?.message) ||
             (typeof upstream === 'string' && upstream) ||
-            'Upstream service error';
+            null;
+        if (!message && (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND')) {
+            const target = err.config?.baseURL ? `${err.config.baseURL}${err.config.url || ''}` : '';
+            message = `Upstream unreachable (${err.code}${target ? `: ${target}` : ''}). Is the service running and URL correct?`;
+        }
+        if (!message) {
+            message = err.message || 'Upstream service error';
+        }
         return res.status(status).json({ success: false, error: message });
     }
 

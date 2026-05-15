@@ -529,26 +529,41 @@ const coursesService = {
         "language",
         "curriculum",
       ],
-      include: [
-        {
-          model: CourseCat,
-          attributes: ["id", "name", "slug"],
-          through: { attributes: [] },
-          required: false,
-        },
-      ],
     });
+
+    const courseIds = rows.map((r) => Number(r.id)).filter((id) => Number.isFinite(id) && id > 0);
+    const catsByCourse = new Map();
+    if (courseIds.length > 0) {
+      const links = await CourseCategory.findAll({
+        where: { course_id: { [Op.in]: courseIds } },
+        attributes: ["course_id", "course_cat_id"],
+        raw: true,
+      });
+      const catIds = [...new Set(links.map((l) => Number(l.course_cat_id)).filter((n) => n > 0))];
+      let catRows = [];
+      if (catIds.length > 0) {
+        catRows = await CourseCat.findAll({
+          where: { id: { [Op.in]: catIds } },
+          attributes: ["id", "name", "slug"],
+          raw: true,
+        });
+      }
+      const catById = new Map(catRows.map((c) => [Number(c.id), c]));
+      for (const l of links) {
+        const cid = Number(l.course_id);
+        const cat = catById.get(Number(l.course_cat_id));
+        if (!cat) continue;
+        const entry = { id: cat.id, name: cat.name, slug: cat.slug ?? null };
+        if (!catsByCourse.has(cid)) catsByCourse.set(cid, []);
+        catsByCourse.get(cid).push(entry);
+      }
+    }
 
     return rows.map((r) => {
       const d = r.get({ plain: true });
       d.language = normalizeLanguage(d.language);
-      const cats = d.CourseCats ?? [];
-      delete d.CourseCats;
-      d.categories = cats.map((c) => ({
-        id: c.id,
-        name: c.name,
-        slug: c.slug ?? null,
-      }));
+      const cats = catsByCourse.get(Number(d.id)) || [];
+      d.categories = cats;
       d.course_cat_ids = cats.map((c) => c.id);
       return withListingDuration(d);
     });

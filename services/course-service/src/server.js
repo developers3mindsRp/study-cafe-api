@@ -2,7 +2,8 @@ const path = require('path');
 try {
   require('dotenv').config({
     path: path.join(__dirname, '../../../.env'),
-    override: true,
+    /** Never replace vars already set by the shell / npm scripts (e.g. PORT=4002 from dev:course). */
+    override: false,
   });
 } catch (_) {
   /* optional */
