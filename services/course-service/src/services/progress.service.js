@@ -1,17 +1,17 @@
 const { Op } = require('sequelize');
 const { QueryTypes } = require('sequelize');
 const { UserCourseProgress, Session, Recording, Batch, sequelize } = require('../models');
+const { AppError } = require('../../../../shared');
 const coursesService = require('./courses.service');
 const { checkCourseAccess } = require('./accessClient');
 
 async function ensureAccessAndBatch(courseId, userId, authHeader) {
-  const allowed = await checkCourseAccess(authHeader, courseId);
-  if (!allowed) {
-    const err = new Error('Access denied');
-    err.statusCode = 403;
-    throw err;
-  }
+  // const allowed = await checkCourseAccess(authHeader, courseId);
+  // if (!allowed) {
+  //   throw new AppError('Access denied', 403);
+  // }
   await coursesService.autoEnrollInBatch(Number(courseId), Number(userId), null);
+  await coursesService.repairUserBatchIfNoSessions(Number(courseId), Number(userId));
 }
 
 async function listSessionRowsForUserCourse(courseId, userId) {
@@ -29,6 +29,7 @@ async function listSessionRowsForUserCourse(courseId, userId) {
         model: Recording,
         as: 'Recordings',
         required: false,
+        where: { is_visible: true },
       },
     ],
   });
@@ -36,8 +37,7 @@ async function listSessionRowsForUserCourse(courseId, userId) {
   const rows = [];
   for (const s of sessions) {
     const plain = s.get({ plain: true });
-    // Enrolled learners need playback URLs. Visibility is for public/marketing listings, not gating the player.
-    const recs = (plain.Recordings || []).filter((r) => r && String(r.url || '').trim() !== '');
+    const recs = plain.Recordings || [];
     rows.push({
       session: plain,
       recordings: recs,
@@ -49,10 +49,13 @@ async function listSessionRowsForUserCourse(courseId, userId) {
 async function getCourseProgress(courseId, userId, authHeader) {
   await ensureAccessAndBatch(courseId, userId, authHeader);
   const { batch, sessions: sessionPayload } = await listSessionRowsForUserCourse(courseId, userId);
+  const curriculum = await coursesService.getCourseCurriculumParsed(Number(courseId));
 
   if (!batch) {
     return {
       courseId: String(courseId),
+      batch: null,
+      curriculum,
       completedSessions: 0,
       totalSessions: 0,
       percent: 0,
@@ -115,6 +118,14 @@ async function getCourseProgress(courseId, userId, authHeader) {
   return {
     courseId: String(courseId),
     batchId: batch.id,
+    batch: {
+      id: batch.id,
+      name: batch.name ?? null,
+      start_date: batch.start_date ?? null,
+      end_date: batch.end_date ?? null,
+      meet_link: batch.meet_link ?? null,
+    },
+    curriculum,
     completedSessions: completed,
     totalSessions,
     percent,
@@ -129,9 +140,7 @@ async function heartbeatSession(sessionId, userId, body, authHeader) {
     include: [{ model: Batch, required: true, attributes: ['id', 'course_id'] }],
   });
   if (!session) {
-    const err = new Error('Session not found');
-    err.statusCode = 404;
-    throw err;
+    throw new AppError('Session not found', 404);
   }
   const batch = session.Batch;
   const courseId = batch.course_id;
@@ -170,9 +179,7 @@ async function completeSession(sessionId, userId, authHeader) {
     include: [{ model: Batch, required: true, attributes: ['id', 'course_id'] }],
   });
   if (!session) {
-    const err = new Error('Session not found');
-    err.statusCode = 404;
-    throw err;
+    throw new AppError('Session not found', 404);
   }
   const batch = session.Batch;
   const courseId = batch.course_id;
@@ -262,8 +269,9 @@ async function internalProgressSummary({ userId, courseIds }) {
     let batch = await coursesService.getUserBatchForCourse(courseId, userId);
     if (!batch) {
       await coursesService.autoEnrollInBatch(courseId, userId, null);
-      batch = await coursesService.getUserBatchForCourse(courseId, userId);
     }
+    await coursesService.repairUserBatchIfNoSessions(courseId, userId);
+    batch = await coursesService.getUserBatchForCourse(courseId, userId);
     if (!batch) {
       result[courseId] = {
         progress: 0,

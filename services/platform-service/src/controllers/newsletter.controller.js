@@ -58,6 +58,17 @@ const sendNewsletter = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+// ── Admin: Sync membership members ────────────────────────────────
+
+const syncMembershipSubscribers = asyncHandler(async (req, res) => {
+  const { plan_slugs } = req.body;
+  if (!Array.isArray(plan_slugs) || plan_slugs.length === 0) {
+    throw new AppError('plan_slugs must be a non-empty array', 400);
+  }
+  const data = await newsletterService.syncMembershipSubscribers(plan_slugs);
+  sendSuccess(res, data);
+});
+
 module.exports = {
   subscribe,
   unsubscribe,
@@ -68,4 +79,5 @@ module.exports = {
   updateTemplate,
   deleteTemplate,
   sendNewsletter,
+  syncMembershipSubscribers,
 };

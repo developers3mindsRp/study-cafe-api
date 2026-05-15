@@ -18,6 +18,7 @@ function register(router) {
   router.delete('/internal/platform/newsletter/templates/:id', internalAuth, validate(schemas.idParam), controller.deleteTemplate);
 
   router.post('/internal/platform/newsletter/send', internalAuth, validate(schemas.sendNewsletter), controller.sendNewsletter);
+  router.post('/internal/platform/newsletter/sync-members', internalAuth, controller.syncMembershipSubscribers);
 }
 
 module.exports = { register };
