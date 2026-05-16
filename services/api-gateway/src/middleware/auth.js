@@ -1,6 +1,12 @@
 const axios = require('axios');
 const config = require('../config');
 
+/** Skip JWT for CORS preflight — browser sends OPTIONS without Authorization. */
+function validateJWTUnlessOptions(req, res, next) {
+  if (req.method === 'OPTIONS') return next();
+  return validateJWT(req, res, next);
+}
+
 async function validateJWT(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith('Bearer ')) {
@@ -73,6 +79,7 @@ async function requireCourseAccess(req, res, next) {
 
 module.exports = {
   validateJWT,
+  validateJWTUnlessOptions,
   optionalJWT,
   requireCourseAccess,
 };

@@ -4,6 +4,7 @@ const orderClient = require('../clients/orderClient');
 const platformClient = require('../clients/platformClient');
 const authClient = require('../clients/authClient');
 const adminLogsService = require('../services/adminLogs.service');
+const userImportService = require('../services/userImport.service');
 const paymentConfigService = require('../services/paymentConfig.service');
 const paymentLinkService = require('../services/paymentLink.service');
 const { sequelize, Coupon } = require('../models');
@@ -390,6 +391,31 @@ const bulkGrantMembershipByEmails = asyncHandler(async (req, res) => {
   );
 
   sendSuccess(res, results);
+});
+
+const importUsersFromCsv = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { rows, startsAt, expiresAt } = req.body;
+
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new AppError('rows array is required', 400);
+  }
+  if (rows.length > userImportService.MAX_ROWS) {
+    throw new AppError(`Maximum ${userImportService.MAX_ROWS} rows per import`, 400);
+  }
+
+  try {
+    const summary = await userImportService.importUsers({
+      rows,
+      startsAt: startsAt || null,
+      expiresAt: expiresAt || null,
+      adminId,
+      reqIp: req.ip,
+    });
+    sendSuccess(res, summary);
+  } catch (err) {
+    throw new AppError(err.message || 'Import failed', 400);
+  }
 });
 
 const removeBatchEnrollment = asyncHandler(async (req, res) => {
@@ -824,6 +850,7 @@ module.exports = {
   addBatchEnrollment,
   bulkAddBatchEnrollmentByEmails,
   bulkGrantMembershipByEmails,
+  importUsersFromCsv,
   removeBatchEnrollment,
   getUserEnrollments,
   getUserMemberships,

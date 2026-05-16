@@ -1,6 +1,6 @@
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const config = require('../config');
-const { validateJWT, optionalJWT, requireCourseAccess } = require('../middleware');
+const { validateJWT, validateJWTUnlessOptions, optionalJWT, requireCourseAccess } = require('../middleware');
 
 function register(app) {
   const authProxy = createProxyMiddleware({
@@ -46,6 +46,22 @@ function register(app) {
     target: config.adminServiceUrl,
     changeOrigin: true,
     pathRewrite: { '^/api/admin': '/admin' },
+    timeout: 120000,
+    proxyTimeout: 120000,
+    onError(err, req, res) {
+      const code = err?.code || err?.errno;
+      const msg = err?.message || String(err);
+      console.error('[api-gateway] admin proxy error:', code || msg, '→', config.adminServiceUrl, req.url);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            success: false,
+            error: `Admin service unreachable: ${code || msg}. Is admin-service running on ${config.adminServiceUrl}?`,
+          }),
+        );
+      }
+    },
   });
   const platformProxy = createProxyMiddleware({
     target: config.platformServiceUrl,
@@ -157,7 +173,7 @@ function register(app) {
     if (req.user?.referral_code) req.headers['x-referral-code'] = req.user.referral_code;
     next();
   }, affiliateProxy);
-  app.use('/api/admin', validateJWT, (req, _res, next) => {
+  app.use('/api/admin', validateJWTUnlessOptions, (req, _res, next) => {
     const uid = req.user?.userId ?? req.user?.id;
     if (uid != null && uid !== '') req.headers['x-user-id'] = String(uid);
     if (req.user?.role) req.headers['x-user-role'] = req.user.role;
