@@ -1461,8 +1461,17 @@ async function listAllOrders({ limit = 100, offset = 0, search = '', sortBy = 'c
 
   if (dateFrom || dateTo) {
     where.created_at = {};
-    if (dateFrom) where.created_at[Op.gte] = new Date(dateFrom);
-    if (dateTo) where.created_at[Op.lte] = new Date(dateTo);
+    if (dateFrom) {
+      const start = new Date(dateFrom);
+      if (!Number.isNaN(start.getTime())) where.created_at[Op.gte] = start;
+    }
+    if (dateTo) {
+      const end = new Date(dateTo);
+      if (!Number.isNaN(end.getTime())) {
+        end.setHours(23, 59, 59, 999);
+        where.created_at[Op.lte] = end;
+      }
+    }
   }
 
   if (courseId) {

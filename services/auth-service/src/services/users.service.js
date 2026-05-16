@@ -10,8 +10,12 @@ async function list(query = {}) {
         limit = 10,
         search,
         role_id,
+        role,
         status,
         membership,
+        email,
+        joined_from,
+        joined_to,
         sortBy = 'id',
         sortOrder = 'DESC',
     } = query;
@@ -27,9 +31,34 @@ async function list(query = {}) {
         ];
     }
 
-    if (role_id) where.role_id = role_id;
+    if (email) {
+        where.email = { [Op.like]: `%${email}%` };
+    }
+
+    if (role_id) {
+        where.role_id = role_id;
+    } else if (role) {
+        const roleRecord = await Role.findOne({ where: { name: role } });
+        where.role_id = roleRecord ? roleRecord.id : -1;
+    }
+
     if (status) where.status = status;
     if (membership !== undefined && membership !== '') where.membership = membership;
+
+    if (joined_from || joined_to) {
+        where.created_at = {};
+        if (joined_from) {
+            const start = new Date(joined_from);
+            if (!Number.isNaN(start.getTime())) where.created_at[Op.gte] = start;
+        }
+        if (joined_to) {
+            const end = new Date(joined_to);
+            if (!Number.isNaN(end.getTime())) {
+                end.setHours(23, 59, 59, 999);
+                where.created_at[Op.lte] = end;
+            }
+        }
+    }
 
     const orderDir = ['ASC', 'DESC'].includes(String(sortOrder).toUpperCase())
         ? String(sortOrder).toUpperCase()
