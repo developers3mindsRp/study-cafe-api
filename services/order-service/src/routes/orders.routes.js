@@ -22,6 +22,8 @@ function register(router) {
   router.post('/order/apply-coupon', optionalUserId, validate(schemas.applyCoupon), ordersController.applyCoupon);
   router.get('/orders/:orderId/invoice', requireUserId, validate(schemas.invoiceParam), ordersController.getInvoice);
   router.get('/internal/orders', internalAuth, ordersController.listAllInternal);
+  router.get('/internal/coupon-usages', internalAuth, ordersController.listCouponUsagesInternal);
+  router.get('/internal/coupon-usages/summary', internalAuth, ordersController.getCouponUsageSummaryInternal);
   router.get('/internal/orders/:orderId', internalAuth, ordersController.getByOrderIdInternal);
   router.post('/internal/orders', internalAuth, ordersController.createManualOrder);
   router.put('/internal/orders/:id', internalAuth, ordersController.updateOrder);

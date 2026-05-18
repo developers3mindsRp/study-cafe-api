@@ -1498,13 +1498,22 @@ function pickRandom(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+function parseArticleCitation(citationRaw) {
+  if (!citationRaw) return null;
+  try {
+    return typeof citationRaw === 'object' ? citationRaw : JSON.parse(citationRaw);
+  } catch (e) {
+    return { case_citation: String(citationRaw) };
+  }
+}
+
 async function getArticleBySlugPublic(slug, viewer = null) {
   const row = await Article.findOne({
     where: { slug, status: 'publish' },
     attributes: [
       'id', 'title', 'slug', 'excerpt', 'content', 'sub_heading', 'thumbnail_url', 'author_id',
       'published_at', 'meta_title', 'meta_description', 'created_at', 'updated_at',
-      'rel_download_url', 'upload_url', 'blog_access_tier',
+      'rel_download_url', 'upload_url', 'blog_access_tier', 'citation',
     ],
   });
   if (!row) return null;
@@ -1584,6 +1593,7 @@ async function getArticleBySlugPublic(slug, viewer = null) {
     },
     body,
     toc: tocItems,
+    citation: parseArticleCitation(p.citation),
     cover_image_url: p.thumbnail_url,
     author_name: authorName ?? p.author_id,
     download_url: p.rel_download_url || p.upload_url || null,
@@ -1835,18 +1845,9 @@ async function getArticleByIdInternal(id) {
   // Single tags array { id, name } so client doesn't need to zip two arrays
   const tags = tagIds.map((id) => ({ id, name: tagNameById.get(id) ?? '' }));
 
-  let parsedCitation = null;
-  if (p.citation) {
-    try {
-      parsedCitation = JSON.parse(p.citation);
-    } catch (e) {
-      parsedCitation = { case_citation: p.citation };
-    }
-  }
-
   const result = {
     ...p,
-    citation: parsedCitation,
+    citation: parseArticleCitation(p.citation),
     category_ids: catRows.map((r) => Number(r.category_id)),
     tag_ids: tagIds,
     tags,
