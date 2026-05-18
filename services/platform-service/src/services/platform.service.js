@@ -85,6 +85,21 @@ function normalizeStructuredFeatures(raw) {
   return { mrp: 0, included: lines, excluded: [] };
 }
 
+/**
+ * Robust read of MySQL TINYINT(1)/BOOLEAN columns (avoid `!!'0'` and Sequelize upsert edge cases).
+ */
+function coerceSqlBoolean(value) {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0 || value == null) return false;
+  if (typeof value === 'string') {
+    const s = value.trim().toLowerCase();
+    return s === '1' || s === 'true' || s === 'yes';
+  }
+  if (typeof value === 'number') return value !== 0 && !Number.isNaN(value);
+  if (Buffer.isBuffer(value)) return value.length > 0 && value[0] !== 0;
+  return false;
+}
+
 const { paginate, AppError } = require('../../../../shared');
 const articleScheduling = require('./article-scheduling.service');
 const {
@@ -667,7 +682,7 @@ async function getPlansPublic() {
   for (const a of availRows) {
     const av = a.get({ plain: true });
     if (!availMap.has(av.plan_id)) availMap.set(av.plan_id, new Map());
-    availMap.get(av.plan_id).set(av.feature_id, !!av.available);
+    availMap.get(av.plan_id).set(av.feature_id, coerceSqlBoolean(av.available));
   }
 
   return rows.map((r) => {
@@ -700,7 +715,7 @@ async function getPlanBySlugPublic(slug) {
   const availMap = new Map();
   for (const a of availRows) {
     const av = a.get({ plain: true });
-    availMap.set(av.feature_id, !!av.available);
+    availMap.set(av.feature_id, coerceSqlBoolean(av.available));
   }
   const comparison_features = allCompFeatures.map((f) => {
     const feat = f.get({ plain: true });
@@ -2489,8 +2504,23 @@ async function deleteComparisonFeature(id) {
 }
 
 async function setFeatureAvailability(planId, featureId, available) {
-  const [row] = await PlanFeatureAvailability.upsert({ plan_id: planId, feature_id: featureId, available: available ? 1 : 0 });
-  return row ? row.get({ plain: true }) : { plan_id: planId, feature_id: featureId, available };
+  const boolVal = Boolean(available);
+  const existing = await PlanFeatureAvailability.findOne({
+    where: { plan_id: planId, feature_id: featureId },
+  });
+  let row;
+  if (existing) {
+    row = existing;
+    await row.update({ available: boolVal });
+  } else {
+    row = await PlanFeatureAvailability.create({
+      plan_id: planId,
+      feature_id: featureId,
+      available: boolVal,
+    });
+  }
+  const plain = row.get({ plain: true });
+  return { ...plain, available: coerceSqlBoolean(plain.available) };
 }
 
 async function listPlansByIds(ids) {

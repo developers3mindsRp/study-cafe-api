@@ -1,5 +1,5 @@
 const { User, Role } = require('../models');
-const { Op } = require('sequelize');
+const { Op, Sequelize } = require('sequelize');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { AppError, logger } = require('../../../../shared');
@@ -10,26 +10,90 @@ async function list(query = {}) {
         limit = 10,
         search,
         role_id,
+        role: roleNameFilter,
         status,
         membership,
+        email: emailFilter,
+        state: stateFilter,
+        joined_from,
+        joined_to,
         sortBy = 'id',
         sortOrder = 'DESC',
     } = query;
 
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-    const where = {};
+    const andConditions = [];
 
     if (search) {
-        where[Op.or] = [
-            { name: { [Op.like]: `%${search}%` } },
-            { email: { [Op.like]: `%${search}%` } },
-            { phone: { [Op.like]: `%${search}%` } },
-        ];
+        andConditions.push({
+            [Op.or]: [
+                { name: { [Op.like]: `%${search}%` } },
+                { email: { [Op.like]: `%${search}%` } },
+                { phone: { [Op.like]: `%${search}%` } },
+            ],
+        });
     }
 
-    if (role_id) where.role_id = role_id;
-    if (status) where.status = status;
-    if (membership !== undefined && membership !== '') where.membership = membership;
+    if (emailFilter != null && String(emailFilter).trim() !== '') {
+        const e = String(emailFilter).trim();
+        andConditions.push({ email: { [Op.like]: `%${e}%` } });
+    }
+
+    if (stateFilter != null && String(stateFilter).trim() !== '') {
+        const s = String(stateFilter).trim();
+        andConditions.push({ state: { [Op.like]: `%${s}%` } });
+    }
+
+    if (status) andConditions.push({ status });
+
+    if (membership !== undefined && membership !== '') {
+        const m = String(membership).trim();
+        if (m.toLowerCase() === 'free') {
+            andConditions.push({
+                [Op.or]: [
+                    { membership: { [Op.is]: null } },
+                    { membership: '' },
+                    Sequelize.where(
+                        Sequelize.fn('LOWER', Sequelize.col('membership')),
+                        Op.eq,
+                        'free'
+                    ),
+                ],
+            });
+        } else {
+            andConditions.push({ membership: m });
+        }
+    }
+
+    const createdRange = {};
+    if (joined_from) {
+        const d = new Date(joined_from);
+        if (!Number.isNaN(d.getTime())) createdRange[Op.gte] = d;
+    }
+    if (joined_to) {
+        const d = new Date(joined_to);
+        if (!Number.isNaN(d.getTime())) {
+            d.setHours(23, 59, 59, 999);
+            createdRange[Op.lte] = d;
+        }
+    }
+    if (Object.keys(createdRange).length > 0) {
+        andConditions.push({ created_at: createdRange });
+    }
+
+    const roleInclude = {
+        model: Role,
+        as: 'Role',
+        attributes: ['id', 'name'],
+    };
+    if (roleNameFilter != null && String(roleNameFilter).trim() !== '') {
+        roleInclude.where = { name: String(roleNameFilter).trim() };
+        roleInclude.required = true;
+    } else if (role_id) {
+        andConditions.push({ role_id: parseInt(role_id, 10) });
+    }
+
+    const where = andConditions.length > 0 ? { [Op.and]: andConditions } : {};
 
     const orderDir = ['ASC', 'DESC'].includes(String(sortOrder).toUpperCase())
         ? String(sortOrder).toUpperCase()
@@ -37,11 +101,12 @@ async function list(query = {}) {
 
     const { count, rows } = await User.findAndCountAll({
         where,
-        include: [{ model: Role, as: 'Role', attributes: ['id', 'name'] }],
+        include: [roleInclude],
         attributes: { exclude: ['password_hash'] },
         offset,
         limit: parseInt(limit, 10),
         order: [[sortBy, orderDir]],
+        distinct: true,
     });
 
     return {
