@@ -10,11 +10,11 @@ async function list(query = {}) {
         limit = 10,
         search,
         role_id,
-        role: roleNameFilter,
+        role,
         status,
         membership,
-        email: emailFilter,
-        state: stateFilter,
+        email,
+        state,
         joined_from,
         joined_to,
         sortBy = 'id',
@@ -34,13 +34,13 @@ async function list(query = {}) {
         });
     }
 
-    if (emailFilter != null && String(emailFilter).trim() !== '') {
-        const e = String(emailFilter).trim();
+    if (email != null && String(email).trim() !== '') {
+        const e = String(email).trim();
         andConditions.push({ email: { [Op.like]: `%${e}%` } });
     }
 
-    if (stateFilter != null && String(stateFilter).trim() !== '') {
-        const s = String(stateFilter).trim();
+    if (state != null && String(state).trim() !== '') {
+        const s = String(state).trim();
         andConditions.push({ state: { [Op.like]: `%${s}%` } });
     }
 
@@ -86,8 +86,8 @@ async function list(query = {}) {
         as: 'Role',
         attributes: ['id', 'name'],
     };
-    if (roleNameFilter != null && String(roleNameFilter).trim() !== '') {
-        roleInclude.where = { name: String(roleNameFilter).trim() };
+    if (role != null && String(role).trim() !== '') {
+        roleInclude.where = { name: String(role).trim() };
         roleInclude.required = true;
     } else if (role_id) {
         andConditions.push({ role_id: parseInt(role_id, 10) });

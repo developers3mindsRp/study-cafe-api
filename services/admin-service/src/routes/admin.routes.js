@@ -57,6 +57,7 @@ function register(router) {
   router.post('/admin/batches/:id/enrollments', requireAdmin, controller.addBatchEnrollment);
   router.post('/admin/batches/:id/enrollments/bulk', requireAdmin, controller.bulkAddBatchEnrollmentByEmails);
   router.post('/admin/memberships/bulk', requireAdmin, controller.bulkGrantMembershipByEmails);
+  router.post('/admin/users/import', requireAdmin, controller.importUsersFromCsv);
   router.delete('/admin/batch-enrollments/:id', requireAdmin, controller.removeBatchEnrollment);
   router.get('/admin/users/:id/enrollments', requireAdmin, controller.getUserEnrollments);
   router.get('/admin/users/:id/memberships', requireAdmin, controller.getUserMemberships);
