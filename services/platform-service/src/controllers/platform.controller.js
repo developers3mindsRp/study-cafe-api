@@ -278,6 +278,10 @@ const getArticlesInternal = asyncHandler(async (req, res) => {
   const sortOrder = (req.query.sortOrder && /^(ASC|DESC)$/i.test(req.query.sortOrder))
     ? req.query.sortOrder.toUpperCase()
     : 'DESC';
+  const category_id = req.query.category_id ? parseInt(req.query.category_id, 10) : undefined;
+  const blog_access_tier = req.query.blog_access_tier || undefined;
+  const date_from = req.query.date_from || undefined;
+  const date_to = req.query.date_to || undefined;
 
   const result = await platformService.articles.getArticlesInternal({
     status: req.query.status,
@@ -286,6 +290,10 @@ const getArticlesInternal = asyncHandler(async (req, res) => {
     search: search || undefined,
     sortBy,
     sortOrder,
+    category_id,
+    blog_access_tier,
+    date_from,
+    date_to,
   });
 
   sendSuccess(res, result);
