@@ -31,7 +31,7 @@ const SRC_CONFIG = {
     host: process.env.MIGRATION_SRC_HOST || '127.0.0.1',
     port: parseInt(process.env.MIGRATION_SRC_PORT || '3306', 10),
     user: process.env.MIGRATION_SRC_USER || 'root',
-    password: process.env.MIGRATION_SRC_PASSWORD ?? 'root',
+    password: process.env.MIGRATION_SRC_PASSWORD ?? '12345678',
     database: process.env.MIGRATION_SRC_DATABASE || 'studycafe',
 };
 
@@ -43,6 +43,24 @@ const TGT_CONFIG = {
     password: process.env.MIGRATION_TGT_PASSWORD || 'GDZ@p84i-F2X',
     database: process.env.MIGRATION_TGT_DATABASE || 'studycafe_db',
 };
+
+// // ──── Source DB (migration / WP) — override with MIGRATION_SRC_* env ────
+// const SRC_CONFIG = {
+//     host: '127.0.0.1',
+//     port: '3306',
+//     user: 'root',
+//     password: '12345678',
+//     database: 'studycafe',
+// };
+
+// // ──── Target DB (microservices) — override with MIGRATION_TGT_* env ────
+// const TGT_CONFIG = {
+//     host: '168.144.1.14',
+//     port: '3306',
+//     user: 'studycafe_user',
+//     password: 'GDZ@p84i-F2X',
+//     database: 'studycafe_db',
+// };
 
 const BATCH = 500;
 
