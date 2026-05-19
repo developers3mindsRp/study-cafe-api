@@ -255,6 +255,10 @@ const articleListQuery = {
         search: Joi.string().max(255).allow('', null),
         sortBy: Joi.string().max(64).allow('', null),
         sortOrder: Joi.string().valid('ASC', 'DESC', 'asc', 'desc').default('DESC'),
+        category_id: Joi.number().integer().min(1).allow('', null),
+        blog_access_tier: Joi.string().valid('free', 'premium').allow('', null),
+        date_from: Joi.string().isoDate().allow('', null),
+        date_to: Joi.string().isoDate().allow('', null),
     }),
 };
 

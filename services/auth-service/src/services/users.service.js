@@ -1,4 +1,4 @@
-const { User, Role } = require('../models');
+const { User, Role, sequelize } = require('../models');
 const { Op, Sequelize } = require('sequelize');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
@@ -15,10 +15,12 @@ async function list(query = {}) {
         membership,
         email,
         state,
+        course_id,
         joined_from,
         joined_to,
         sortBy = 'id',
         sortOrder = 'DESC',
+        lean,
     } = query;
 
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
@@ -40,28 +42,59 @@ async function list(query = {}) {
     }
 
     if (state != null && String(state).trim() !== '') {
-        const s = String(state).trim();
-        andConditions.push({ state: { [Op.like]: `%${s}%` } });
+        const s = String(state).trim().toLowerCase();
+        andConditions.push(
+            Sequelize.where(
+                Sequelize.fn('LOWER', Sequelize.col('state')),
+                Op.like,
+                `%${s}%`
+            )
+        );
     }
 
     if (status) andConditions.push({ status });
 
+    /**
+     * Membership filter — canonical source is `user_memberships` (active rows).
+     * `users.membership` is set to "1" by access.grantMembership, so filtering on
+     * that column alone silently drops every granted user from the export.
+     */
     if (membership !== undefined && membership !== '') {
-        const m = String(membership).trim();
-        if (m.toLowerCase() === 'free') {
+        const m = String(membership).trim().toLowerCase();
+        if (m === 'free') {
             andConditions.push({
-                [Op.or]: [
-                    { membership: { [Op.is]: null } },
-                    { membership: '' },
-                    Sequelize.where(
-                        Sequelize.fn('LOWER', Sequelize.col('membership')),
-                        Op.eq,
-                        'free'
+                id: {
+                    [Op.notIn]: Sequelize.literal(
+                        '(SELECT um.user_id FROM user_memberships um WHERE um.expires_at > NOW())'
                     ),
-                ],
+                },
             });
         } else {
-            andConditions.push({ membership: m });
+            const escapedSlug = sequelize.escape(m);
+            andConditions.push({
+                id: {
+                    [Op.in]: Sequelize.literal(
+                        `(SELECT um.user_id FROM user_memberships um WHERE um.expires_at > NOW() AND LOWER(um.membership_type) = ${escapedSlug})`
+                    ),
+                },
+            });
+        }
+    }
+
+    /**
+     * Course filter — uses `user_courses` (granted course access either via direct
+     * purchase or via membership lazy-enrollment).
+     */
+    if (course_id != null && String(course_id).trim() !== '') {
+        const cid = parseInt(String(course_id).trim(), 10);
+        if (Number.isFinite(cid) && cid > 0) {
+            andConditions.push({
+                id: {
+                    [Op.in]: Sequelize.literal(
+                        `(SELECT uc.user_id FROM user_courses uc WHERE uc.course_id = ${cid})`
+                    ),
+                },
+            });
         }
     }
 
@@ -99,13 +132,27 @@ async function list(query = {}) {
         ? String(sortOrder).toUpperCase()
         : 'DESC';
 
+    /**
+     * Secondary id tiebreaker — without this, offset-based pagination over a
+     * non-unique sort column (e.g. created_at) can silently skip/duplicate rows
+     * across pages, which breaks the "fetch all pages" export loop.
+     */
+    const order = sortBy === 'id'
+        ? [['id', orderDir]]
+        : [[sortBy, orderDir], ['id', orderDir]];
+
+    // lean=true → return only the fields needed for lightweight dropdowns/selects.
+    const attributes = (lean === 'true' || lean === true)
+        ? ['id', 'name', 'display_name', 'email', 'role', 'role_id', 'designation', 'profession']
+        : { exclude: ['password_hash'] };
+
     const { count, rows } = await User.findAndCountAll({
         where,
         include: [roleInclude],
-        attributes: { exclude: ['password_hash'] },
+        attributes,
         offset,
         limit: parseInt(limit, 10),
-        order: [[sortBy, orderDir]],
+        order,
         distinct: true,
     });
 
@@ -195,4 +242,23 @@ async function listByIds(ids) {
     });
 }
 
-module.exports = { list, getOne, create, update, remove, listByIds };
+/** Returns all distinct non-empty state values from the users table, sorted alphabetically. */
+async function distinctStates() {
+    const rows = await User.findAll({
+        attributes: ['state'],
+        where: {
+            state: {
+                [Op.and]: [
+                    { [Op.ne]: null },
+                    { [Op.ne]: '' },
+                ],
+            },
+        },
+        group: ['state'],
+        order: [['state', 'ASC']],
+        raw: true,
+    });
+    return rows.map((r) => r.state).filter(Boolean);
+}
+
+module.exports = { list, getOne, create, update, remove, listByIds, distinctStates };
