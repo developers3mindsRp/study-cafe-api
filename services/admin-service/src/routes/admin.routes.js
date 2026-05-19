@@ -30,6 +30,8 @@ function register(router) {
 
   // Coupon management
   router.get('/admin/coupons', requireAdmin, controller.getCoupons);
+  router.get('/admin/coupons/usage/summary', requireAdmin, controller.getCouponUsageSummary);
+  router.get('/admin/coupons/usage', requireAdmin, controller.getCouponUsages);
   router.get('/admin/coupons/check-code', requireAdmin, controller.checkCouponCodeExists);
   router.get('/admin/coupons/:id', requireAdmin, controller.getCoupon);
   router.post('/admin/coupons', requireAdmin, controller.postCoupon);

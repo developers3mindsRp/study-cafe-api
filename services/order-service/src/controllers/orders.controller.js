@@ -38,6 +38,42 @@ const getInvoice = asyncHandler(async (req, res) => {
   sendSuccess(res, invoice);
 });
 
+const getCouponUsageSummaryInternal = asyncHandler(async (req, res) => {
+  const summary = await ordersService.getCouponUsageSummary();
+  sendSuccess(res, summary);
+});
+
+const listCouponUsagesInternal = asyncHandler(async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit || '50', 10), 500);
+  const offset = parseInt(req.query.offset || '0', 10);
+  const {
+    search,
+    sortBy,
+    sortOrder,
+    dateFrom,
+    dateTo,
+    couponCode,
+    couponId,
+    status,
+    type,
+  } = req.query;
+
+  const result = await ordersService.listCouponUsages({
+    limit,
+    offset,
+    search,
+    sortBy,
+    sortOrder,
+    dateFrom,
+    dateTo,
+    couponCode,
+    couponId,
+    status,
+    type,
+  });
+  sendSuccess(res, result);
+});
+
 const listAllInternal = asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
   const offset = parseInt(req.query.offset || '0', 10);
@@ -169,6 +205,8 @@ module.exports = {
   applyCoupon,
   getInvoice,
   listAllInternal,
+  listCouponUsagesInternal,
+  getCouponUsageSummaryInternal,
   getByOrderIdInternal,
   listActiveCoupons,
   listAllCoupons,

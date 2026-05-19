@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const axios = require('axios');
 const { sequelize, Order, Payment, OutboxEvent, Coupon, CouponUsage } = require('../models');
-const { Op } = require('sequelize');
+const { Op, QueryTypes } = require('sequelize');
 const { getRedis } = require('../config/redis');
 const config = require('../config');
 const { getRazorpayInstance, getRazorpayConfig } = require('./payment.service');
@@ -1615,6 +1615,301 @@ async function listAllOrders({ limit = 100, offset = 0, search = '', sortBy = 'c
   };
 }
 
+function parseSummaryRow(row) {
+  if (!row) {
+    return { usage_count: 0, total_original: 0, total_discount: 0, total_paid: 0 };
+  }
+  return {
+    usage_count: Number(row.usage_count) || 0,
+    total_original: parseFloat(row.total_original) || 0,
+    total_discount: parseFloat(row.total_discount) || 0,
+    total_paid: parseFloat(row.total_paid) || 0,
+  };
+}
+
+async function aggregateCouponUsageWhere(where) {
+  const row = await Order.findOne({
+    attributes: [
+      [sequelize.fn('COUNT', sequelize.col('id')), 'usage_count'],
+      [sequelize.fn('SUM', sequelize.col('original_amount')), 'total_original'],
+      [sequelize.fn('SUM', sequelize.col('coupon_discount')), 'total_discount'],
+      [sequelize.fn('SUM', sequelize.col('amount')), 'total_paid'],
+    ],
+    where,
+    raw: true,
+  });
+  return parseSummaryRow(row);
+}
+
+/** Per-coupon usage totals for admin coupon list (keyed by coupon id). */
+async function getCouponUsageSummary() {
+  const aggRows = await sequelize.query(
+    `SELECT
+      LOWER(TRIM(o.coupon_code)) AS code_key,
+      COUNT(*) AS usage_count,
+      COALESCE(SUM(o.original_amount), 0) AS total_original,
+      COALESCE(SUM(o.coupon_discount), 0) AS total_discount,
+      COALESCE(SUM(o.amount), 0) AS total_paid
+    FROM orders o
+    WHERE o.coupon_code IS NOT NULL AND TRIM(o.coupon_code) <> ''
+    GROUP BY code_key`,
+    { type: QueryTypes.SELECT }
+  );
+
+  const byCode = new Map();
+  for (const r of aggRows) {
+    byCode.set(String(r.code_key), parseSummaryRow(r));
+  }
+
+  const coupons = await Coupon.findAll({
+    attributes: ['id', 'code'],
+    order: [['created_at', 'DESC']],
+    raw: true,
+  });
+
+  return coupons.map((c) => {
+    const key = String(c.code || '').trim().toLowerCase();
+    const stats = byCode.get(key) || parseSummaryRow(null);
+    return {
+      coupon_id: Number(c.id),
+      code: c.code,
+      ...stats,
+    };
+  });
+}
+
+/**
+ * Admin report: orders that used a coupon (coupon_code on orders + coupon_usages).
+ */
+async function listCouponUsages({
+  limit = 50,
+  offset = 0,
+  search = '',
+  sortBy = 'created_at',
+  sortOrder = 'DESC',
+  dateFrom,
+  dateTo,
+  couponCode,
+  couponId,
+  status,
+  type,
+}) {
+  const pageLimit = Math.min(Math.max(Number(limit) || 50, 1), 500);
+  const pageOffset = Math.max(Number(offset) || 0, 0);
+
+  const where = {
+    [Op.and]: [
+      { coupon_code: { [Op.ne]: null } },
+      { coupon_code: { [Op.ne]: '' } },
+    ],
+  };
+
+  if (couponId) {
+    const couponRow = await Coupon.findByPk(couponId, { attributes: ['code'] });
+    if (!couponRow) {
+      return {
+        data: [],
+        meta: {
+          total: 0,
+          page: 1,
+          limit: pageLimit,
+          totalPages: 0,
+          hasNextPage: false,
+          hasPreviousPage: false,
+        },
+      };
+    }
+    where.coupon_code = String(couponRow.code).trim();
+  } else if (couponCode && String(couponCode).trim()) {
+    where.coupon_code = { [Op.like]: `%${String(couponCode).trim()}%` };
+  }
+
+  if (status && String(status).trim()) {
+    where.status = String(status).trim().toLowerCase();
+  }
+
+  if (type && String(type).trim()) {
+    where.type = String(type).trim().toLowerCase();
+  }
+
+  if (dateFrom || dateTo) {
+    where.created_at = {};
+    if (dateFrom) {
+      const start = new Date(dateFrom);
+      if (!Number.isNaN(start.getTime())) where.created_at[Op.gte] = start;
+    }
+    if (dateTo) {
+      const end = new Date(dateTo);
+      if (!Number.isNaN(end.getTime())) {
+        end.setHours(23, 59, 59, 999);
+        where.created_at[Op.lte] = end;
+      }
+    }
+  }
+
+  if (search && String(search).trim()) {
+    const term = `%${String(search).trim()}%`;
+    where[Op.and].push({
+      [Op.or]: [
+        { order_id: { [Op.like]: term } },
+        { buyer_email: { [Op.like]: term } },
+        { buyer_name: { [Op.like]: term } },
+        { coupon_code: { [Op.like]: term } },
+      ],
+    });
+  }
+
+  const allowedSort = new Set([
+    'created_at',
+    'order_id',
+    'coupon_code',
+    'amount',
+    'coupon_discount',
+    'status',
+    'buyer_email',
+  ]);
+  const orderCol = allowedSort.has(sortBy) ? sortBy : 'created_at';
+  const orderDir = String(sortOrder).toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+  const { rows, count } = await Order.findAndCountAll({
+    where,
+    order: [[orderCol, orderDir]],
+    attributes: [
+      'id',
+      'order_id',
+      'user_id',
+      'type',
+      'entity_id',
+      'amount',
+      'original_amount',
+      'coupon_code',
+      'coupon_discount',
+      'currency',
+      'status',
+      'buyer_name',
+      'buyer_email',
+      'buyer_mobile',
+      'created_at',
+    ],
+    limit: pageLimit,
+    offset: pageOffset,
+  });
+
+  const orders = rows.map((r) => r.get({ plain: true }));
+
+  const couponCodes = [...new Set(orders.map((o) => String(o.coupon_code || '').trim().toLowerCase()).filter(Boolean))];
+  const couponMap = new Map();
+  if (couponCodes.length > 0) {
+    const couponRows = await Coupon.findAll({
+      where: {
+        [Op.or]: couponCodes.map((code) =>
+          sequelize.where(sequelize.fn('lower', sequelize.col('code')), code)
+        ),
+      },
+      raw: true,
+    });
+    for (const c of couponRows) {
+      couponMap.set(String(c.code).toLowerCase(), c);
+    }
+  }
+
+  const userIds = [...new Set(orders.map((o) => o.user_id).filter(Boolean))];
+  let userMap = {};
+  if (userIds.length > 0) {
+    try {
+      const { data: usersRes } = await axios.post(
+        `${config.authServiceUrl}/users/internal/list-by-ids`,
+        { ids: userIds },
+        { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 8000 }
+      );
+      const users = usersRes?.data ?? usersRes;
+      if (Array.isArray(users)) {
+        for (const u of users) userMap[u.id] = u;
+      }
+    } catch (err) {
+      logger.warn(`[orders] listCouponUsages user fetch failed: ${err.message}`);
+    }
+  }
+
+  const courseIds = [...new Set(orders.filter((o) => o.type === 'course').map((o) => o.entity_id).filter(Boolean))];
+  const planIds = [...new Set(orders.filter((o) => o.type === 'membership').map((o) => o.entity_id).filter(Boolean))];
+  const entityNameMap = {};
+
+  if (courseIds.length > 0) {
+    try {
+      const { data: courseRes } = await axios.post(
+        `${config.courseServiceUrl}/internal/courses/by-ids`,
+        { ids: courseIds },
+        { headers: { 'x-internal-api-key': config.internalApiKey }, timeout: 8000 }
+      );
+      const list = courseRes?.data ?? courseRes;
+      if (Array.isArray(list)) {
+        for (const c of list) entityNameMap[`course_${c.id}`] = c.title || c.name;
+      }
+    } catch (err) {
+      logger.warn(`[orders] listCouponUsages course resolve failed: ${err.message}`);
+    }
+  }
+
+  if (planIds.length > 0) {
+    const settled = await Promise.all(
+      planIds.map((pid) =>
+        resolveMembershipPlanDisplayName(pid).then((name) => ({ pid: String(pid), name }))
+      )
+    );
+    for (const { pid, name } of settled) {
+      if (name) entityNameMap[`membership_${pid}`] = name;
+    }
+  }
+
+  const data = orders.map((o) => {
+    const user = userMap[o.user_id];
+    const couponMeta = couponMap.get(String(o.coupon_code || '').trim().toLowerCase());
+    return {
+      id: o.id,
+      order_id: o.order_id,
+      user_id: o.user_id,
+      used_at: o.created_at,
+      coupon_code: o.coupon_code,
+      coupon_discount: o.coupon_discount,
+      original_amount: o.original_amount,
+      amount: o.amount,
+      currency: o.currency,
+      status: o.status,
+      type: o.type,
+      entity_id: o.entity_id,
+      entity_name: entityNameMap[`${o.type}_${o.entity_id}`] || null,
+      buyer_name: o.buyer_name || user?.name || null,
+      buyer_email: o.buyer_email || user?.email || null,
+      buyer_mobile: o.buyer_mobile || user?.phone || null,
+      coupon: couponMeta
+        ? {
+            id: couponMeta.id,
+            code: couponMeta.code,
+            type: couponMeta.type,
+            value: couponMeta.value,
+            discount_on: couponMeta.discount_on,
+          }
+        : null,
+    };
+  });
+
+  const summary = await aggregateCouponUsageWhere(where);
+
+  return {
+    data,
+    summary,
+    meta: {
+      total: count,
+      page: Math.floor(pageOffset / pageLimit) + 1,
+      limit: pageLimit,
+      totalPages: Math.ceil(count / pageLimit) || 0,
+      hasNextPage: pageOffset + pageLimit < count,
+      hasPreviousPage: pageOffset > 0,
+    },
+  };
+}
+
 /** Revoke course/membership access when an order is refunded or deleted. */
 async function revokeAccessForOrder(order) {
   if (!order || !order.user_id) return;
@@ -2318,6 +2613,8 @@ module.exports = {
   listMyPurchases,
   getInvoice,
   listAllOrders,
+  listCouponUsages,
+  getCouponUsageSummary,
   getOrderByOrderId,
   getCouponsForEntity,
   applyCoupon,

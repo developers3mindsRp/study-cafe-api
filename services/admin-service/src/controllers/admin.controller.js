@@ -534,6 +534,22 @@ function platformProxy(handler) {
   });
 }
 
+const getCouponUsages = asyncHandler(async (req, res) => {
+  const { data } = await orderClient.get('/internal/coupon-usages', { params: req.query });
+  if (data && typeof data === 'object' && 'data' in data && 'meta' in data) {
+    if (data.summary) {
+      data.meta = { ...data.meta, summary: data.summary };
+    }
+    return sendPaginated(res, data);
+  }
+  sendSuccess(res, data);
+});
+
+const getCouponUsageSummary = asyncHandler(async (req, res) => {
+  const { data } = await orderClient.get('/internal/coupon-usages/summary');
+  sendSuccess(res, Array.isArray(data) ? data : data || []);
+});
+
 const getCoupons = asyncHandler(async (req, res) => {
   const where = {};
   if (req.query.status !== undefined) {
@@ -879,6 +895,8 @@ module.exports = {
   updateOrder,
   refundOrder,
   deleteOrder,
+  getCouponUsages,
+  getCouponUsageSummary,
   getCoupons,
   getCoupon,
   postCoupon,
