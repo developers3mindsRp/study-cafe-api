@@ -16,6 +16,9 @@ async function processEvent(record) {
   const data = typeof payload === 'string' ? JSON.parse(payload) : payload;
   try {
     if (event_type === 'COURSE_PURCHASED') {
+      const expiresAt = data.validity === 'lifetime'
+        ? null
+        : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
       await Promise.all([
         axios.post(
           `${config.authServiceUrl}/access/grant-course`,
@@ -23,6 +26,7 @@ async function processEvent(record) {
             userId: data.userId,
             courseId: data.courseId,
             orderId: data.orderId,
+            expiresAt,
           },
           { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
         ),

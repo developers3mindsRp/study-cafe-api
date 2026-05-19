@@ -70,7 +70,13 @@ async function checkAccess(token, courseId) {
   const row = await UserCourse.findOne({
     where: { user_id: userId, course_id: courseId },
   });
-  if (row) return { allowed: true };
+  if (row) {
+    // expires_at = null means lifetime; otherwise check if still valid
+    if (!row.expires_at || new Date(row.expires_at) > new Date()) {
+      return { allowed: true };
+    }
+    return { allowed: false, reason: 'course_expired' };
+  }
 
   // Slower path: membership-based access
   const hasMembershipAccess = await checkMembershipAccess(userId, courseId);
@@ -99,12 +105,14 @@ function isAuthorizedForGrant(req) {
   }
 }
 
-async function grantCourse({ userId, courseId, orderId }) {
-  const [row] = await UserCourse.findOrCreate({
+async function grantCourse({ userId, courseId, orderId, expiresAt }) {
+  const [row, created] = await UserCourse.findOrCreate({
     where: { user_id: userId, course_id: courseId },
-    defaults: { order_id: orderId || null },
+    defaults: { order_id: orderId || null, expires_at: expiresAt ?? null },
   });
-  await row.update({ order_id: orderId || row.order_id });
+  if (!created) {
+    await row.update({ order_id: orderId || row.order_id, expires_at: expiresAt ?? row.expires_at });
+  }
   return { granted: true };
 }
 

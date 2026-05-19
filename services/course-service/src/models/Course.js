@@ -48,6 +48,7 @@ module.exports = (sequelize) => {
       start_date: { type: DataTypes.DATE, allowNull: true },
       end_date: { type: DataTypes.DATE, allowNull: true },
       affiliate_commission: { type: DataTypes.DECIMAL(10, 2), allowNull: false, defaultValue: 0 },
+      validity: { type: DataTypes.STRING(20), allowNull: false, defaultValue: '1year' },
     },
     {
       tableName: 'courses',

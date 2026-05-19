@@ -145,7 +145,13 @@ async function fetchCourseMeta(courseId) {
  * My enrolled courses (from user_courses) with course title/thumbnail from course-service.
  */
 async function myCourses(userId) {
-  const rows = await UserCourse.findAll({ where: { user_id: userId } });
+  const allRows = await UserCourse.findAll({ where: { user_id: userId } });
+  const now = new Date();
+  // Exclude rows where expires_at is set and already past — access has ended
+  const rows = allRows.filter((row) => {
+    const exp = row.get({ plain: true }).expires_at;
+    return !exp || new Date(exp) > now;
+  });
   const courseIds = rows.map((row) => Number(row.get({ plain: true }).course_id)).filter((n) => n > 0);
   const summary = await fetchProgressSummary(userId, courseIds);
   const out = [];
@@ -159,6 +165,7 @@ async function myCourses(userId) {
     const progress = Number(sum.progress) || 0;
     const totalLessons = Number(sum.totalLessons) || 0;
     const completedCount = Number(sum.completedLessons) || 0;
+    const expiresAt = r.expires_at ? new Date(r.expires_at).toISOString() : null;
     out.push({
       id: `${r.user_id}-${r.course_id}`,
       userId: String(r.user_id),
@@ -176,6 +183,8 @@ async function myCourses(userId) {
       purchaseDate: new Date().toISOString(),
       price: 0,
       status: 'completed',
+      accessExpiresAt: expiresAt,
+      accessStatus: 'active',
       progress,
       completedLessons: Array.from({ length: completedCount }, (_, i) => String(i)),
       lastAccessedAt: undefined,

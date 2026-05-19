@@ -442,6 +442,15 @@ async function syncCouponUsageForReusedOrder(orderPublicId, userId, previousCoup
   }
 }
 
+/** Fetch the validity setting ('1year' | 'lifetime') for a course from the shared DB. */
+async function fetchCourseValidity(courseId) {
+  const rows = await sequelize.query(
+    'SELECT validity FROM courses WHERE id = ? LIMIT 1',
+    { replacements: [Number(courseId)], type: QueryTypes.SELECT }
+  );
+  return rows[0]?.validity ?? '1year';
+}
+
 /** Outbox: enrollment / membership + affiliate (only when order amount &gt; 0). */
 async function emitPurchaseOutbox(locked, t, options = {}) {
   const skipAffiliate = options && options.skipAffiliate === true;
@@ -455,6 +464,7 @@ async function emitPurchaseOutbox(locked, t, options = {}) {
         `[orders] skip COURSE_PURCHASED (already enrolled) user=${locked.user_id} course=${cid} order=${oid}`
       );
     } else {
+      const validity = await fetchCourseValidity(locked.entity_id);
       await OutboxEvent.create(
         {
           aggregate_type: 'order',
@@ -465,6 +475,7 @@ async function emitPurchaseOutbox(locked, t, options = {}) {
             orderId: oid,
             courseId: locked.entity_id,
             batchId: locked.batch_id ? Number(locked.batch_id) : null,
+            validity,
           },
         },
         { transaction: t }
@@ -521,6 +532,7 @@ async function emitPurchaseOutbox(locked, t, options = {}) {
       }
       // We resolve batch synchronously for EACH course to ensure consistency
       const batchId = await fetchPurchaseBatchId(cid);
+      const validity = await fetchCourseValidity(cid);
       await OutboxEvent.create(
         {
           aggregate_type: 'order',
@@ -532,6 +544,7 @@ async function emitPurchaseOutbox(locked, t, options = {}) {
             courseId: String(cid),
             batchId: batchId ? Number(batchId) : null,
             isMembershipLinked: true,
+            validity,
           },
         },
         { transaction: t }
@@ -1424,6 +1437,30 @@ async function listMyPurchases(userId) {
       completedAt: undefined,
       lastAccessedAt: undefined,
     });
+  }
+
+  // Fetch expires_at for each course purchase from user_courses (shared DB)
+  const expiryMap = new Map();
+  if (courseEntityIds.length > 0) {
+    const placeholders = courseEntityIds.map(() => '?').join(',');
+    const expiryRows = await sequelize.query(
+      `SELECT course_id, expires_at FROM user_courses WHERE user_id = ? AND course_id IN (${placeholders})`,
+      { replacements: [userId, ...courseEntityIds], type: QueryTypes.SELECT }
+    );
+    for (const row of expiryRows) {
+      expiryMap.set(Number(row.course_id), row.expires_at ?? null);
+    }
+  }
+
+  const now = new Date();
+  for (const item of out) {
+    if (item.course && courseEntityIds.includes(Number(item.courseId))) {
+      const expiresAt = expiryMap.has(Number(item.courseId))
+        ? expiryMap.get(Number(item.courseId))
+        : null;
+      item.accessExpiresAt = expiresAt ? new Date(expiresAt).toISOString() : null;
+      item.accessStatus = !expiresAt || new Date(expiresAt) > now ? 'active' : 'expired';
+    }
   }
 
   const summary = await fetchProgressSummary(userId, courseEntityIds);
