@@ -15,8 +15,8 @@ const check = asyncHandler(async (req, res) => {
 });
 
 const grantCourse = asyncHandler(async (req, res) => {
-  const { userId, courseId, orderId } = req.body;
-  const result = await accessService.grantCourse({ userId, courseId, orderId });
+  const { userId, courseId, orderId, expiresAt } = req.body;
+  const result = await accessService.grantCourse({ userId, courseId, orderId, expiresAt });
   sendSuccess(res, result);
 });
 

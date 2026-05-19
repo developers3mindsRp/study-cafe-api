@@ -76,6 +76,7 @@ const grantCourse = {
         userId: Joi.number().integer().positive().required(),
         courseId: Joi.number().integer().positive().required(),
         orderId: Joi.string().allow('', null),
+        expiresAt: Joi.date().iso().allow(null),
     }),
 };
 
