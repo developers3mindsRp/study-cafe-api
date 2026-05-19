@@ -9,4 +9,9 @@ const listByIds = asyncHandler(async (req, res) => {
   sendSuccess(res, users);
 });
 
-module.exports = { ...controller, listByIds };
+const distinctStates = asyncHandler(async (req, res) => {
+  const states = await usersService.distinctStates();
+  sendSuccess(res, states);
+});
+
+module.exports = { ...controller, listByIds, distinctStates };

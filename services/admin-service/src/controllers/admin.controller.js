@@ -304,6 +304,11 @@ const getUserMemberships = asyncHandler(async (req, res) => {
   sendSuccess(res, Array.isArray(data) ? data : data || []);
 });
 
+const getUserDistinctStates = asyncHandler(async (req, res) => {
+  const { data } = await authClient.get('/users/distinct-states');
+  sendSuccess(res, Array.isArray(data) ? data : []);
+});
+
 const getBatches = asyncHandler(async (req, res) => {
   const { data } = await courseClient.get('/internal/batches', { params: req.query });
   sendSuccess(res, data);
@@ -854,6 +859,7 @@ module.exports = {
   removeBatchEnrollment,
   getUserEnrollments,
   getUserMemberships,
+  getUserDistinctStates,
   getBatches,
   addMaterial,
   getCourses,
