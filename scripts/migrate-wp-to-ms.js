@@ -1030,7 +1030,8 @@ async function migrateUsers(src, tgt) {
         const values = chunk.map(u => {
             const passHash = passwords[u.wp_user_id] || null;
             const email = u.email || `wp_${u.wp_user_id || u.id}@placeholder.studycafe.in`;
-            return `(${u.id}, ${esc(u.wp_user_id)}, ${esc(email)}, ${esc(passHash)}, ${esc(u.display_name)}, ${esc(u.display_name)}, ${esc(u.login)}, ${esc(u.first_name)}, ${esc(u.last_name)}, ${esc(u.user_nicename)}, ${esc(u.user_url)}, ${esc(u.phone)}, ${esc(u.profession)}, ${esc(u.designation)}, ${esc(u.company)}, ${esc(u.city)}, ${esc(u.state)}, ${esc(u.country)}, ${esc(u.profile_pic_url)}, ${esc(u.membership)}, ${esc(u.plan)}, ${defaultUserRoleId}, 'user', 1, ${esc(u.status)}, ${esc(u.facebook)}, ${esc(u.twitter)}, ${esc(u.linkedin)}, ${esc(u.instagram)}, ${esc(u.youtube)}, ${esc(u.gst)}, ${esc(u.account_status)}, ${esc(u.bio)}, ${escDate(u.created_at)}, ${escDate(u.created_at)})`;
+            const membership = normalizeMembershipSlug(u.membership);
+            return `(${u.id}, ${esc(u.wp_user_id)}, ${esc(email)}, ${esc(passHash)}, ${esc(u.display_name)}, ${esc(u.display_name)}, ${esc(u.login)}, ${esc(u.first_name)}, ${esc(u.last_name)}, ${esc(u.user_nicename)}, ${esc(u.user_url)}, ${esc(u.phone)}, ${esc(u.profession)}, ${esc(u.designation)}, ${esc(u.company)}, ${esc(u.city)}, ${esc(u.state)}, ${esc(u.country)}, ${esc(u.profile_pic_url)}, ${esc(membership)}, ${esc(u.plan)}, ${defaultUserRoleId}, 'user', 1, ${esc(u.status)}, ${esc(u.facebook)}, ${esc(u.twitter)}, ${esc(u.linkedin)}, ${esc(u.instagram)}, ${esc(u.youtube)}, ${esc(u.gst)}, ${esc(u.account_status)}, ${esc(u.bio)}, ${escDate(u.created_at)}, ${escDate(u.created_at)})`;
         }).join(',');
         await tgt.query(`INSERT IGNORE INTO users (id, wp_user_id, email, password_hash, name, display_name, login, first_name, last_name, user_nicename, user_url, phone, profession, designation, company, city, state, country, profile_pic_url, membership, plan, role_id, role, is_active, status, facebook, twitter, linkedin, instagram, youtube, gst, account_status, bio, created_at, updated_at) VALUES ${values}`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allUsers.length)}/${allUsers.length}\r`);
@@ -1042,6 +1043,7 @@ async function migrateUsers(src, tgt) {
  * Populate user_memberships from sc_users.membership + sc_users.plan (JSON).
  * WP stored plan as usermeta 'plan' with plan_purchased, plan_expiry, payment_id;
  * the data-migration project copies that into sc_users.plan (TEXT).
+ * Legacy WP membership slugs are normalized: advanced→premium, premium→ultimate.
  */
 async function migrateUserMemberships(src, tgt) {
     console.log('🎫 Migrating user memberships...');
@@ -1073,7 +1075,7 @@ async function migrateUserMemberships(src, tgt) {
             }
         }
         const membershipType = (u.membership && String(u.membership).trim() && String(u.membership).toLowerCase() !== 'free')
-            ? String(u.membership).trim().substring(0, 64)
+            ? normalizeMembershipSlug(u.membership)
             : 'free';
         if (!start || !end || isNaN(start.getTime()) || isNaN(end.getTime())) {
             if (membershipType === 'free') {
@@ -1107,6 +1109,8 @@ async function migrateUserMemberships(src, tgt) {
  * Priority: 1) WordPress postmeta on Membership Plans page (post 103370) — all 3 plans;
  *          2) sc_courses with "Join Studycafe Lifetime Ultimate/Premium" (fallback);
  *          3) source premium_plans table; 4) sc_payments.
+ * WP postmeta uses legacy keys (premium_* = Ultimate, advanced_* = Premium); merged rows
+ * from source tables are normalized via normalizePlanRecord().
  */
 async function migratePremiumPlans(src, tgt) {
     console.log('📋 Migrating premium plans...');
@@ -1230,7 +1234,8 @@ async function migratePremiumPlans(src, tgt) {
         const rows = await src.query('SELECT id, name, slug, description, price, currency, duration_days, features, sort_order, is_active FROM premium_plans ORDER BY sort_order, id', { type: QueryTypes.SELECT });
         let merged = 0;
         for (const r of rows || []) {
-            const slug = (r.slug != null && String(r.slug).trim() !== '') ? String(r.slug).trim().toLowerCase().substring(0, 128) : (r.name ? slugify(r.name) : null);
+            const rawSlug = (r.slug != null && String(r.slug).trim() !== '') ? String(r.slug).trim().toLowerCase().substring(0, 128) : (r.name ? slugify(r.name) : null);
+            const { name: planName, slug } = normalizePlanRecord(r.name, rawSlug);
             if (!slug || insertedSlugs.has(slug)) continue;
             const features = (r.features != null && typeof r.features === 'string') ? r.features : (r.features != null ? JSON.stringify(r.features) : '[]');
             await tgt.query(
@@ -1238,7 +1243,7 @@ async function migratePremiumPlans(src, tgt) {
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 {
                     replacements: [
-                        r.name || 'Plan', slug, r.description || null, r.price ?? 0,
+                        planName, slug, r.description || null, r.price ?? 0,
                         r.currency || 'INR', r.duration_days ?? 365,
                         (r.duration_days != null && Number(r.duration_days) >= 3650) ? 1 : 0,
                         features, sortOrder++, r.is_active != null ? (r.is_active ? 1 : 0) : 1,
@@ -1262,8 +1267,9 @@ async function migratePremiumPlans(src, tgt) {
         const rows = await src.query('SELECT id, wp_post_id, title, amount, price, total_seats, seats_booked, expiry, status, created_at FROM sc_payments ORDER BY id', { type: QueryTypes.SELECT });
         if (rows.length > 0) {
             for (const r of rows) {
-                const name = (r.title && String(r.title).trim()) ? String(r.title).trim().substring(0, 255) : `Plan ${r.id}`;
-                const slug = slugify(name) || `plan-${r.id}`;
+                const rawName = (r.title && String(r.title).trim()) ? String(r.title).trim().substring(0, 255) : `Plan ${r.id}`;
+                const rawSlug = slugify(rawName) || `plan-${r.id}`;
+                const { name, slug } = normalizePlanRecord(rawName, rawSlug);
                 const priceVal = r.price != null ? Number(r.price) : (r.amount != null ? Number(r.amount) : 0);
                 let durationDays = 365;
                 if (r.expiry && r.created_at) {
@@ -1289,6 +1295,42 @@ async function migratePremiumPlans(src, tgt) {
 
 function slugify(text) {
     return (text || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').substring(0, 128) || null;
+}
+
+/**
+ * WordPress stored legacy tier keys in usermeta / sc_users.membership:
+ *   advanced (Advance Plan) → premium (Premium)
+ *   premium  (Premium Plan) → ultimate (Ultimate)
+ * basic and free are unchanged.
+ */
+function normalizeMembershipSlug(raw) {
+    if (raw == null || raw === '') return raw;
+    const s = String(raw).trim().toLowerCase();
+    if (s === 'free') return 'free';
+    if (s === 'advanced' || s === 'advance') return 'premium';
+    if (s === 'premium') return 'ultimate';
+    return String(raw).trim().substring(0, 64);
+}
+
+/** Normalize legacy WP plan slug/name to post-rebrand premium_plans values. */
+function normalizePlanRecord(name, slug) {
+    const s = slug ? String(slug).trim().toLowerCase().substring(0, 128) : (name ? slugify(name) : null);
+    if (s === 'advanced' || s === 'advance') return { name: 'Premium', slug: 'premium' };
+    if (s === 'premium') return { name: 'Ultimate', slug: 'ultimate' };
+    if (s === 'ultimate') return { name: 'Ultimate', slug: 'ultimate' };
+    if (s === 'basic') return { name: 'Basic', slug: 'basic' };
+
+    const n = (name || '').trim().toLowerCase();
+    if (n === 'advanced' || n === 'advance' || n.includes('advance plan') || n.includes('advanced plan') || n.includes('advanced membership')) {
+        return { name: 'Premium', slug: 'premium' };
+    }
+    if (n.includes('ultimate')) return { name: 'Ultimate', slug: 'ultimate' };
+    if (n === 'premium' || n === 'premium plan' || n === 'premium membership' || (n.includes('premium') && n.includes('membership'))) {
+        return { name: 'Ultimate', slug: 'ultimate' };
+    }
+    if (n === 'basic' || n.includes('basic plan')) return { name: 'Basic', slug: 'basic' };
+
+    return { name: (name && String(name).trim()) || 'Plan', slug: s || slugify(name) || 'plan' };
 }
 
 /** Parse PHP serialized array of IDs: e.g. a:2:{i:0;i:123;i:1;i:456;} or a:1:{i:0;s:4:"1234";} → [123, 456] */

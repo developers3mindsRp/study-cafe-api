@@ -205,9 +205,16 @@ async function getSubscription(userId) {
   }
   const m = membership.get({ plain: true });
   const isActive = new Date(m.expires_at) > now;
+  const slug = m.membership_type || null;
+  let membershipType = slug;
+  if (isActive && slug) {
+    const plan = await fetchPlanBySlug(slug);
+    if (plan?.name) membershipType = plan.name;
+  }
   return {
     hasActiveMembership: isActive,
-    membershipType: m.membership_type || null,
+    membershipType,
+    membershipSlug: slug,
     startsAt: m.starts_at || null,
     expiresAt: m.expires_at || null,
   };
