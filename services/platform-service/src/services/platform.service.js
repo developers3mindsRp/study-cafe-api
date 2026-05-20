@@ -1068,13 +1068,7 @@ async function getBlogSpotlightFeed(viewer, options = {}) {
 
   /** Context: single article page — lists exclude this id; author block matches this article. */
   if (currentSlug) {
-    const focusRow = await Article.findOne({
-      where: { slug: currentSlug, status: 'publish' },
-      attributes: [
-        'id', 'title', 'slug', 'excerpt', 'content', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
-        'published_at', 'created_at', 'updated_at', 'blog_access_tier',
-      ],
-    });
+    const focusRow = await findPublishedArticleRowByPublicPathKey(currentSlug);
     if (!focusRow) {
       return {
         hero: null,
@@ -1522,15 +1516,47 @@ function parseArticleCitation(citationRaw) {
   }
 }
 
-async function getArticleBySlugPublic(slug, viewer = null) {
-  const row = await Article.findOne({
-    where: { slug, status: 'publish' },
-    attributes: [
-      'id', 'title', 'slug', 'excerpt', 'content', 'sub_heading', 'thumbnail_url', 'author_id',
-      'published_at', 'meta_title', 'meta_description', 'created_at', 'updated_at',
-      'rel_download_url', 'upload_url', 'blog_access_tier', 'citation',
-    ],
+/**
+ * Public article URL keys: optional trailing .html; optional trailing -{numericId} (WordPress style).
+ * Example: "itat-...-421249.html" → slugOnly "itat-...", articleId 421249
+ */
+function parsePublicArticlePathKey(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return { slugOnly: '', articleId: null };
+  if (s.toLowerCase().endsWith('.html')) s = s.slice(0, -5);
+  const parts = s.split('-');
+  const last = parts[parts.length - 1];
+  if (/^\d+$/.test(last) && parts.length >= 2) {
+    const articleId = Number(last);
+    const slugOnly = parts.slice(0, -1).join('-');
+    if (Number.isFinite(articleId) && articleId > 0) {
+      return { slugOnly, articleId };
+    }
+  }
+  return { slugOnly: s, articleId: null };
+}
+
+async function findPublishedArticleRowByPublicPathKey(raw) {
+  const { slugOnly, articleId } = parsePublicArticlePathKey(raw);
+  if (articleId != null && Number.isFinite(articleId) && articleId > 0) {
+    const row = await Article.findOne({
+      where: { id: articleId, status: 'publish' },
+    });
+    if (!row) return null;
+    if (slugOnly) {
+      const plain = row.get({ plain: true });
+      if (plain.slug !== slugOnly) return null;
+    }
+    return row;
+  }
+  if (!slugOnly) return null;
+  return Article.findOne({
+    where: { slug: slugOnly, status: 'publish' },
   });
+}
+
+async function getArticleBySlugPublic(slug, viewer = null) {
+  const row = await findPublishedArticleRowByPublicPathKey(slug);
   if (!row) return null;
   const p = row.get({ plain: true });
   
@@ -1635,10 +1661,7 @@ async function getUpNextArticlesBySlugPublic(slug, viewer = null, rawLimit) {
   const requested = Number.isFinite(parsed) && parsed > 0 ? parsed : 6;
   /** At least 3, at most 10; default 6 so we usually fill ≥3 from the DB. */
   const limit = Math.min(10, Math.max(3, requested));
-  const focusRow = await Article.findOne({
-    where: { slug, status: 'publish' },
-    attributes: ['id', 'author_id'],
-  });
+  const focusRow = await findPublishedArticleRowByPublicPathKey(slug);
   if (!focusRow) return [];
   const articleId = Number(focusRow.get('id'));
   const authorId = focusRow.get('author_id');

@@ -26,41 +26,41 @@ try { require('dotenv').config(); } catch (_) { }
 
 const { Sequelize, QueryTypes } = require('sequelize');
 
-// ──── Source DB (migration / WP) — override with MIGRATION_SRC_* env ────
-const SRC_CONFIG = {
-    host: process.env.MIGRATION_SRC_HOST || '127.0.0.1',
-    port: parseInt(process.env.MIGRATION_SRC_PORT || '3306', 10),
-    user: process.env.MIGRATION_SRC_USER || 'root',
-    password: process.env.MIGRATION_SRC_PASSWORD ?? '12345678',
-    database: process.env.MIGRATION_SRC_DATABASE || 'studycafe',
-};
-
-// ──── Target DB (microservices) — override with MIGRATION_TGT_* env ────
-const TGT_CONFIG = {
-    host: process.env.MIGRATION_TGT_HOST || '127.0.0.1',
-    port: parseInt(process.env.MIGRATION_TGT_PORT || '3306', 10),
-    user: process.env.MIGRATION_TGT_USER || 'studycafe_user',
-    password: process.env.MIGRATION_TGT_PASSWORD || 'GDZ@p84i-F2X',
-    database: process.env.MIGRATION_TGT_DATABASE || 'studycafe_db',
-};
-
 // // ──── Source DB (migration / WP) — override with MIGRATION_SRC_* env ────
 // const SRC_CONFIG = {
-//     host: '127.0.0.1',
-//     port: '3306',
-//     user: 'root',
-//     password: '12345678',
-//     database: 'studycafe',
+//     host: process.env.MIGRATION_SRC_HOST || '127.0.0.1',
+//     port: parseInt(process.env.MIGRATION_SRC_PORT || '3306', 10),
+//     user: process.env.MIGRATION_SRC_USER || 'root',
+//     password: process.env.MIGRATION_SRC_PASSWORD ?? '12345678',
+//     database: process.env.MIGRATION_SRC_DATABASE || 'studycafe',
 // };
 
 // // ──── Target DB (microservices) — override with MIGRATION_TGT_* env ────
 // const TGT_CONFIG = {
-//     host: '168.144.1.14',
-//     port: '3306',
-//     user: 'studycafe_user',
-//     password: 'GDZ@p84i-F2X',
-//     database: 'studycafe_db',
+//     host: process.env.MIGRATION_TGT_HOST || '127.0.0.1',
+//     port: parseInt(process.env.MIGRATION_TGT_PORT || '3306', 10),
+//     user: process.env.MIGRATION_TGT_USER || 'studycafe_user',
+//     password: process.env.MIGRATION_TGT_PASSWORD || 'GDZ@p84i-F2X',
+//     database: process.env.MIGRATION_TGT_DATABASE || 'studycafe_db',
 // };
+
+// ──── Source DB (migration / WP) — override with MIGRATION_SRC_* env ────
+const SRC_CONFIG = {
+    host: '127.0.0.1',
+    port: '3306',
+    user: 'root',
+    password: '12345678',
+    database: 'studycafe',
+};
+
+// ──── Target DB (microservices) — override with MIGRATION_TGT_* env ────
+const TGT_CONFIG = {
+    host: '168.144.1.14',
+    port: '3306',
+    user: 'studycafe_user',
+    password: 'GDZ@p84i-F2X',
+    database: 'studycafe_db',
+};
 
 const BATCH = 500;
 
@@ -1444,6 +1444,30 @@ async function migrateFileCats(src, tgt) {
     }
 }
 
+/**
+ * Migrated WP articles use articles.id = wp_post_id (WordPress post ID). Snapshot rows without
+ * wp_post_id keep sc_articles surrogate id and wp_post_id NULL.
+ */
+function msArticleIdAndWpPostExprFromScRow(a) {
+    const wpRaw = a.wp_post_id;
+    const wp = wpRaw != null && wpRaw !== '' ? Number(wpRaw) : null;
+    if (wp != null && Number.isFinite(wp) && wp > 0) {
+        return { id: wp, wpPostIdSql: String(wp) };
+    }
+    return { id: Number(a.id), wpPostIdSql: 'NULL' };
+}
+
+/** sc_articles.id (snapshot PK) → articles.id in target (WP post id when present). */
+async function buildScArticleSurrogateToMsArticleIdMap(src) {
+    const rows = await src.query('SELECT id, wp_post_id FROM sc_articles', { type: QueryTypes.SELECT });
+    const map = Object.create(null);
+    for (const row of rows || []) {
+        const wp = row.wp_post_id != null && row.wp_post_id !== '' ? Number(row.wp_post_id) : null;
+        map[row.id] = wp != null && Number.isFinite(wp) && wp > 0 ? wp : Number(row.id);
+    }
+    return map;
+}
+
 async function migrateArticles(src, tgt) {
     console.log('📰 Migrating articles...');
     const total = await src.query('SELECT COUNT(*) as c FROM sc_articles', { type: QueryTypes.SELECT });
@@ -1462,21 +1486,31 @@ async function migrateArticles(src, tgt) {
         const chunk = allArticles.slice(i, i + BATCH);
         const values = chunk.map(a => {
             const accessTier = esc(a.blog_access_tier || 'free');
-            return `(${a.id}, ${esc(a.wp_post_id)}, ${esc(a.title, 65535)}, ${esc(a.slug)}, ${esc(a.content, 16000000)}, ${esc(a.excerpt, 65535)}, ${esc(a.sub_heading)}, ${a.author_id || 'NULL'}, ${esc(a.thumbnail_url)}, ${a.views || 0}, ${esc(a.meta_title)}, ${esc(a.meta_description)}, ${esc(a.meta_keywords)}, ${esc(a.case_name)}, ${esc(a.citation)}, ${esc(a.appeal_number)}, ${esc(a.judgement_date)}, ${esc(a.assessment_year)}, ${esc(a.court_name)}, ${esc(a.section)}, ${esc(a.noti_no)}, ${esc(a.noti_date)}, ${esc(a.ext_link)}, ${esc(a.upload_url)}, ${esc(a.rel_download_url)}, ${esc(a.external_links)}, ${esc(a.status)}, ${accessTier}, ${escDate(a.published_at)}, ${escDate(a.created_at)}, ${escDate(a.updated_at)})`;
+            const { id: msId, wpPostIdSql } = msArticleIdAndWpPostExprFromScRow(a);
+            return `(${msId}, ${wpPostIdSql}, ${esc(a.title, 65535)}, ${esc(a.slug)}, ${esc(a.content, 16000000)}, ${esc(a.excerpt, 65535)}, ${esc(a.sub_heading)}, ${a.author_id || 'NULL'}, ${esc(a.thumbnail_url)}, ${a.views || 0}, ${esc(a.meta_title)}, ${esc(a.meta_description)}, ${esc(a.meta_keywords)}, ${esc(a.case_name)}, ${esc(a.citation)}, ${esc(a.appeal_number)}, ${esc(a.judgement_date)}, ${esc(a.assessment_year)}, ${esc(a.court_name)}, ${esc(a.section)}, ${esc(a.noti_no)}, ${esc(a.noti_date)}, ${esc(a.ext_link)}, ${esc(a.upload_url)}, ${esc(a.rel_download_url)}, ${esc(a.external_links)}, ${esc(a.status)}, ${accessTier}, ${escDate(a.published_at)}, ${escDate(a.created_at)}, ${escDate(a.updated_at)})`;
         }).join(',');
         await tgt.query(`INSERT INTO articles (id, wp_post_id, title, slug, content, excerpt, sub_heading, author_id, thumbnail_url, views, meta_title, meta_description, meta_keywords, case_name, citation, appeal_number, judgement_date, assessment_year, court_name, section, noti_no, noti_date, ext_link, upload_url, rel_download_url, external_links, status, blog_access_tier, published_at, created_at, updated_at) VALUES ${values}`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allArticles.length)}/${allArticles.length}\r`);
+    }
+
+    if (allArticles.length) {
+        const [mx] = await tgt.query('SELECT IFNULL(MAX(id), 0) AS m FROM articles', { type: QueryTypes.SELECT });
+        const nextAi = Number(mx.m) + 1;
+        await tgt.query(`ALTER TABLE articles AUTO_INCREMENT = ${nextAi}`, { raw: true });
+        console.log(`   🔢 articles AUTO_INCREMENT → ${nextAi} (new rows omit id; wp_post_id NULL)`);
     }
     console.log(`   ✅ ${allArticles.length} articles`);
 }
 
 async function migrateArticleJunctions(src, tgt) {
     console.log('🔗 Migrating article junctions...');
+    const articleIdMap = await buildScArticleSurrogateToMsArticleIdMap(src);
+    const mapAid = (surrogateId) => articleIdMap[surrogateId] ?? surrogateId;
 
     // Categories
     const cats = await src.query('SELECT * FROM sc_article_categories', { type: QueryTypes.SELECT });
     for (let i = 0; i < cats.length; i += BATCH) {
-        const vals = cats.slice(i, i + BATCH).map(r => `(${r.article_id}, ${r.category_id})`).join(',');
+        const vals = cats.slice(i, i + BATCH).map(r => `(${mapAid(r.article_id)}, ${r.category_id})`).join(',');
         await tgt.query(`INSERT IGNORE INTO article_categories (article_id, category_id) VALUES ${vals}`, { raw: true });
     }
     console.log(`   categories: ${cats.length}`);
@@ -1484,7 +1518,7 @@ async function migrateArticleJunctions(src, tgt) {
     // Tags
     const tags = await src.query('SELECT * FROM sc_article_tags', { type: QueryTypes.SELECT });
     for (let i = 0; i < tags.length; i += BATCH) {
-        const vals = tags.slice(i, i + BATCH).map(r => `(${r.article_id}, ${r.tag_id})`).join(',');
+        const vals = tags.slice(i, i + BATCH).map(r => `(${mapAid(r.article_id)}, ${r.tag_id})`).join(',');
         await tgt.query(`INSERT IGNORE INTO article_tags (article_id, tag_id) VALUES ${vals}`, { raw: true });
     }
     console.log(`   tags: ${tags.length}`);
@@ -1492,7 +1526,7 @@ async function migrateArticleJunctions(src, tgt) {
     // Types
     const types = await src.query('SELECT * FROM sc_article_types_map', { type: QueryTypes.SELECT });
     for (let i = 0; i < types.length; i += BATCH) {
-        const vals = types.slice(i, i + BATCH).map(r => `(${r.article_id}, ${r.article_type_id})`).join(',');
+        const vals = types.slice(i, i + BATCH).map(r => `(${mapAid(r.article_id)}, ${r.article_type_id})`).join(',');
         await tgt.query(`INSERT IGNORE INTO article_types_map (article_id, article_type_id) VALUES ${vals}`, { raw: true });
     }
     console.log(`   types: ${types.length}`);
@@ -1500,7 +1534,7 @@ async function migrateArticleJunctions(src, tgt) {
     // Courts
     const courts = await src.query('SELECT * FROM sc_article_courts', { type: QueryTypes.SELECT });
     for (let i = 0; i < courts.length; i += BATCH) {
-        const vals = courts.slice(i, i + BATCH).map(r => `(${r.article_id}, ${r.court_id})`).join(',');
+        const vals = courts.slice(i, i + BATCH).map(r => `(${mapAid(r.article_id)}, ${r.court_id})`).join(',');
         await tgt.query(`INSERT IGNORE INTO article_courts (article_id, court_id) VALUES ${vals}`, { raw: true });
     }
     console.log(`   courts: ${courts.length}`);
@@ -1511,10 +1545,12 @@ async function migrateComments(src, tgt) {
     console.log('💬 Migrating comments...');
     const rows = await src.query('SELECT * FROM sc_comments ORDER BY id', { type: QueryTypes.SELECT });
     if (!rows.length) { console.log('   ✅ 0 comments'); return; }
+    const articleIdMap = await buildScArticleSurrogateToMsArticleIdMap(src);
+    const mapAid = (surrogateId) => articleIdMap[surrogateId] ?? surrogateId;
     for (let i = 0; i < rows.length; i += BATCH) {
         const chunk = rows.slice(i, i + BATCH);
         const values = chunk.map(c => {
-            return `(${c.id}, ${esc(c.wp_comment_id)}, ${c.article_id}, ${c.user_id || 'NULL'}, ${esc(c.author_name)}, ${esc(c.author_email)}, ${esc(c.content, 65535)}, ${c.approved ? 1 : 0}, ${c.parent_id || 'NULL'}, ${escDate(c.created_at)})`;
+            return `(${c.id}, ${esc(c.wp_comment_id)}, ${mapAid(c.article_id)}, ${c.user_id || 'NULL'}, ${esc(c.author_name)}, ${esc(c.author_email)}, ${esc(c.content, 65535)}, ${c.approved ? 1 : 0}, ${c.parent_id || 'NULL'}, ${escDate(c.created_at)})`;
         }).join(',');
         await tgt.query(`INSERT INTO comments (id, wp_comment_id, article_id, user_id, author_name, author_email, content, approved, parent_id, created_at) VALUES ${values}`, { raw: true });
     }
