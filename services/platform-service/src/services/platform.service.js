@@ -1441,13 +1441,13 @@ async function embedRelatedArticles(content) {
     byId.set(Number(p.id), p);
   });
 
-  // Replace each [related id="N"] shortcode with an HTML block (cafestudy-fe uses /blogs/:slug)
+  // Replace each [related id="N"] shortcode with canonical /{slug}-{id}.html links
   const replaced = content.replace(/\[related\s+id=['"](\d+)['"]\]/gi, (match, rawId) => {
     const n = Number(rawId);
     const article = byWpId.get(n) || byId.get(n);
     if (!article) return ''; // remove unresolvable shortcodes
-    const slug = String(article.slug || '').trim();
-    const href = `/blogs/${encodeURIComponent(slug)}`;
+    const href = articleCanonicalPublicPath(article);
+    if (!href) return '';
     return `<div class="related-article-inline"><p class="related-heading">Also Read</p><a href="${href}" class="related-link">${escapeHtmlText(article.title || '')}</a></div>`;
   });
   return replaced;
@@ -1534,6 +1534,15 @@ function parsePublicArticlePathKey(raw) {
     }
   }
   return { slugOnly: s, articleId: null };
+}
+
+/** Canonical public article URL: /{slug}-{id}.html */
+function articleCanonicalPublicPath(article) {
+  const slug = String(article?.slug || '').trim();
+  const id = article?.id;
+  if (!slug || id == null || id === '') return null;
+  const path = `/${slug}-${id}.html`;
+  return path.startsWith('/') ? path : `/${path}`;
 }
 
 async function findPublishedArticleRowByPublicPathKey(raw) {
@@ -2316,19 +2325,10 @@ function isModuleDetailSeoPath(pageSlug) {
   );
 }
 
-/** Public paths used by Next.js / WordPress-style article URLs. */
+/** SEO + lookups: canonical .html path only (legacy /blogs/* still resolved on read). */
 function articleDetailSeoPaths(article) {
-  const slug = String(article?.slug || '').trim();
-  if (!slug) return [];
-  const paths = [];
-  const id = article?.id;
-  if (id != null && id !== '') {
-    const composite = `${slug}-${id}`;
-    paths.push(`/blogs/${composite}`);
-    paths.push(`/${slug}-${id}.html`);
-  }
-  paths.push(`/blogs/${slug}`);
-  return [...new Set(paths.map(canonicalSlug).filter(Boolean))];
+  const path = articleCanonicalPublicPath(article);
+  return path ? [canonicalSlug(path)] : [];
 }
 
 function courseDetailSeoPath(slug) {
@@ -2415,7 +2415,14 @@ async function syncArticleSeoMetadata(article, previousSlug) {
     );
   }
   const paths = articleDetailSeoPaths(article);
-  const seo = seoPayloadFromModuleFields(article, { page_name: article.title, title: article.title });
+  const canonicalPath = articleCanonicalPublicPath(article);
+  const seo = seoPayloadFromModuleFields(article, {
+    page_name: article.title,
+    title: article.title,
+  });
+  if (!seo.canonical_url && canonicalPath) {
+    seo.canonical_url = canonicalPath;
+  }
   return upsertSeoMetadataForPaths(paths, seo);
 }
 
@@ -2454,8 +2461,6 @@ async function resolveSeoLookupPaths(path) {
 
   const htmlMatch = key.match(WP_ARTICLE_HTML_PATH_RE);
   if (htmlMatch) {
-    const inner = htmlMatch[1];
-    out.push(`/blogs/${inner}`);
     out.push(key);
     return [...new Set(out)];
   }
@@ -2692,7 +2697,7 @@ async function createSeoMetadata(data) {
   if (conflict.conflict) {
     const hint =
       conflict.type === 'article'
-        ? `/blogs/${conflict.slug}`
+        ? `/{slug}-${conflict.slug}.html (use article id in path)`
         : `/course/${conflict.slug}`;
     throw new AppError(
       `Slug '${conflict.slug}' is already used by a ${conflict.type}. Use path '${hint}' in SEO metadata (synced automatically when saving the ${conflict.type}).`,
@@ -2735,7 +2740,7 @@ async function updateSeoMetadata(id, data) {
       if (conflict.conflict) {
         const hint =
           conflict.type === 'article'
-            ? `/blogs/${conflict.slug}`
+            ? `/{slug}-{articleId}.html`
             : `/course/${conflict.slug}`;
         throw new AppError(
           `Slug '${conflict.slug}' is already used by a ${conflict.type}. Use path '${hint}' in SEO metadata (synced automatically when saving the ${conflict.type}).`,
