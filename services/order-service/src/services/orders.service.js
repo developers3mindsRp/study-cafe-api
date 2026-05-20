@@ -444,11 +444,16 @@ async function syncCouponUsageForReusedOrder(orderPublicId, userId, previousCoup
 
 /** Fetch the validity setting ('1year' | 'lifetime') for a course from the shared DB. */
 async function fetchCourseValidity(courseId) {
-  const rows = await sequelize.query(
-    'SELECT validity FROM courses WHERE id = ? LIMIT 1',
-    { replacements: [Number(courseId)], type: QueryTypes.SELECT }
-  );
-  return rows[0]?.validity ?? '1year';
+  try {
+    const rows = await sequelize.query(
+      'SELECT validity FROM courses WHERE id = ? LIMIT 1',
+      { replacements: [Number(courseId)], type: QueryTypes.SELECT }
+    );
+    return rows[0]?.validity ?? '1year';
+  } catch {
+    // Column may not exist yet (pre-migration); default to '1year'
+    return '1year';
+  }
 }
 
 /** Outbox: enrollment / membership + affiliate (only when order amount &gt; 0). */
