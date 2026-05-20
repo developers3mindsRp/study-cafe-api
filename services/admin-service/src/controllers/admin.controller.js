@@ -91,16 +91,56 @@ const getLogs = asyncHandler(async (req, res) => {
 
 // ── Course proxy handlers ──────────────────────────────────────────
 
+function courseSeoSyncPayload(course, body = {}) {
+  const slug = String(course?.slug || body?.slug || '').trim();
+  if (!slug) return null;
+  const title = String(course?.title || body?.title || slug).trim();
+  return {
+    paths: [`/course/${slug}`],
+    page_name: title,
+    meta_title: (course?.meta_title || body?.meta_title || title || '').trim() || title,
+    meta_description: course?.meta_description ?? body?.meta_description ?? null,
+    meta_keywords: course?.meta_keywords ?? body?.meta_keywords ?? null,
+    canonical_url: course?.canonical_url ?? body?.canonical_url ?? null,
+    og_title: course?.og_title ?? body?.og_title ?? null,
+    og_description: course?.og_description ?? body?.og_description ?? null,
+    og_image_url: course?.og_image_url ?? body?.og_image_url ?? null,
+    robots: course?.robots ?? body?.robots ?? 'index, follow',
+  };
+}
+
+async function syncCourseSeoMetadataToPlatform(course, body = {}, previousSlug) {
+  const payload = courseSeoSyncPayload(course, body);
+  if (!payload) return;
+  const slug = String(course?.slug || body?.slug || '').trim();
+  const prev = String(previousSlug || '').trim();
+  if (prev && slug && prev !== slug) {
+    payload.remove_paths = [`/course/${prev}`];
+  }
+  try {
+    await platformClient.post('/internal/platform/seo-metadata/sync-module', payload);
+  } catch (err) {
+    console.error('[admin] course SEO metadata sync failed:', err.message);
+  }
+}
+
 const createCourse = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
   const { data } = await courseClient.post('/internal/courses', req.body);
+  await syncCourseSeoMetadataToPlatform(data, req.body);
   await adminLogsService.logAction(adminId, 'CREATE_COURSE', 'course', String(data.id), { title: data.title }, req.ip);
   sendCreated(res, data);
 });
 
 const updateCourse = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
+  let previousSlug = null;
+  if (req.body.slug !== undefined) {
+    const { data: prev } = await courseClient.get(`/internal/courses/${req.params.id}`);
+    previousSlug = prev?.slug ?? null;
+  }
   const { data } = await courseClient.put(`/internal/courses/${req.params.id}`, req.body);
+  await syncCourseSeoMetadataToPlatform(data, req.body, previousSlug);
   await adminLogsService.logAction(adminId, 'UPDATE_COURSE', 'course', req.params.id, {}, req.ip);
   sendSuccess(res, data);
 });

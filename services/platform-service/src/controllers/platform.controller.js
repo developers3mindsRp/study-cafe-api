@@ -544,6 +544,12 @@ const deleteSeoMetadata = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+const syncModuleSeoMetadata = asyncHandler(async (req, res) => {
+  const data = await platformService.seo.syncModuleSeoMetadataInternal(req.body);
+  if (!data) throw new AppError('SEO metadata sync failed', 400);
+  sendSuccess(res, data);
+});
+
 const listSiteSeoRoutesInternal = asyncHandler(async (req, res) => {
   const data = await platformService.siteSeoRoutes.listSiteSeoRoutesInternal();
   sendSuccess(res, data);
@@ -636,6 +642,7 @@ module.exports = {
   createSeoMetadata,
   updateSeoMetadata,
   deleteSeoMetadata,
+  syncModuleSeoMetadata,
   listSiteSeoRoutesInternal,
   createSiteSeoRoute,
   updateSiteSeoRoute,

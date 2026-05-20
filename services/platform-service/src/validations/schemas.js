@@ -369,6 +369,22 @@ const updateSiteSeoRoute = {
         .required(),
 };
 
+const syncModuleSeoMetadata = {
+    body: Joi.object({
+        paths: Joi.array().items(Joi.string().max(500)).min(1).required(),
+        remove_paths: Joi.array().items(Joi.string().max(500)),
+        page_name: Joi.string().max(255).allow('', null),
+        meta_title: Joi.string().max(255).required(),
+        meta_description: Joi.string().allow('', null),
+        meta_keywords: Joi.string().max(500).allow('', null),
+        canonical_url: Joi.string().max(500).allow('', null),
+        og_title: Joi.string().max(255).allow('', null),
+        og_description: Joi.string().allow('', null),
+        og_image_url: Joi.string().max(500).allow('', null),
+        robots: Joi.string().max(255).allow('', null),
+    }),
+};
+
 const updateSeoMetadata = {
     params: idParam.params,
     body: Joi.object({
@@ -494,6 +510,7 @@ module.exports = {
     upsertCmsPage,
     createSeoMetadata,
     updateSeoMetadata,
+    syncModuleSeoMetadata,
     createSiteSeoRoute,
     updateSiteSeoRoute,
     subscribeNewsletter,

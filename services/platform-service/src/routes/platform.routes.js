@@ -58,6 +58,12 @@ function register(router) {
   router.delete('/internal/platform/faqs/:id', internalAuth, validate(schemas.idParam), controller.deleteFaq);
   router.get('/internal/platform/seo-metadata', internalAuth, controller.getSeoMetadataInternal);
   router.get('/internal/platform/seo-metadata/eligible-pages', internalAuth, controller.getSeoEligiblePagesInternal);
+  router.post(
+    '/internal/platform/seo-metadata/sync-module',
+    internalAuth,
+    validate(schemas.syncModuleSeoMetadata),
+    controller.syncModuleSeoMetadata
+  );
   router.get('/internal/platform/seo-metadata/:id', internalAuth, validate(schemas.idParam), controller.getSeoMetadataByIdInternal);
   router.get('/internal/platform/seo-metadata/slug/:slug', internalAuth, validate(schemas.slugParam), controller.getSeoMetadataBySlugPublic);
   router.post('/internal/platform/seo-metadata', internalAuth, validate(schemas.createSeoMetadata), controller.createSeoMetadata);

@@ -2019,6 +2019,9 @@ async function createArticle(data) {
   if (court_ids.length) await ArticleCourtMap.bulkCreate(court_ids.map((court_id) => ({ article_id: articleId, court_id })));
 
   const out = await getArticleByIdInternal(articleId);
+  await syncArticleSeoMetadata(out).catch((err) => {
+    console.error('[createArticle] sync SEO metadata failed', err.message);
+  });
   console.log('[createArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
   await articleScheduling.syncArticlePublishJob(out).catch((err) => {
     console.error('[createArticle] sync schedule failed', err.message, err.stack);
@@ -2030,6 +2033,7 @@ async function updateArticle(id, data) {
   const row = await Article.findByPk(id);
   if (!row) return null;
   const cur = row.get({ plain: true });
+  const previousSlug = cur.slug;
   const nextStatus = data.status !== undefined ? normalizeArticleAdminStatus(data.status) : cur.status;
 
   let nextScheduled = cur.scheduled_publish_at;
@@ -2120,6 +2124,23 @@ async function updateArticle(id, data) {
     if (ids.length) await ArticleCourtMap.bulkCreate(ids.map((court_id) => ({ article_id: id, court_id })));
   }
   const out = await getArticleByIdInternal(id);
+  const slugChanged = data.slug !== undefined && String(previousSlug) !== String(out?.slug);
+  const seoFieldsTouched =
+    data.meta_title !== undefined ||
+    data.meta_description !== undefined ||
+    data.meta_keywords !== undefined ||
+    data.canonical_url !== undefined ||
+    data.robots !== undefined ||
+    data.og_title !== undefined ||
+    data.og_description !== undefined ||
+    data.og_image_url !== undefined ||
+    data.title !== undefined ||
+    slugChanged;
+  if (seoFieldsTouched) {
+    await syncArticleSeoMetadata(out, slugChanged ? previousSlug : null).catch((err) => {
+      console.error('[updateArticle] sync SEO metadata failed', err.message);
+    });
+  }
   console.log('[updateArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
   await articleScheduling.syncArticlePublishJob(out).catch((err) => {
     console.error('[updateArticle] sync schedule failed', err.message, err.stack);
@@ -2128,6 +2149,13 @@ async function updateArticle(id, data) {
 }
 
 async function deleteArticle(id) {
+  const row = await Article.findByPk(id, {
+    attributes: ['id', 'slug'],
+    raw: true,
+  });
+  if (row?.slug) {
+    await deleteSeoMetadataByPaths(articleDetailSeoPaths(row)).catch(() => {});
+  }
   await articleScheduling.removeScheduledPublishJob(id).catch(() => {});
   const deleted = await Article.destroy({ where: { id } });
   return deleted > 0;
@@ -2274,6 +2302,207 @@ async function getContactInquiry() {
 }
 // ── SEO Metadata ───────────────────────────────────────────────────
 
+const ARTICLE_DETAIL_PATH_RE = /^\/blogs\/(.+)$/i;
+const COURSE_DETAIL_PATH_RE = /^\/course\/(.+)$/i;
+const WP_ARTICLE_HTML_PATH_RE = /^\/(.+)\.html$/i;
+
+function isModuleDetailSeoPath(pageSlug) {
+  const key = canonicalSlug(pageSlug);
+  if (!key) return false;
+  return (
+    ARTICLE_DETAIL_PATH_RE.test(key) ||
+    COURSE_DETAIL_PATH_RE.test(key) ||
+    WP_ARTICLE_HTML_PATH_RE.test(key)
+  );
+}
+
+/** Public paths used by Next.js / WordPress-style article URLs. */
+function articleDetailSeoPaths(article) {
+  const slug = String(article?.slug || '').trim();
+  if (!slug) return [];
+  const paths = [];
+  const id = article?.id;
+  if (id != null && id !== '') {
+    const composite = `${slug}-${id}`;
+    paths.push(`/blogs/${composite}`);
+    paths.push(`/${slug}-${id}.html`);
+  }
+  paths.push(`/blogs/${slug}`);
+  return [...new Set(paths.map(canonicalSlug).filter(Boolean))];
+}
+
+function courseDetailSeoPath(slug) {
+  const s = String(slug || '').trim();
+  return s ? canonicalSlug(`/course/${s}`) : '';
+}
+
+function seoPayloadFromModuleFields(source, defaults = {}) {
+  const title = String(source?.title || defaults.title || '').trim();
+  const metaTitle = String(source?.meta_title || '').trim() || title;
+  return {
+    page_name: String(defaults.page_name || title || metaTitle).trim() || metaTitle,
+    meta_title: metaTitle,
+    meta_description: source?.meta_description ?? null,
+    meta_keywords: source?.meta_keywords ?? null,
+    canonical_url: source?.canonical_url ?? null,
+    og_title: source?.og_title ?? null,
+    og_description: source?.og_description ?? null,
+    og_image_url: source?.og_image_url ?? null,
+    robots: source?.robots ?? 'index, follow',
+  };
+}
+
+async function deleteSeoMetadataByPaths(paths) {
+  const keys = [...new Set((paths || []).map(canonicalSlug).filter(Boolean))];
+  if (!keys.length) return;
+  const candidates = keys.flatMap((p) => normalizeSlugCandidates(p));
+  await SeoMetadata.destroy({
+    where: { page_slug: { [Op.in]: [...new Set(candidates)] } },
+  });
+}
+
+async function findSeoMetadataRowByPaths(paths) {
+  const keys = [...new Set((paths || []).map(canonicalSlug).filter(Boolean))];
+  if (!keys.length) return null;
+  const candidates = keys.flatMap((p) => normalizeSlugCandidates(p));
+  const rows = await SeoMetadata.findAll({
+    where: { page_slug: { [Op.in]: [...new Set(candidates)] } },
+    order: [['id', 'DESC']],
+  });
+  for (const key of keys) {
+    const hit = rows.find((r) => canonicalSlug(r.get('page_slug')) === key);
+    if (hit) return hit;
+  }
+  return rows[0] || null;
+}
+
+async function upsertSeoMetadataForPaths(paths, data) {
+  const uniquePaths = [...new Set((paths || []).map(canonicalSlug).filter(Boolean))];
+  if (!uniquePaths.length) return null;
+
+  const primaryPath = uniquePaths[0];
+  const metaTitle = String(data?.meta_title || data?.page_name || '').trim();
+  if (!metaTitle) return null;
+
+  const payload = {
+    page_name: String(data?.page_name || metaTitle).trim() || metaTitle,
+    page_slug: primaryPath,
+    meta_title: metaTitle,
+    meta_description: data?.meta_description ?? null,
+    meta_keywords: data?.meta_keywords ?? null,
+    canonical_url: data?.canonical_url ?? null,
+    og_title: data?.og_title ?? null,
+    og_description: data?.og_description ?? null,
+    og_image_url: data?.og_image_url ?? null,
+    robots: data?.robots || 'index, follow',
+  };
+
+  const existing = await findSeoMetadataRowByPaths(uniquePaths);
+  if (existing) {
+    await existing.update(payload);
+    return existing.get({ plain: true });
+  }
+
+  const row = await SeoMetadata.create(payload);
+  return row.get({ plain: true });
+}
+
+async function syncArticleSeoMetadata(article, previousSlug) {
+  if (!article?.slug) return null;
+  if (previousSlug && String(previousSlug).trim() !== String(article.slug).trim()) {
+    await deleteSeoMetadataByPaths(
+      articleDetailSeoPaths({ slug: previousSlug, id: article.id })
+    );
+  }
+  const paths = articleDetailSeoPaths(article);
+  const seo = seoPayloadFromModuleFields(article, { page_name: article.title, title: article.title });
+  return upsertSeoMetadataForPaths(paths, seo);
+}
+
+async function syncCourseSeoMetadata(course) {
+  const path = courseDetailSeoPath(course?.slug);
+  if (!path) return null;
+  const seo = seoPayloadFromModuleFields(course, { page_name: course.title, title: course.title });
+  return upsertSeoMetadataForPaths([path], seo);
+}
+
+async function syncModuleSeoMetadataInternal(data) {
+  if (Array.isArray(data?.remove_paths) && data.remove_paths.length) {
+    await deleteSeoMetadataByPaths(data.remove_paths);
+  }
+  const paths = Array.isArray(data?.paths) ? data.paths : [];
+  return upsertSeoMetadataForPaths(paths, data);
+}
+
+async function resolveSeoLookupPaths(path) {
+  const key = canonicalSlug(path);
+  if (!key) return [];
+
+  const out = normalizeSlugCandidates(key);
+
+  const blogMatch = key.match(ARTICLE_DETAIL_PATH_RE);
+  if (blogMatch) {
+    out.push(key);
+    return [...new Set(out)];
+  }
+
+  const courseMatch = key.match(COURSE_DETAIL_PATH_RE);
+  if (courseMatch) {
+    out.push(key);
+    return [...new Set(out)];
+  }
+
+  const htmlMatch = key.match(WP_ARTICLE_HTML_PATH_RE);
+  if (htmlMatch) {
+    const inner = htmlMatch[1];
+    out.push(`/blogs/${inner}`);
+    out.push(key);
+    return [...new Set(out)];
+  }
+
+  return out;
+}
+
+async function buildSeoFromArticlePath(path) {
+  const key = canonicalSlug(path);
+  let pathKey = null;
+
+  const blogMatch = key.match(ARTICLE_DETAIL_PATH_RE);
+  if (blogMatch) pathKey = blogMatch[1];
+  else {
+    const htmlMatch = key.match(WP_ARTICLE_HTML_PATH_RE);
+    if (htmlMatch) pathKey = htmlMatch[1];
+  }
+  if (!pathKey) return null;
+
+  const row = await findPublishedArticleRowByPublicPathKey(pathKey);
+  if (!row) return null;
+
+  const plain = row.get({ plain: true });
+  const paths = articleDetailSeoPaths(plain);
+  const seo = seoPayloadFromModuleFields(plain, { page_name: plain.title, title: plain.title });
+  return upsertSeoMetadataForPaths(paths, seo);
+}
+
+async function buildSeoFromCoursePath(path) {
+  const key = canonicalSlug(path);
+  const courseMatch = key.match(COURSE_DETAIL_PATH_RE);
+  if (!courseMatch) return null;
+
+  const slugSegment = courseMatch[1];
+  const candidates = normalizeSlugCandidates(slugSegment);
+  const courseRows = await sequelize.query(
+    `SELECT id, title, slug, meta_title, meta_description, meta_keywords,
+            canonical_url, robots, og_title, og_description, og_image_url
+     FROM courses WHERE slug IN (:slugs) LIMIT 1`,
+    { replacements: { slugs: candidates.length ? candidates : [slugSegment] }, type: QueryTypes.SELECT }
+  );
+  const row = courseRows?.[0];
+  if (!row) return null;
+
+  return syncCourseSeoMetadata(row);
+}
+
 function normalizeSlugCandidates(slug) {
   const raw = String(slug || '').trim();
   if (!raw) return [];
@@ -2398,6 +2627,10 @@ async function deleteSiteSeoRoute(id) {
 }
 
 async function checkSlugNotUsedByModule(slug) {
+  if (isModuleDetailSeoPath(slug)) {
+    return { conflict: false };
+  }
+
   const candidates = normalizeSlugCandidates(slug);
   if (!candidates.length) return { conflict: false };
 
@@ -2435,22 +2668,34 @@ async function getSeoMetadataByIdInternal(id) {
 }
 
 async function getSeoMetadataBySlugPublic(slug) {
-  // Normalize: try exact match first, then with leading slash, then without
-  const candidates = [
-    slug,
-    slug.startsWith('/') ? slug : `/${slug}`,
-    slug.startsWith('/') ? slug.slice(1) : slug,
-  ];
-  const { Op } = require('sequelize');
-  const row = await SeoMetadata.findOne({ where: { page_slug: { [Op.in]: candidates } } });
-  return row ? row.get({ plain: true }) : null;
+  const lookupPaths = await resolveSeoLookupPaths(slug);
+  const candidates = lookupPaths.length
+    ? lookupPaths
+    : normalizeSlugCandidates(slug);
+
+  const row = await findSeoMetadataRowByPaths(candidates);
+  if (row) return row.get({ plain: true });
+
+  const key = canonicalSlug(slug);
+  if (ARTICLE_DETAIL_PATH_RE.test(key) || WP_ARTICLE_HTML_PATH_RE.test(key)) {
+    return buildSeoFromArticlePath(key);
+  }
+  if (COURSE_DETAIL_PATH_RE.test(key)) {
+    return buildSeoFromCoursePath(key);
+  }
+
+  return null;
 }
 
 async function createSeoMetadata(data) {
   const conflict = await checkSlugNotUsedByModule(data.page_slug);
   if (conflict.conflict) {
+    const hint =
+      conflict.type === 'article'
+        ? `/blogs/${conflict.slug}`
+        : `/course/${conflict.slug}`;
     throw new AppError(
-      `Slug '${conflict.slug}' is already used by a ${conflict.type}. Use the ${conflict.type}'s own SEO meta fields instead.`,
+      `Slug '${conflict.slug}' is already used by a ${conflict.type}. Use path '${hint}' in SEO metadata (synced automatically when saving the ${conflict.type}).`,
       409
     );
   }
@@ -2488,8 +2733,12 @@ async function updateSeoMetadata(id, data) {
     if (!slugUnchanged) {
       const conflict = await checkSlugNotUsedByModule(data.page_slug);
       if (conflict.conflict) {
+        const hint =
+          conflict.type === 'article'
+            ? `/blogs/${conflict.slug}`
+            : `/course/${conflict.slug}`;
         throw new AppError(
-          `Slug '${conflict.slug}' is already used by a ${conflict.type}. Use the ${conflict.type}'s own SEO meta fields instead.`,
+          `Slug '${conflict.slug}' is already used by a ${conflict.type}. Use path '${hint}' in SEO metadata (synced automatically when saving the ${conflict.type}).`,
           409
         );
       }
@@ -2619,6 +2868,8 @@ module.exports = {
     createSeoMetadata,
     updateSeoMetadata,
     deleteSeoMetadata,
+    syncModuleSeoMetadataInternal,
+    syncCourseSeoMetadata,
   },
   siteSeoRoutes: {
     listSiteSeoRoutesInternal,
