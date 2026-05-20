@@ -693,18 +693,19 @@ const coursesService = {
     if (!vis) return null;
 
     if (userId) {
-      const userBatch = await this.getUserBatchForCourse(cplain.id, userId);
-      if (userBatch) {
-        return this._getBatchesSessionsRecordings(cplain.id, {
-          visibleOnly: true,
-          onlyBatchId: userBatch.id,
-        });
-      }
-
-      // Lazy Auto-Enrollment for Membership Users
-      // If the user lacks a batch but has access (via membership), enroll them now.
+      // Always verify access first — catches expired courses regardless of how they were enrolled
       const hasAccess = await checkCourseAccess(authorization, cplain.id);
+
       if (hasAccess) {
+        const userBatch = await this.getUserBatchForCourse(cplain.id, userId);
+        if (userBatch) {
+          return this._getBatchesSessionsRecordings(cplain.id, {
+            visibleOnly: true,
+            onlyBatchId: userBatch.id,
+          });
+        }
+
+        // Lazy Auto-Enrollment for Membership Users
         const enrolled = await this.autoEnrollInBatch(cplain.id, userId);
         if (enrolled && enrolled.batch_id) {
           return this._getBatchesSessionsRecordings(cplain.id, {
@@ -715,7 +716,7 @@ const coursesService = {
       }
     }
 
-    // Not purchased (or anonymous) → return batch schedule without recordings.
+    // Not purchased, expired, or anonymous → return batch schedule without recordings.
     return this._getBatchesSessionsRecordings(cplain.id, {
       visibleOnly: true,
       stripRecordings: true,
@@ -742,7 +743,11 @@ const coursesService = {
     const cplain = course.get({ plain: true });
     const vis = await allowPublicCourseDetail(cplain.hide_from_public, courseId, opts.authorization);
     if (!vis) return null;
-    return this._getBatchesSessionsRecordings(courseId, { visibleOnly: true });
+    const allowed = await checkCourseAccess(opts.authorization, courseId);
+    return this._getBatchesSessionsRecordings(courseId, {
+      visibleOnly: true,
+      stripRecordings: !allowed,
+    });
   },
 
   /** Same as getSessionsByCourseId but without is_published filter (for admin). */
