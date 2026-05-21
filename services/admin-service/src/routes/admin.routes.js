@@ -128,6 +128,7 @@ function register(router) {
   router.put('/admin/platform/coupons/:id', requireAdmin, p.putCoupon);
   router.delete('/admin/platform/coupons/:id', requireAdmin, p.deleteCoupon);
   router.get('/admin/platform/articles', requireAdmin, p.getArticles);
+  router.post('/admin/platform/articles/:id/preview-token', requireAdmin, controller.createArticlePreviewToken);
   router.get('/admin/platform/articles/:id', requireAdmin, p.getArticle);
   router.post('/admin/platform/articles', requireAdmin, p.postArticle);
   router.put('/admin/platform/articles/:id', requireAdmin, p.putArticle);

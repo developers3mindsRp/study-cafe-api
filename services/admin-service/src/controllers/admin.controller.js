@@ -928,6 +928,20 @@ const deletePaymentLink = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+const createArticlePreviewToken = asyncHandler(async (req, res) => {
+  const articleId = Number(req.params.id);
+  if (!Number.isFinite(articleId) || articleId <= 0) throw new AppError('Invalid article id', 400);
+  const [tokenResult, articleResult] = await Promise.all([
+    platformClient.post(`/internal/platform/articles/${articleId}/preview-token`),
+    platformClient.get(`/internal/platform/articles/${articleId}`),
+  ]);
+  const token = tokenResult.data.token;
+  const slug = articleResult.data.slug;
+  const frontendUrl = config.frontendUrl;
+  const previewUrl = `${frontendUrl}/${slug}-${articleId}.html?preview_token=${token}`;
+  sendSuccess(res, { previewUrl, expiresInSeconds: 900 });
+});
+
 const createCoursePreviewToken = asyncHandler(async (req, res) => {
   const courseId = Number(req.params.id);
   if (!Number.isFinite(courseId) || courseId <= 0) throw new AppError('Invalid course id', 400);
@@ -1023,4 +1037,5 @@ module.exports = {
   putPaymentLink,
   deletePaymentLink,
   createCoursePreviewToken,
+  createArticlePreviewToken,
 };

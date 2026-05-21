@@ -1571,8 +1571,24 @@ async function findPublishedArticleRowByPublicPathKey(raw) {
   });
 }
 
-async function getArticleBySlugPublic(slug, viewer = null) {
-  const row = await findPublishedArticleRowByPublicPathKey(slug);
+async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) {
+  let row = null;
+  if (previewToken) {
+    const { resolvePreviewToken } = require('./articlePreviewToken.service');
+    const previewArticleId = resolvePreviewToken(previewToken);
+    if (previewArticleId) {
+      // Fetch draft article by id without status filter, verify slug matches
+      const candidate = await Article.findOne({ where: { id: previewArticleId } });
+      if (candidate) {
+        const { slugOnly } = parsePublicArticlePathKey(slug);
+        const plain = candidate.get({ plain: true });
+        if (!slugOnly || plain.slug === slugOnly || String(plain.id) === String(previewArticleId)) {
+          row = candidate;
+        }
+      }
+    }
+  }
+  if (!row) row = await findPublishedArticleRowByPublicPathKey(slug);
   if (!row) return null;
   const p = row.get({ plain: true });
   
