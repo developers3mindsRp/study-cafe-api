@@ -15,6 +15,7 @@ function register(router) {
   router.get('/admin/courses', requireAdmin, controller.getCourses);
   router.get('/admin/courses/:id', requireAdmin, controller.getCourse);
   router.get('/admin/courses/:id/sessions', requireAdmin, controller.getCourseSessions);
+  router.post('/admin/courses/:id/preview-token', requireAdmin, controller.createCoursePreviewToken);
   router.get('/admin/batches', requireAdmin, controller.listBatches);
   router.get('/admin/course-cats', requireAdmin, controller.getCourseCats);
   router.post('/admin/course-cats', requireAdmin, controller.createCourseCat);

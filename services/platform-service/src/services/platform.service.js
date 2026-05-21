@@ -148,11 +148,18 @@ async function getAuthorDisplayNamesBatch(authorIds) {
   const uniq = [...new Set(authorIds)].filter((id) => id != null);
   if (uniq.length === 0) return new Map();
   const rows = await sequelize.query(
-    'SELECT id, display_name FROM users WHERE id IN (?)',
+    'SELECT id, display_name, name, email FROM users WHERE id IN (?)',
     { replacements: [uniq], type: QueryTypes.SELECT }
   );
   const map = new Map();
-  rows.forEach((r) => { map.set(Number(r.id), r.display_name || null); });
+  rows.forEach((r) => {
+    // Prefer display_name, fall back to name, then email prefix
+    const label = (r.display_name && r.display_name.trim())
+      || (r.name && r.name.trim())
+      || (r.email ? r.email.split('@')[0] : null)
+      || null;
+    map.set(Number(r.id), label);
+  });
   return map;
 }
 

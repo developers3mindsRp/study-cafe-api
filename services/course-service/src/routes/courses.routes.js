@@ -64,6 +64,10 @@ function register(router) {
   // Course Page Settings
   router.get('/internal/course-page-settings', internalAuth, coursesController.getPageSettings);
   router.put('/internal/course-page-settings/:key', internalAuth, validate(schemas.updatePageSetting), coursesController.updatePageSetting);
+
+  // Preview tokens (admin-only via internal auth)
+  router.post('/internal/courses/:id/preview-token', internalAuth, coursesController.createPreviewToken);
+  router.get('/internal/preview-tokens/:token', internalAuth, coursesController.resolvePreviewToken);
 }
 
 module.exports = { register };

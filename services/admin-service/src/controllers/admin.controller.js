@@ -1,4 +1,5 @@
 const FormData = require('form-data');
+const config = require('../config');
 const courseClient = require('../clients/courseClient');
 const orderClient = require('../clients/orderClient');
 const platformClient = require('../clients/platformClient');
@@ -664,8 +665,16 @@ const platform = {
   checkCouponCodeExists,
   getArticles: platformProxy((c, req) => c.get('/internal/platform/articles', { params: req.query }).then((r) => ({ data: r.data }))),
   getArticle: platformProxy((c, req) => c.get(`/internal/platform/articles/${req.params.id}`).then((r) => ({ data: r.data }))),
-  postArticle: platformProxy((c, req) => c.post('/internal/platform/articles', req.body).then((r) => ({ data: r.data, status: 201 }))),
-  putArticle: platformProxy((c, req) => c.put(`/internal/platform/articles/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
+  postArticle: platformProxy((c, req) => {
+    const adminId = getAdminId(req);
+    const body = adminId && !req.body.author_id ? { ...req.body, author_id: adminId } : req.body;
+    return c.post('/internal/platform/articles', body).then((r) => ({ data: r.data, status: 201 }));
+  }),
+  putArticle: platformProxy((c, req) => {
+    const adminId = getAdminId(req);
+    const body = adminId && !req.body.author_id ? { ...req.body, author_id: adminId } : req.body;
+    return c.put(`/internal/platform/articles/${req.params.id}`, body).then((r) => ({ data: r.data }));
+  }),
   deleteArticle: platformProxy((c, req) => c.delete(`/internal/platform/articles/${req.params.id}`).then(() => ({ status: 204 }))),
   getArticleCategories: platformProxy((c) => c.get('/internal/platform/article-categories').then((r) => ({ data: r.data }))),
   getArticleCategory: platformProxy((c, req) => c.get(`/internal/platform/article-categories/${req.params.id}`).then((r) => ({ data: r.data }))),
@@ -848,10 +857,24 @@ const deletePaymentLink = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+const createCoursePreviewToken = asyncHandler(async (req, res) => {
+  const courseId = Number(req.params.id);
+  if (!Number.isFinite(courseId) || courseId <= 0) throw new AppError('Invalid course id', 400);
+  const [tokenResult, courseResult] = await Promise.all([
+    courseClient.post(`/internal/courses/${courseId}/preview-token`),
+    courseClient.get(`/internal/courses/${courseId}`),
+  ]);
+  const token = tokenResult.data.token;
+  const slug = courseResult.data.slug;
+  const frontendUrl = config.frontendUrl;
+  const previewUrl = `${frontendUrl}/course/${slug}?preview_token=${token}`;
+  sendSuccess(res, { previewUrl, expiresInSeconds: 900 });
+});
+
 module.exports = {
   me,
   getPaymentConfigInternal,
-  getStats,
+  getStats, 
   updatePaymentConfig,
   getLogs,
   createCourse,
@@ -923,4 +946,5 @@ module.exports = {
   postPaymentLink,
   putPaymentLink,
   deletePaymentLink,
+  createCoursePreviewToken,
 };

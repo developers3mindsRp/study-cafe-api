@@ -16,4 +16,5 @@ module.exports = {
   orderServiceUrl: process.env.ORDER_SERVICE_URL || 'http://localhost:4003',
   platformServiceUrl: process.env.PLATFORM_SERVICE_URL || 'http://localhost:4005',
   internalApiKey: process.env.INTERNAL_API_KEY || 'dev-internal',
+  frontendUrl: process.env.FRONTEND_URL || 'https://dev.studycafe.in',
 };

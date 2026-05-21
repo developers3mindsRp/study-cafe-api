@@ -17,6 +17,7 @@ const axios = require("axios");
 const config = require("../config");
 const { logger, AppError } = require("../../../../shared");
 const { checkCourseAccess } = require("./accessClient");
+const { resolvePreviewToken } = require("./previewToken.service");
 
 const COURSE_SLUG_MAX_LEN = 200;
 
@@ -578,7 +579,14 @@ const coursesService = {
   },
 
   async getById(id, opts = {}) {
-    const row = await Course.findOne({ where: { id, is_published: true } });
+    let row = null;
+    if (opts.previewToken) {
+      const previewCourseId = await resolvePreviewToken(opts.previewToken);
+      if (previewCourseId && previewCourseId === Number(id)) {
+        row = await Course.findOne({ where: { id } });
+      }
+    }
+    if (!row) row = await Course.findOne({ where: { id, is_published: true } });
     if (!row) return null;
     const d = row.get({ plain: true });
     const coursePk = d.id;
@@ -626,7 +634,14 @@ const coursesService = {
   },
 
   async getBySlug(slug, opts = {}) {
-    const row = await Course.findOne({ where: { slug, is_published: true } });
+    let row = null;
+    if (opts.previewToken) {
+      const previewCourseId = await resolvePreviewToken(opts.previewToken);
+      if (previewCourseId) {
+        row = await Course.findOne({ where: { id: previewCourseId, slug } });
+      }
+    }
+    if (!row) row = await Course.findOne({ where: { slug, is_published: true } });
     if (!row) return null;
     const d = row.get({ plain: true });
     const visible = await allowPublicCourseDetail(d.hide_from_public, d.id, opts.authorization);

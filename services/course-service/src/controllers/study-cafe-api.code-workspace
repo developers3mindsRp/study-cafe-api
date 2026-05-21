@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../../../../../study-cafe-admin-panel"
+		},
+		{
+			"path": "../../../../../study-cafe-web"
 		}
 	],
 	"settings": {}
