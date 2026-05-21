@@ -4,8 +4,8 @@ const config = require('../config');
 const TTL_SECONDS = 15 * 60; // 15 minutes
 const SECRET = config.internalApiKey || 'dev-internal';
 
-// Tracks consumed tokens in memory. Entry is removed once its natural expiry passes.
-const usedTokens = new Set();
+// Once validated, token may be reused until expiry (Next.js issues multiple SSR/data requests per page load).
+const validatedTokens = new Map();
 
 function createPreviewToken(courseId) {
   const expires = Math.floor(Date.now() / 1000) + TTL_SECONDS;
@@ -17,6 +17,11 @@ function createPreviewToken(courseId) {
 function resolvePreviewToken(token) {
   if (!token || typeof token !== 'string') return null;
   try {
+    const cached = validatedTokens.get(token);
+    if (cached && Math.floor(Date.now() / 1000) <= cached.expires) {
+      return cached.courseId;
+    }
+
     const decoded = Buffer.from(token, 'base64url').toString('utf8');
     const lastColon = decoded.lastIndexOf(':');
     const secondLastColon = decoded.lastIndexOf(':', lastColon - 1);
@@ -33,16 +38,14 @@ function resolvePreviewToken(token) {
     const expires = Number(expiresStr);
     if (Math.floor(Date.now() / 1000) > expires) return null;
 
-    // Single-use check
-    if (usedTokens.has(token)) return null;
-
-    // Mark as used; auto-evict from memory when the token would have expired anyway
-    usedTokens.add(token);
-    const msUntilExpiry = expires * 1000 - Date.now();
-    setTimeout(() => usedTokens.delete(token), msUntilExpiry).unref();
-
     const courseId = Number(courseIdStr);
-    return Number.isFinite(courseId) && courseId > 0 ? courseId : null;
+    if (!Number.isFinite(courseId) || courseId <= 0) return null;
+
+    validatedTokens.set(token, { courseId, expires });
+    const msUntilExpiry = expires * 1000 - Date.now();
+    setTimeout(() => validatedTokens.delete(token), msUntilExpiry).unref();
+
+    return courseId;
   } catch {
     return null;
   }

@@ -1572,21 +1572,13 @@ async function findPublishedArticleRowByPublicPathKey(raw) {
 }
 
 async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) {
+  const { resolvePreviewToken } = require('./articlePreviewToken.service');
+  const previewArticleId = previewToken ? resolvePreviewToken(previewToken) : null;
+  const isPreview = previewArticleId != null;
+
   let row = null;
-  if (previewToken) {
-    const { resolvePreviewToken } = require('./articlePreviewToken.service');
-    const previewArticleId = resolvePreviewToken(previewToken);
-    if (previewArticleId) {
-      // Fetch draft article by id without status filter, verify slug matches
-      const candidate = await Article.findOne({ where: { id: previewArticleId } });
-      if (candidate) {
-        const { slugOnly } = parsePublicArticlePathKey(slug);
-        const plain = candidate.get({ plain: true });
-        if (!slugOnly || plain.slug === slugOnly || String(plain.id) === String(previewArticleId)) {
-          row = candidate;
-        }
-      }
-    }
+  if (isPreview) {
+    row = await Article.findOne({ where: { id: previewArticleId } });
   }
   if (!row) row = await findPublishedArticleRowByPublicPathKey(slug);
   if (!row) return null;
@@ -1618,7 +1610,9 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
   }
 
   const blog_access_tier = normalizeBlogAccessTier(p.blog_access_tier);
-  const access = canReadFullArticle(blog_access_tier, viewer);
+  const access = isPreview
+    ? { can_read_full: true, reason: 'preview' }
+    : canReadFullArticle(blog_access_tier, viewer);
   const authorName = await getAuthorDisplayName(p.author_id);
   const fullBody = sanitizeArticleHtml(await embedRelatedArticles(htmlWithIds));
   const related_articles = access.can_read_full ? [] : await getRelatedArticlesForArticle(p.id, 4);
@@ -1658,7 +1652,7 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     access: {
       can_read_full: access.can_read_full,
       reason: access.reason,
-      show_read_more_cta: !access.can_read_full && blog_access_tier === 'premium',
+      show_read_more_cta: !isPreview && !access.can_read_full && blog_access_tier === 'premium',
       // Downloads are always premium-only regardless of article tier
       can_download: viewer
         ? (['admin', 'super_admin'].includes(viewer.role) || !!viewer.hasActiveMembership)

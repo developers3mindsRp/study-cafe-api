@@ -580,18 +580,19 @@ const coursesService = {
   },
 
   async getById(id, opts = {}) {
+    const previewCourseId = opts.previewToken ? resolvePreviewToken(opts.previewToken) : null;
+    const isPreview = previewCourseId != null && previewCourseId === Number(id);
+
     let row = null;
-    if (opts.previewToken) {
-      const previewCourseId = await resolvePreviewToken(opts.previewToken);
-      if (previewCourseId && previewCourseId === Number(id)) {
-        row = await Course.findOne({ where: { id } });
-      }
+    if (isPreview) {
+      row = await Course.findOne({ where: { id } });
     }
     if (!row) row = await Course.findOne({ where: { id, is_published: true } });
     if (!row) return null;
     const d = row.get({ plain: true });
     const coursePk = d.id;
-    const visible = await allowPublicCourseDetail(d.hide_from_public, coursePk, opts.authorization);
+    const visible =
+      isPreview || (await allowPublicCourseDetail(d.hide_from_public, coursePk, opts.authorization));
     if (!visible) return null;
     d.language = normalizeLanguage(d.language);
     const enriched = await this.enrichCourseWithAuthors(d);
@@ -635,17 +636,19 @@ const coursesService = {
   },
 
   async getBySlug(slug, opts = {}) {
+    const previewCourseId = opts.previewToken ? resolvePreviewToken(opts.previewToken) : null;
+    const isPreview = previewCourseId != null;
+
     let row = null;
-    if (opts.previewToken) {
-      const previewCourseId = await resolvePreviewToken(opts.previewToken);
-      if (previewCourseId) {
-        row = await Course.findOne({ where: { id: previewCourseId, slug } });
-      }
+    if (isPreview) {
+      row = await Course.findOne({ where: { id: previewCourseId, slug } });
+      if (!row) row = await Course.findOne({ where: { id: previewCourseId } });
     }
     if (!row) row = await Course.findOne({ where: { slug, is_published: true } });
     if (!row) return null;
     const d = row.get({ plain: true });
-    const visible = await allowPublicCourseDetail(d.hide_from_public, d.id, opts.authorization);
+    const visible =
+      isPreview || (await allowPublicCourseDetail(d.hide_from_public, d.id, opts.authorization));
     if (!visible) return null;
     d.language = normalizeLanguage(d.language);
     const enriched = await this.enrichCourseWithAuthors(d);
