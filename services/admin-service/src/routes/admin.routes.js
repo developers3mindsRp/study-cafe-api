@@ -15,6 +15,7 @@ function register(router) {
   router.get('/admin/courses', requireAdmin, controller.getCourses);
   router.get('/admin/courses/:id', requireAdmin, controller.getCourse);
   router.get('/admin/courses/:id/sessions', requireAdmin, controller.getCourseSessions);
+  router.post('/admin/courses/:id/preview-token', requireAdmin, controller.createCoursePreviewToken);
   router.get('/admin/batches', requireAdmin, controller.listBatches);
   router.get('/admin/course-cats', requireAdmin, controller.getCourseCats);
   router.post('/admin/course-cats', requireAdmin, controller.createCourseCat);
@@ -131,6 +132,7 @@ function register(router) {
   router.put('/admin/platform/coupons/:id', requireAdmin, p.putCoupon);
   router.delete('/admin/platform/coupons/:id', requireAdmin, p.deleteCoupon);
   router.get('/admin/platform/articles', requireAdmin, p.getArticles);
+  router.post('/admin/platform/articles/:id/preview-token', requireAdmin, controller.createArticlePreviewToken);
   router.get('/admin/platform/articles/:id', requireAdmin, p.getArticle);
   router.post('/admin/platform/articles', requireAdmin, p.postArticle);
   router.put('/admin/platform/articles/:id', requireAdmin, p.putArticle);

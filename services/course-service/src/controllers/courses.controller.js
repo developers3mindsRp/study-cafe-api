@@ -1,4 +1,5 @@
 const coursesService = require('../services/courses.service');
+const previewTokenService = require('../services/previewToken.service');
 const { asyncHandler, AppError, sendSuccess, sendCreated, sendPaginated } = require('../../../../shared');
 
 const list = asyncHandler(async (req, res) => {
@@ -15,6 +16,7 @@ const listFeatured = asyncHandler(async (req, res) => {
 const getById = asyncHandler(async (req, res) => {
   const course = await coursesService.getById(req.params.id, {
     authorization: req.headers.authorization,
+    previewToken: req.query.preview_token || null,
   });
   if (!course) throw new AppError('Course not found', 404);
   sendSuccess(res, course);
@@ -23,6 +25,7 @@ const getById = asyncHandler(async (req, res) => {
 const getBySlug = asyncHandler(async (req, res) => {
   const course = await coursesService.getBySlug(req.params.slug, {
     authorization: req.headers.authorization,
+    previewToken: req.query.preview_token || null,
   });
   if (!course) throw new AppError('Course not found', 404);
   sendSuccess(res, course);
@@ -298,6 +301,19 @@ const unenrollUser = asyncHandler(async (req, res) => {
   sendSuccess(res, { unenrolled: true });
 });
 
+const createPreviewToken = asyncHandler(async (req, res) => {
+  const courseId = Number(req.params.id);
+  if (!Number.isFinite(courseId) || courseId <= 0) throw new AppError('Invalid course id', 400);
+  const token = await previewTokenService.createPreviewToken(courseId);
+  sendSuccess(res, { token, expiresInSeconds: 900 });
+});
+
+const resolvePreviewToken = asyncHandler(async (req, res) => {
+  const courseId = await previewTokenService.resolvePreviewToken(req.params.token);
+  if (!courseId) throw new AppError('Invalid or expired preview token', 404);
+  sendSuccess(res, { courseId });
+});
+
 module.exports = {
   list,
   listFeatured,
@@ -344,4 +360,6 @@ module.exports = {
   getPageSettings,
   updatePageSetting,
   listByIdsOrCatIds,
+  createPreviewToken,
+  resolvePreviewToken,
 };

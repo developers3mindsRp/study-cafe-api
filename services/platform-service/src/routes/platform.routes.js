@@ -118,6 +118,7 @@ function register(router) {
   router.put('/internal/platform/comparison-features/:featureId/availability/:planId', internalAuth, controller.setFeatureAvailability);
 
   router.get('/internal/platform/articles', internalAuth, validate(schemas.articleListQuery), controller.getArticlesInternal);
+  router.post('/internal/platform/articles/:id/preview-token', internalAuth, validate(schemas.idParam), controller.createArticlePreviewToken);
   router.get('/internal/platform/articles/:id', internalAuth, validate(schemas.idParam), controller.getArticleByIdInternal);
   router.post('/internal/platform/articles', internalAuth, validate(schemas.createArticle), controller.createArticle);
   router.put('/internal/platform/articles/:id', internalAuth, validate(schemas.updateArticle), controller.updateArticle);

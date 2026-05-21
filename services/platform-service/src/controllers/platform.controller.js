@@ -1,6 +1,7 @@
 const fs = require('fs');
 const platformService = require('../services/platform.service');
 const membershipUpgradeService = require('../services/membership-upgrade.service');
+const articlePreviewTokenService = require('../services/articlePreviewToken.service');
 const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, sendPaginated, logger } = require('../../../../shared');
 const { uploadsDir } = require('../middleware/upload');
 const { relativePathFromFile, publicMediaUrl } = require('../../../../shared/mediaUrl');
@@ -263,9 +264,17 @@ const getArticles = asyncHandler(async (req, res) => {
 });
 
 const getArticleBySlug = asyncHandler(async (req, res) => {
-  const data = await platformService.articles.getArticleBySlugPublic(req.params.slug, req.viewer || null);
+  const previewToken = typeof req.query.preview_token === 'string' ? req.query.preview_token : null;
+  const data = await platformService.articles.getArticleBySlugPublic(req.params.slug, req.viewer || null, previewToken);
   if (!data) throw new AppError('Article not found', 404);
   sendSuccess(res, data);
+});
+
+const createArticlePreviewToken = asyncHandler(async (req, res) => {
+  const articleId = Number(req.params.id);
+  if (!Number.isFinite(articleId) || articleId <= 0) throw new AppError('Invalid article id', 400);
+  const token = articlePreviewTokenService.createPreviewToken(articleId);
+  sendSuccess(res, { token, expiresInSeconds: 900 });
 });
 
 const getArticleUpNext = asyncHandler(async (req, res) => {
@@ -707,6 +716,7 @@ module.exports = {
   getArticles,
   getBlogSpotlightFeed,
   getArticleBySlug,
+  createArticlePreviewToken,
   getArticleUpNext,
   getArticlesInternal,
   getArticleByIdInternal,
