@@ -35,6 +35,7 @@ const Comment = require("./Comment")(sequelize);
 
 const CmsPage = require("./CmsPage")(sequelize);
 const State = require("./State")(sequelize);
+const GoogleReview = require("./GoogleReview")(sequelize);
 const Testimonial = require("./Testimonial")(sequelize);
 const FooterData = require("./FooterData")(sequelize);
 const GlobalSetting = require("./GlobalSetting")(sequelize);
@@ -78,6 +79,7 @@ const models = {
   ArticleCourtMap,
   CmsPage,
   State,
+  GoogleReview,
   Testimonial,
   FooterData,
   GlobalSetting,

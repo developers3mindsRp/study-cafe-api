@@ -19,9 +19,21 @@ const getPublicPageSettings = asyncHandler(async (req, res) => {
       return fallback;
     }
   };
+  const galleryRaw = safeJsonParse(settings.gallery_images, []);
+  const gallery_images = galleryRaw
+    .map((item) => {
+      if (typeof item === 'string') return item.trim();
+      if (item && typeof item === 'object') {
+        return String(item.image_url || item.url || item.image || '').trim();
+      }
+      return '';
+    })
+    .filter(Boolean);
+
   sendSuccess(res, {
     alumni_logos: safeJsonParse(settings.alumni_logos, []),
     featured_in_logos: safeJsonParse(settings.featured_in_logos, []),
+    gallery_images,
   });
 });
 

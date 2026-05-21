@@ -70,15 +70,43 @@ const updateState = {
     }),
 };
 
-// ── Testimonials ────────────────────────────────────────────────────
+// ── Google Reviews ────────────────────────────────────────────────────
 
-const createTestimonial = {
+const createGoogleReview = {
     body: Joi.object({
         author_name: Joi.string().max(255).required(),
         author_role: Joi.string().max(255).allow('', null),
         avatar_url: Joi.string().allow('', null),
         content: Joi.string().required(),
         rating: Joi.number().integer().min(1).max(5).allow(null),
+        reviewed_at: Joi.string().max(64).allow('', null),
+        is_active: Joi.boolean().default(true),
+        sort_order: Joi.number().integer().min(0).default(0),
+    }),
+};
+
+const updateGoogleReview = {
+    params: idParam.params,
+    body: Joi.object({
+        author_name: Joi.string().max(255),
+        author_role: Joi.string().max(255).allow('', null),
+        avatar_url: Joi.string().allow('', null),
+        content: Joi.string(),
+        rating: Joi.number().integer().min(1).max(5).allow(null),
+        reviewed_at: Joi.string().max(64).allow('', null),
+        is_active: Joi.boolean(),
+        sort_order: Joi.number().integer().min(0),
+    }),
+};
+
+// ── Testimonials (video/image) ────────────────────────────────────────
+
+const createTestimonial = {
+    body: Joi.object({
+        title: Joi.string().max(255).allow('', null),
+        media_type: Joi.string().valid('video', 'image').default('video'),
+        media_url: Joi.string().max(512).required(),
+        video_url: Joi.string().max(512).allow('', null),
         is_active: Joi.boolean().default(true),
         sort_order: Joi.number().integer().min(0).default(0),
     }),
@@ -87,11 +115,10 @@ const createTestimonial = {
 const updateTestimonial = {
     params: idParam.params,
     body: Joi.object({
-        author_name: Joi.string().max(255),
-        author_role: Joi.string().max(255).allow('', null),
-        avatar_url: Joi.string().allow('', null),
-        content: Joi.string(),
-        rating: Joi.number().integer().min(1).max(5).allow(null),
+        title: Joi.string().max(255).allow('', null),
+        media_type: Joi.string().valid('video', 'image'),
+        media_url: Joi.string().max(512),
+        video_url: Joi.string().max(512).allow('', null),
         is_active: Joi.boolean(),
         sort_order: Joi.number().integer().min(0),
     }),
@@ -492,6 +519,8 @@ module.exports = {
     upsertHomePage,
     createState,
     updateState,
+    createGoogleReview,
+    updateGoogleReview,
     createTestimonial,
     updateTestimonial,
     createFaq,
