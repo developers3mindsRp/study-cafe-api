@@ -7,6 +7,7 @@ const ALL_PERMISSIONS = [
   'faq:list', 'faq:view', 'faq:create', 'faq:edit', 'faq:delete',
   'newsletter:list', 'newsletter:edit', 'newsletter:create', 'newsletter:delete', 'newsletter:send',
   'courses:list', 'courses:view', 'courses:create', 'courses:edit', 'courses:delete',
+  'marketing_pages:list', 'marketing_pages:view', 'marketing_pages:create', 'marketing_pages:edit', 'marketing_pages:delete',
   'orders:list', 'orders:view',
   'coupons:list', 'coupons:view', 'coupons:create', 'coupons:edit', 'coupons:delete',
   'payment_links:list', 'payment_links:view', 'payment_links:create', 'payment_links:edit', 'payment_links:delete',
@@ -65,6 +66,12 @@ const MODULE_HIERARCHY = {
     ['courses:edit'],
     ['courses:create'],
     ['courses:delete'],
+  ],
+  marketing_pages: [
+    ['marketing_pages:list', 'marketing_pages:view'],
+    ['marketing_pages:edit'],
+    ['marketing_pages:create'],
+    ['marketing_pages:delete'],
   ],
   orders: [
     ['orders:list', 'orders:view'],
@@ -142,6 +149,7 @@ const ROLE_PERMISSIONS = {
     'content:list', 'content:view', 'content:edit',
     'testimonials:list', 'testimonials:view', 'testimonials:create', 'testimonials:edit',
     'faq:list', 'faq:view', 'faq:create', 'faq:edit',
+    'marketing_pages:list', 'marketing_pages:view', 'marketing_pages:create', 'marketing_pages:edit',
     'payment_links:list', 'payment_links:view', 'payment_links:create', 'payment_links:edit',
   ],
   viewer: [

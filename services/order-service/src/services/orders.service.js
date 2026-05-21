@@ -1751,6 +1751,7 @@ async function listCouponUsages({
     if (!couponRow) {
       return {
         data: [],
+        summary: parseSummaryRow(null),
         meta: {
           total: 0,
           page: 1,
@@ -1761,7 +1762,10 @@ async function listCouponUsages({
         },
       };
     }
-    where.coupon_code = String(couponRow.code).trim();
+    const codeNorm = String(couponRow.code).trim().toLowerCase();
+    where[Op.and].push(
+      sequelize.where(sequelize.fn('lower', sequelize.col('coupon_code')), codeNorm)
+    );
   } else if (couponCode && String(couponCode).trim()) {
     where.coupon_code = { [Op.like]: `%${String(couponCode).trim()}%` };
   }

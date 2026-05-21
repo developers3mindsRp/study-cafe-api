@@ -40,6 +40,7 @@ const AffiliateBalance = require('./AffiliateBalance')(sequelize);
 const UserCourseProgress = require('./UserCourseProgress')(sequelize);
 const UserCourse = require('./UserCourse')(sequelize);
 const CourseReview = require('./CourseReview')(sequelize);
+const MarketingPage = require('./MarketingPage')(sequelize);
 
 const models = { 
   Course, 
@@ -59,6 +60,7 @@ const models = {
   UserCourseProgress,
   UserCourse,
   CourseReview,
+  MarketingPage,
 };
 
 // Register associations
@@ -72,11 +74,13 @@ Object.keys(models).forEach((modelName) => {
 Batch.hasMany(BatchEnrollment, { foreignKey: 'batch_id', as: 'enrollments' });
 
 const { ensureCoursePageSettingsTable } = require('../db/ensureCoursePageSettingsTable');
+const { ensureMarketingPagesTable } = require('../db/ensureMarketingPagesTable');
 
 async function connect() {
   try {
     await sequelize.authenticate();
     await ensureCoursePageSettingsTable(sequelize);
+    await ensureMarketingPagesTable(sequelize);
   } catch (err) {
     console.error('Sequelize auth failed:', err.message);
     throw err;

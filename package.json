@@ -41,6 +41,7 @@
     "ensure-hide-from-public": "node --require dotenv/config scripts/apply-mysql-sql-file.js services/course-service/scripts/add-hide-from-public-to-courses.sql",
     "ensure-global-settings": "node --require dotenv/config scripts/apply-mysql-sql-file.js services/platform-service/scripts/create-global-settings-table.sql",
     "ensure-course-page-settings": "node scripts/ensure-course-page-settings-table.js",
+    "ensure-marketing-pages": "node scripts/ensure-marketing-pages-table.js",
     "ensure-articles-extended-seo": "node scripts/ensure-articles-extended-seo-columns.js",
     "ensure-courses-seo": "node scripts/ensure-courses-seo-columns.js",
     "sync": "bash scripts/run-full-migration.sh",

@@ -72,6 +72,11 @@ function register(router) {
   router.delete('/admin/course-reviews/:id', requireAdmin, controller.deleteCourseReview);
   router.get('/admin/course-page-settings', requireAdmin, controller.getCoursePageSettings);
   router.put('/admin/course-page-settings/:key', requireAdmin, controller.updateCoursePageSetting);
+  router.get('/admin/marketing-pages', requireAdmin, controller.getMarketingPages);
+  router.get('/admin/marketing-pages/:id', requireAdmin, controller.getMarketingPage);
+  router.post('/admin/marketing-pages', requireAdmin, controller.postMarketingPage);
+  router.put('/admin/marketing-pages/:id', requireAdmin, controller.putMarketingPage);
+  router.delete('/admin/marketing-pages/:id', requireAdmin, controller.deleteMarketingPage);
 
   const p = controller.platform;
   router.get('/admin/platform/home', requireAdmin, p.getHome);

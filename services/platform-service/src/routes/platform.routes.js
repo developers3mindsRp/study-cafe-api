@@ -10,6 +10,7 @@ function register(router) {
   router.get('/platform/home', controller.getHome);
   router.get('/platform/states', controller.getStates);
   router.get('/platform/testimonials', controller.getTestimonials);
+  router.get('/platform/faq', controller.getFaqs);
   router.get('/plateform/contact-inquiries', controller.getContactInquiryInternal)
   router.get('/platform/footer', controller.getFooter);
   router.get('/platform/global-settings/snippets', controller.getGlobalSettingsSnippetsPublic);
@@ -58,6 +59,12 @@ function register(router) {
   router.delete('/internal/platform/faqs/:id', internalAuth, validate(schemas.idParam), controller.deleteFaq);
   router.get('/internal/platform/seo-metadata', internalAuth, controller.getSeoMetadataInternal);
   router.get('/internal/platform/seo-metadata/eligible-pages', internalAuth, controller.getSeoEligiblePagesInternal);
+  router.post(
+    '/internal/platform/seo-metadata/sync-module',
+    internalAuth,
+    validate(schemas.syncModuleSeoMetadata),
+    controller.syncModuleSeoMetadata
+  );
   router.get('/internal/platform/seo-metadata/:id', internalAuth, validate(schemas.idParam), controller.getSeoMetadataByIdInternal);
   router.get('/internal/platform/seo-metadata/slug/:slug', internalAuth, validate(schemas.slugParam), controller.getSeoMetadataBySlugPublic);
   router.post('/internal/platform/seo-metadata', internalAuth, validate(schemas.createSeoMetadata), controller.createSeoMetadata);
