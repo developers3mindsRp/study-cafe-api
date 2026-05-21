@@ -14,6 +14,8 @@ function register(app) {
     pathRewrite: {
       '^/api/courses': '/courses',
       '^/api/course-cats': '/course-cats',
+      '^/api/marketing-pages': '/marketing-pages',
+      '^/api/course-page-settings': '/course-page-settings',
     },
     /** Avoid 504 when MySQL is slow to answer (default proxy timeouts are short). */
     timeout: 120000,
@@ -142,6 +144,8 @@ function register(app) {
     next();
   };
 
+  app.get('/api/marketing-pages/slug/:slug', courseProxy);
+  app.get('/api/course-page-settings/public', courseProxy);
   app.get('/api/course-cats/all', courseProxy);
   app.get('/api/course-cats', courseProxy);
   app.get('/api/courses/by-category', courseProxy);

@@ -64,6 +64,9 @@ module.exports = (sequelize) => {
     Course.hasMany(models.CourseAuthor, { foreignKey: 'course_id' });
     Course.hasMany(models.Enrollment, { foreignKey: 'course_id', as: 'Enrollments' });
     Course.belongsToMany(models.CourseCat, { through: models.CourseCategory, foreignKey: 'course_id', otherKey: 'course_cat_id' });
+    if (models.MarketingPage) {
+      Course.hasOne(models.MarketingPage, { foreignKey: 'course_id', as: 'MarketingPage' });
+    }
   };
   return Course;
 };

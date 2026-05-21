@@ -517,6 +517,7 @@ const coursesService = {
       attributes: [
         "id",
         "title",
+        "slug",
         "brief_description",
         "price",
         "sale_price",

@@ -4,10 +4,12 @@ const coursesRoutes = require('./courses.routes');
 const affiliateRoutes = require('./affiliate.routes');
 const progressRoutes = require('./progress.routes');
 const courseReviewsRoutes = require('./courseReviews.routes');
+const marketingPagesRoutes = require('./marketingPages.routes');
 
 const router = express.Router();
 
 healthRoutes.register(router);
+marketingPagesRoutes.register(router);
 coursesRoutes.register(router);
 affiliateRoutes.register(router);
 progressRoutes.register(router);

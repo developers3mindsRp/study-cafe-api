@@ -508,6 +508,37 @@ const updateCoursePageSetting = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+const getMarketingPages = asyncHandler(async (req, res) => {
+  const { data } = await courseClient.get('/internal/marketing-pages');
+  sendSuccess(res, data);
+});
+
+const getMarketingPage = asyncHandler(async (req, res) => {
+  const { data } = await courseClient.get(`/internal/marketing-pages/${req.params.id}`);
+  sendSuccess(res, data);
+});
+
+const postMarketingPage = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await courseClient.post('/internal/marketing-pages', req.body);
+  await adminLogsService.logAction(adminId, 'CREATE_MARKETING_PAGE', 'marketing_page', String(data.id), { slug: data.slug }, req.ip);
+  sendCreated(res, data);
+});
+
+const putMarketingPage = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await courseClient.put(`/internal/marketing-pages/${req.params.id}`, req.body);
+  await adminLogsService.logAction(adminId, 'UPDATE_MARKETING_PAGE', 'marketing_page', req.params.id, {}, req.ip);
+  sendSuccess(res, data);
+});
+
+const deleteMarketingPage = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  await courseClient.delete(`/internal/marketing-pages/${req.params.id}`);
+  await adminLogsService.logAction(adminId, 'DELETE_MARKETING_PAGE', 'marketing_page', req.params.id, {}, req.ip);
+  sendSuccess(res, { deleted: true });
+});
+
 const getOrders = asyncHandler(async (req, res) => {
   const { data } = await orderClient.get('/internal/orders', { params: req.query });
 
@@ -928,6 +959,11 @@ module.exports = {
   deleteCourseCat,
   getCoursePageSettings,
   updateCoursePageSetting,
+  getMarketingPages,
+  getMarketingPage,
+  postMarketingPage,
+  putMarketingPage,
+  deleteMarketingPage,
   getOrders,
   getOrderByOrderId,
   createOrder,

@@ -10,6 +10,7 @@ function register(router) {
   router.get('/platform/home', controller.getHome);
   router.get('/platform/states', controller.getStates);
   router.get('/platform/testimonials', controller.getTestimonials);
+  router.get('/platform/faq', controller.getFaqs);
   router.get('/plateform/contact-inquiries', controller.getContactInquiryInternal)
   router.get('/platform/footer', controller.getFooter);
   router.get('/platform/global-settings/snippets', controller.getGlobalSettingsSnippetsPublic);

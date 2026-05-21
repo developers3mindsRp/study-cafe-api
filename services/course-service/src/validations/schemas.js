@@ -8,6 +8,90 @@ const idParam = {
     }),
 };
 
+const slugParam = {
+    params: Joi.object({
+        slug: Joi.string().max(200).required(),
+    }),
+};
+
+const marketingMetaSchema = Joi.object({
+    announcement_text: Joi.string().allow('', null),
+    headline: Joi.string().allow('', null),
+    subheadline: Joi.string().allow('', null),
+    bonus_banner_text: Joi.string().allow('', null),
+    masterclass_date: Joi.string().allow('', null),
+    masterclass_time: Joi.string().allow('', null),
+    cta_title: Joi.string().allow('', null),
+    cta_subtitle: Joi.string().allow('', null),
+    cta_price_text: Joi.string().allow('', null),
+    increased_price_text: Joi.string().allow('', null),
+    countdown_minutes: Joi.number().integer().min(1).max(180).allow(null),
+    use_global_faq: Joi.boolean(),
+    use_course_faq: Joi.boolean(),
+    checkout_url: Joi.string().max(1000).allow('', null),
+    stats: Joi.object({
+        people_coached: Joi.string().allow('', null),
+        preferred_by: Joi.string().allow('', null),
+        attended: Joi.string().allow('', null),
+    }),
+    learning_bullets: Joi.array().items(Joi.string().allow('')),
+    feature_cards: Joi.array().items(
+        Joi.object({
+            icon: Joi.string().allow('', null),
+            text: Joi.string().allow('', null),
+        }),
+    ),
+    bonus_items: Joi.array().items(
+        Joi.object({
+            label: Joi.string().allow('', null),
+            icon: Joi.string().allow('', null),
+            description: Joi.string().allow('', null),
+            worth: Joi.string().allow('', null),
+        }),
+    ),
+    who_can_attend: Joi.array().items(Joi.string().allow('')),
+    gallery_images: Joi.array().items(Joi.string().allow('')),
+    video_url: Joi.string().max(500).allow('', null),
+    text_testimonials: Joi.array().items(
+        Joi.object({
+            quote: Joi.string().allow('', null),
+            name: Joi.string().allow('', null),
+            role: Joi.string().allow('', null),
+            rating: Joi.number().integer().min(1).max(5).allow(null),
+        }),
+    ),
+    video_testimonials: Joi.array().items(
+        Joi.object({
+            url: Joi.string().allow('', null),
+            thumbnail: Joi.string().allow('', null),
+        }),
+    ),
+    trainer: Joi.object({
+        highlights: Joi.array().items(Joi.string().allow('')),
+        bio_points: Joi.array().items(Joi.string().allow('')),
+        image_url: Joi.string().allow('', null),
+    }),
+}).unknown(true);
+
+const createMarketingPage = {
+    body: Joi.object({
+        course_id: Joi.number().integer().positive().required(),
+        slug: Joi.string().max(200).allow('', null),
+        is_published: Joi.boolean().default(false),
+        meta: marketingMetaSchema.allow(null),
+    }),
+};
+
+const updateMarketingPage = {
+    params: idParam.params,
+    body: Joi.object({
+        course_id: Joi.number().integer().positive(),
+        slug: Joi.string().max(200).allow('', null),
+        is_published: Joi.boolean(),
+        meta: marketingMetaSchema.allow(null),
+    }).min(1),
+};
+
 // ── Courses ────────────────────────────────────────────────────────
 
 const createCourse = {
@@ -278,6 +362,9 @@ const certificateCourseIdParam = {
 
 module.exports = {
     idParam,
+    slugParam,
+    createMarketingPage,
+    updateMarketingPage,
     certificateCourseIdParam,
     courseIdParamCourseReviews,
     submitCourseReviewBody,
