@@ -106,6 +106,7 @@ const {
   sequelize,
   CmsPage,
   State,
+  GoogleReview,
   Testimonial,
   FooterData,
   GlobalSetting,
@@ -243,7 +244,7 @@ async function getHomePublic() {
   const data = buildHomeData(page ? page.get({ plain: true }) : null);
 
   const [testimonialRows, faqRows] = await Promise.all([
-    Testimonial.findAll({
+    GoogleReview.findAll({
       where: { is_active: true },
       order: [['sort_order', 'ASC']],
       attributes: ['id', 'name', 'role', 'quote', 'avatar_url', 'sort_order'],
@@ -352,31 +353,118 @@ async function updateState(id, data) {
   return row.get({ plain: true });
 }
 
-async function getTestimonialsPublic(featuredOnly) {
-  const where = { is_active: true };
-  const rows = await Testimonial.findAll({
-    where,
+async function getGoogleReviewsPublic() {
+  const rows = await GoogleReview.findAll({
+    where: { is_active: true },
     order: [
       ['sort_order', 'ASC'],
       ['id', 'DESC'],
     ],
-    attributes: ['id', 'name', 'role', 'quote', 'avatar_url', 'sort_order'],
+    attributes: ['id', 'name', 'role', 'quote', 'rating', 'reviewed_at', 'avatar_url', 'sort_order'],
   });
-  return rows.map(toApi);
+  return rows.map(toGoogleReviewApi);
 }
 
-function toApi(r) {
+function toGoogleReviewAdminApi(r) {
   const plain = r.get ? r.get({ plain: true }) : r;
   return {
     id: plain.id,
     author_name: plain.name,
     author_role: plain.role,
     content: plain.quote,
+    rating: plain.rating != null ? Number(plain.rating) : 5,
+    reviewed_at: plain.reviewed_at ?? null,
     avatar_url: plain.avatar_url,
     sort_order: plain.sort_order,
     is_active: plain.is_active,
     created_at: plain.created_at,
   };
+}
+
+function toGoogleReviewApi(r) {
+  const plain = r.get ? r.get({ plain: true }) : r;
+  return {
+    id: plain.id,
+    name: plain.name ?? '',
+    role: plain.role ?? '',
+    rating: Math.min(5, Math.max(1, Number(plain.rating) || 5)),
+    text: plain.quote ?? '',
+    ago: plain.reviewed_at ?? undefined,
+    avatar_url: plain.avatar_url ?? null,
+  };
+}
+
+async function getGoogleReviewsInternal() {
+  const rows = await GoogleReview.findAll({
+    order: [
+      ['sort_order', 'ASC'],
+      ['id', 'DESC'],
+    ],
+  });
+  return rows.map(toGoogleReviewAdminApi);
+}
+
+async function createGoogleReview(data) {
+  const row = await GoogleReview.create({
+    name: data.author_name || '',
+    role: data.author_role || null,
+    quote: data.content || '',
+    rating: data.rating != null ? Math.min(5, Math.max(1, Number(data.rating))) : 5,
+    reviewed_at: data.reviewed_at || null,
+    avatar_url: data.avatar_url || null,
+    sort_order: data.sort_order ?? 0,
+    is_active: data.is_active !== undefined ? !!data.is_active : true,
+  });
+  return toGoogleReviewAdminApi(row);
+}
+
+async function updateGoogleReview(id, data) {
+  const row = await GoogleReview.findByPk(id);
+  if (!row) return null;
+  const updates = {};
+  if (data.author_name !== undefined) updates.name = data.author_name;
+  if (data.author_role !== undefined) updates.role = data.author_role;
+  if (data.content !== undefined) updates.quote = data.content;
+  if (data.rating !== undefined) {
+    updates.rating = Math.min(5, Math.max(1, Number(data.rating) || 5));
+  }
+  if (data.reviewed_at !== undefined) updates.reviewed_at = data.reviewed_at || null;
+  if (data.avatar_url !== undefined) updates.avatar_url = data.avatar_url;
+  if (data.sort_order !== undefined) updates.sort_order = data.sort_order;
+  if (data.is_active !== undefined) updates.is_active = !!data.is_active;
+  await row.update(updates);
+  return toGoogleReviewAdminApi(row);
+}
+
+async function deleteGoogleReview(id) {
+  const deleted = await GoogleReview.destroy({ where: { id } });
+  return deleted > 0;
+}
+
+function testimonialToApi(r) {
+  const plain = r.get ? r.get({ plain: true }) : r;
+  return {
+    id: plain.id,
+    title: plain.title ?? null,
+    media_type: plain.media_type,
+    media_url: plain.media_url,
+    video_url: plain.video_url ?? null,
+    sort_order: plain.sort_order,
+    is_active: plain.is_active,
+    created_at: plain.created_at,
+    updated_at: plain.updated_at,
+  };
+}
+
+async function getTestimonialsPublic() {
+  const rows = await Testimonial.findAll({
+    where: { is_active: true },
+    order: [
+      ['sort_order', 'ASC'],
+      ['id', 'DESC'],
+    ],
+  });
+  return rows.map(testimonialToApi);
 }
 
 async function getTestimonialsInternal() {
@@ -386,33 +474,36 @@ async function getTestimonialsInternal() {
       ['id', 'DESC'],
     ],
   });
-  return rows.map(toApi);
+  return rows.map(testimonialToApi);
 }
 
 async function createTestimonial(data) {
   const row = await Testimonial.create({
-    name: data.author_name || '',
-    role: data.author_role || null,
-    quote: data.content || '',
-    avatar_url: data.avatar_url || null,
+    title: data.title || null,
+    media_type: data.media_type === 'image' ? 'image' : 'video',
+    media_url: data.media_url || '',
+    video_url: data.media_type === 'video' ? (data.video_url || null) : null,
     sort_order: data.sort_order ?? 0,
     is_active: data.is_active !== undefined ? !!data.is_active : true,
   });
-  return toApi(row);
+  return testimonialToApi(row);
 }
 
 async function updateTestimonial(id, data) {
   const row = await Testimonial.findByPk(id);
   if (!row) return null;
   const updates = {};
-  if (data.author_name !== undefined) updates.name = data.author_name;
-  if (data.author_role !== undefined) updates.role = data.author_role;
-  if (data.content !== undefined) updates.quote = data.content;
-  if (data.avatar_url !== undefined) updates.avatar_url = data.avatar_url;
+  if (data.title !== undefined) updates.title = data.title || null;
+  if (data.media_type !== undefined) {
+    updates.media_type = data.media_type === 'image' ? 'image' : 'video';
+  }
+  if (data.media_url !== undefined) updates.media_url = data.media_url;
+  if (data.video_url !== undefined) updates.video_url = data.video_url || null;
+  if (data.media_type === 'image') updates.video_url = null;
   if (data.sort_order !== undefined) updates.sort_order = data.sort_order;
   if (data.is_active !== undefined) updates.is_active = !!data.is_active;
   await row.update(updates);
-  return toApi(row);
+  return testimonialToApi(row);
 }
 
 async function deleteTestimonial(id) {
@@ -2862,6 +2953,13 @@ module.exports = {
     getStatesInternal,
     createState,
     updateState,
+  },
+  googleReviews: {
+    getGoogleReviewsPublic,
+    getGoogleReviewsInternal,
+    createGoogleReview,
+    updateGoogleReview,
+    deleteGoogleReview,
   },
   testimonials: {
     getTestimonialsPublic,

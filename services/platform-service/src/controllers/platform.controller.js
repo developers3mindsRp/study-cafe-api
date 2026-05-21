@@ -46,11 +46,39 @@ const updateState = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
-// ── Testimonials ───────────────────────────────────────────────────
+// ── Google Reviews ─────────────────────────────────────────────────
+
+const getGoogleReviews = asyncHandler(async (req, res) => {
+  const data = await platformService.googleReviews.getGoogleReviewsPublic();
+  sendSuccess(res, data);
+});
+
+const getGoogleReviewsInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.googleReviews.getGoogleReviewsInternal();
+  sendSuccess(res, data);
+});
+
+const createGoogleReview = asyncHandler(async (req, res) => {
+  const data = await platformService.googleReviews.createGoogleReview(req.body);
+  sendCreated(res, data);
+});
+
+const updateGoogleReview = asyncHandler(async (req, res) => {
+  const data = await platformService.googleReviews.updateGoogleReview(req.params.id, req.body);
+  if (!data) throw new AppError('Google review not found', 404);
+  sendSuccess(res, data);
+});
+
+const deleteGoogleReview = asyncHandler(async (req, res) => {
+  const ok = await platformService.googleReviews.deleteGoogleReview(req.params.id);
+  if (!ok) throw new AppError('Google review not found', 404);
+  sendNoContent(res);
+});
+
+// ── Testimonials (video/image) ─────────────────────────────────────
 
 const getTestimonials = asyncHandler(async (req, res) => {
-  const featured = req.query.featured === '1' || req.query.featured === 'true';
-  const data = await platformService.testimonials.getTestimonialsPublic(featured);
+  const data = await platformService.testimonials.getTestimonialsPublic();
   sendSuccess(res, data);
 });
 
@@ -630,6 +658,11 @@ module.exports = {
   getStatesInternal,
   createState,
   updateState,
+  getGoogleReviews,
+  getGoogleReviewsInternal,
+  createGoogleReview,
+  updateGoogleReview,
+  deleteGoogleReview,
   getTestimonials,
   getTestimonialsInternal,
   createTestimonial,

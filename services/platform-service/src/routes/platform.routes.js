@@ -9,6 +9,7 @@ function register(router) {
   // ── Public routes ────────────────────────────────────────────────
   router.get('/platform/home', controller.getHome);
   router.get('/platform/states', controller.getStates);
+  router.get('/platform/google-reviews', controller.getGoogleReviews);
   router.get('/platform/testimonials', controller.getTestimonials);
   router.get('/platform/faq', controller.getFaqs);
   router.get('/plateform/contact-inquiries', controller.getContactInquiryInternal)
@@ -48,6 +49,10 @@ function register(router) {
   router.get('/internal/platform/states', internalAuth, controller.getStatesInternal);
   router.post('/internal/platform/states', internalAuth, validate(schemas.createState), controller.createState);
   router.put('/internal/platform/states/:id', internalAuth, validate(schemas.updateState), controller.updateState);
+  router.get('/internal/platform/google-reviews', internalAuth, controller.getGoogleReviewsInternal);
+  router.post('/internal/platform/google-reviews', internalAuth, validate(schemas.createGoogleReview), controller.createGoogleReview);
+  router.put('/internal/platform/google-reviews/:id', internalAuth, validate(schemas.updateGoogleReview), controller.updateGoogleReview);
+  router.delete('/internal/platform/google-reviews/:id', internalAuth, validate(schemas.idParam), controller.deleteGoogleReview);
   router.get('/internal/platform/testimonials', internalAuth, controller.getTestimonialsInternal);
   router.post('/internal/platform/testimonials', internalAuth, validate(schemas.createTestimonial), controller.createTestimonial);
   router.put('/internal/platform/testimonials/:id', internalAuth, validate(schemas.updateTestimonial), controller.updateTestimonial);

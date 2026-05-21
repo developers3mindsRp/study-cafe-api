@@ -260,6 +260,16 @@ const marketingPagesService = {
       const pageSettings = await loadPageSettings();
       const alumniLogos = parseJsonField(pageSettings.alumni_logos, []);
       const featuredInLogos = parseJsonField(pageSettings.featured_in_logos, []);
+      const galleryRaw = parseJsonField(pageSettings.gallery_images, []);
+      const gallery_images = galleryRaw
+        .map((item) => {
+          if (typeof item === 'string') return item.trim();
+          if (item && typeof item === 'object') {
+            return String(item.image_url || item.url || item.image || '').trim();
+          }
+          return '';
+        })
+        .filter(Boolean);
 
       return {
         page: {
@@ -272,6 +282,7 @@ const marketingPagesService = {
         page_settings: {
           alumni_logos: Array.isArray(alumniLogos) ? alumniLogos : [],
           featured_in_logos: Array.isArray(featuredInLogos) ? featuredInLogos : [],
+          gallery_images,
         },
       };
     } catch (err) {

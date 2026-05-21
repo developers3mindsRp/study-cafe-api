@@ -84,6 +84,10 @@ function register(router) {
   router.get('/admin/platform/states', requireAdmin, p.getStates);
   router.post('/admin/platform/states', requireAdmin, p.postState);
   router.put('/admin/platform/states/:id', requireAdmin, p.putState);
+  router.get('/admin/platform/google-reviews', requireAdmin, p.getGoogleReviews);
+  router.post('/admin/platform/google-reviews', requireAdmin, p.postGoogleReview);
+  router.put('/admin/platform/google-reviews/:id', requireAdmin, p.putGoogleReview);
+  router.delete('/admin/platform/google-reviews/:id', requireAdmin, p.deleteGoogleReview);
   router.get('/admin/platform/testimonials', requireAdmin, p.getTestimonials);
   router.post('/admin/platform/testimonials', requireAdmin, p.postTestimonial);
   router.put('/admin/platform/testimonials/:id', requireAdmin, p.putTestimonial);
