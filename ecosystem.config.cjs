@@ -165,6 +165,7 @@ const apps = [
       ORDER_SERVICE_URL: order,
       PLATFORM_SERVICE_URL: platform,
       INTERNAL_API_KEY: process.env.INTERNAL_API_KEY,
+      FRONTEND_URL: process.env.FRONTEND_URL,
     }),
   },
   {

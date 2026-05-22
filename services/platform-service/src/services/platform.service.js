@@ -133,33 +133,39 @@ const {
   SiteSeoRoute,
 } = require('../models');
 
+/** Build a display label from a user row, preferring first_name + last_name. */
+function buildAuthorLabel(r) {
+  const firstName = r.first_name && r.first_name.trim();
+  const lastName = r.last_name && r.last_name.trim();
+  const fullName = [firstName, lastName].filter(Boolean).join(' ');
+  if (fullName) return fullName;
+  return (r.display_name && r.display_name.trim())
+    || (r.name && r.name.trim())
+    || (r.email ? r.email.split('@')[0] : null)
+    || null;
+}
+
 /** Get display_name for one author from users table (same DB). */
 async function getAuthorDisplayName(authorId) {
   if (authorId == null) return null;
   const rows = await sequelize.query(
-    'SELECT display_name FROM users WHERE id = ? LIMIT 1',
+    'SELECT first_name, last_name, display_name FROM users WHERE id = ? LIMIT 1',
     { replacements: [authorId], type: QueryTypes.SELECT }
   );
-  const name = rows[0] && (rows[0].display_name != null && rows[0].display_name !== '') ? rows[0].display_name : null;
-  return name;
+  return rows[0] ? buildAuthorLabel(rows[0]) : null;
 }
 
-/** Get display_name for many author ids; returns Map<authorId, display_name>. */
+/** Get display label for many author ids; returns Map<authorId, label>. */
 async function getAuthorDisplayNamesBatch(authorIds) {
   const uniq = [...new Set(authorIds)].filter((id) => id != null);
   if (uniq.length === 0) return new Map();
   const rows = await sequelize.query(
-    'SELECT id, display_name, name, email FROM users WHERE id IN (?)',
+    'SELECT id, first_name, last_name, display_name, name, email FROM users WHERE id IN (?)',
     { replacements: [uniq], type: QueryTypes.SELECT }
   );
   const map = new Map();
   rows.forEach((r) => {
-    // Prefer display_name, fall back to name, then email prefix
-    const label = (r.display_name && r.display_name.trim())
-      || (r.name && r.name.trim())
-      || (r.email ? r.email.split('@')[0] : null)
-      || null;
-    map.set(Number(r.id), label);
+    map.set(Number(r.id), buildAuthorLabel(r));
   });
   return map;
 }
@@ -757,7 +763,7 @@ async function getPlansPublic() {
       ['sort_order', 'ASC'],
       ['id', 'ASC'],
     ],
-    attributes: ['id', 'name', 'slug', 'description', 'price', 'currency', 'duration_days', 'is_lifetime', 'features', 'is_popular', 'sort_order'],
+    attributes: ['id', 'name', 'slug', 'description', 'price', 'currency', 'duration_days', 'is_lifetime', 'features', 'is_popular', 'sort_order', 'tier_rank'],
   });
 
   // Fetch all comparison features ordered by sort_order
@@ -797,7 +803,7 @@ async function getPlansPublic() {
 async function getPlanBySlugPublic(slug) {
   const row = await PremiumPlan.findOne({
     where: { slug, is_active: true },
-    attributes: ['id', 'name', 'slug', 'description', 'price', 'currency', 'duration_days', 'is_lifetime', 'features', 'is_popular', 'sort_order'],
+    attributes: ['id', 'name', 'slug', 'description', 'price', 'currency', 'duration_days', 'is_lifetime', 'features', 'is_popular', 'sort_order', 'tier_rank'],
   });
   if (!row) return null;
   const p = row.get({ plain: true });
@@ -871,6 +877,7 @@ async function createPlan(data) {
     is_lifetime: data.is_lifetime !== undefined ? !!data.is_lifetime : false,
     features: data.features || null,
     sort_order: data.sort_order ?? 0,
+    tier_rank: data.tier_rank !== undefined ? Number(data.tier_rank) : 0,
     is_active: data.is_active !== undefined ? !!data.is_active : true,
     affiliate_commission: Number.isFinite(pct) ? pct : 0,
   });
@@ -900,6 +907,7 @@ async function updatePlan(id, data) {
   if (data.is_lifetime !== undefined) updates.is_lifetime = !!data.is_lifetime;
   if (data.features !== undefined) updates.features = data.features;
   if (data.sort_order !== undefined) updates.sort_order = data.sort_order;
+  if (data.tier_rank !== undefined) updates.tier_rank = Number(data.tier_rank);
   if (data.is_active !== undefined) updates.is_active = !!data.is_active;
   if (data.is_popular !== undefined) {
     // If marking this plan popular, clear the flag on other plans only — never clear this

@@ -14,6 +14,7 @@ module.exports = (sequelize) => {
       is_lifetime: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       features: { type: DataTypes.JSON, allowNull: true },
       sort_order: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      tier_rank: { type: DataTypes.TINYINT.UNSIGNED, allowNull: false, defaultValue: 0 },
       is_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
       is_popular: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       affiliate_commission: { type: DataTypes.DECIMAL(10, 2), allowNull: false, defaultValue: 0 },
