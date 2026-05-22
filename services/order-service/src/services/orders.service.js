@@ -666,16 +666,23 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
     ]);
 
     if (activeMembership) {
-      // Resolve the sort_order of the currently active plan via its slug
       const activePlan = await fetchPlanBySlug(activeMembership.membership_type);
-      const activeOrder = activePlan ? Number(activePlan.sort_order ?? 0) : 0;
-      const newOrder = newPlan ? Number(newPlan.sort_order ?? 0) : 0;
+      const activeTierRank = activePlan ? Number(activePlan.tier_rank ?? 0) : 0;
+      const newTierRank = newPlan ? Number(newPlan.tier_rank ?? 0) : 0;
 
-      if (newOrder <= activeOrder) {
+      if (newTierRank <= activeTierRank) {
         const activeName = activePlan ? activePlan.name : activeMembership.membership_type;
         const newName = newPlan ? newPlan.name : String(entityId);
         throw new AppError(
           `You already have an active "${activeName}" membership. You can only upgrade to a higher tier, not purchase "${newName}".`,
+          400
+        );
+      }
+
+      // Lifetime-to-lifetime: cannot auto-process — admin must handle
+      if (activePlan && activePlan.is_lifetime && newPlan && newPlan.is_lifetime) {
+        throw new AppError(
+          'Upgrading from a lifetime plan to another lifetime plan cannot be processed automatically. Please contact support.',
           400
         );
       }

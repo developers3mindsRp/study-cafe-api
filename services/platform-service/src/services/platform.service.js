@@ -763,7 +763,7 @@ async function getPlansPublic() {
       ['sort_order', 'ASC'],
       ['id', 'ASC'],
     ],
-    attributes: ['id', 'name', 'slug', 'description', 'price', 'currency', 'duration_days', 'is_lifetime', 'features', 'is_popular', 'sort_order'],
+    attributes: ['id', 'name', 'slug', 'description', 'price', 'currency', 'duration_days', 'is_lifetime', 'features', 'is_popular', 'sort_order', 'tier_rank'],
   });
 
   // Fetch all comparison features ordered by sort_order
@@ -803,7 +803,7 @@ async function getPlansPublic() {
 async function getPlanBySlugPublic(slug) {
   const row = await PremiumPlan.findOne({
     where: { slug, is_active: true },
-    attributes: ['id', 'name', 'slug', 'description', 'price', 'currency', 'duration_days', 'is_lifetime', 'features', 'is_popular', 'sort_order'],
+    attributes: ['id', 'name', 'slug', 'description', 'price', 'currency', 'duration_days', 'is_lifetime', 'features', 'is_popular', 'sort_order', 'tier_rank'],
   });
   if (!row) return null;
   const p = row.get({ plain: true });
@@ -877,6 +877,7 @@ async function createPlan(data) {
     is_lifetime: data.is_lifetime !== undefined ? !!data.is_lifetime : false,
     features: data.features || null,
     sort_order: data.sort_order ?? 0,
+    tier_rank: data.tier_rank !== undefined ? Number(data.tier_rank) : 0,
     is_active: data.is_active !== undefined ? !!data.is_active : true,
     affiliate_commission: Number.isFinite(pct) ? pct : 0,
   });
@@ -906,6 +907,7 @@ async function updatePlan(id, data) {
   if (data.is_lifetime !== undefined) updates.is_lifetime = !!data.is_lifetime;
   if (data.features !== undefined) updates.features = data.features;
   if (data.sort_order !== undefined) updates.sort_order = data.sort_order;
+  if (data.tier_rank !== undefined) updates.tier_rank = Number(data.tier_rank);
   if (data.is_active !== undefined) updates.is_active = !!data.is_active;
   if (data.is_popular !== undefined) {
     // If marking this plan popular, clear the flag on other plans only — never clear this

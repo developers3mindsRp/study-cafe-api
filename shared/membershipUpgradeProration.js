@@ -38,7 +38,7 @@ function computeMembershipUpgradeCredit({
 
   let upgradeDeduction = (price / dur) * effectiveRemainingDays;
   upgradeDeduction = Math.min(upgradeDeduction, price);
-  upgradeDeduction = Number(upgradeDeduction.toFixed(2));
+  upgradeDeduction = Math.round(upgradeDeduction);
 
   return {
     upgradeDeduction,

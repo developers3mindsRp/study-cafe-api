@@ -53,7 +53,7 @@ async function calculateMembershipUpgrade(userId, targetPlanId, couponCode = nul
   if (!targetPlan) throw new AppError('Target plan not found or inactive', 404);
 
   const targetPrice = Number(targetPlan.price);
-  const targetSortOrder = Number(targetPlan.sort_order ?? 0);
+  const targetTierRank = Number(targetPlan.tier_rank ?? 0);
 
   // Load user's active membership (starts_at <= now, expires_at >= now)
   const now = new Date();
@@ -100,10 +100,10 @@ async function calculateMembershipUpgrade(userId, targetPlanId, couponCode = nul
     where: { slug: activeMembership.membership_type },
   });
 
-  const activeSortOrder = currentPlan ? Number(currentPlan.sort_order ?? 0) : 0;
+  const activeTierRank = currentPlan ? Number(currentPlan.tier_rank ?? 0) : 0;
 
   // Validate upgrade direction — return as success with canUpgrade: false instead of throwing
-  if (targetSortOrder === activeSortOrder && currentPlan && currentPlan.id === Number(targetPlanId)) {
+  if (targetTierRank === activeTierRank && currentPlan && currentPlan.id === Number(targetPlanId)) {
     return {
       canUpgrade: false,
       message: 'You are already on this plan.',
@@ -120,7 +120,7 @@ async function calculateMembershipUpgrade(userId, targetPlanId, couponCode = nul
       },
     };
   }
-  if (targetSortOrder <= activeSortOrder) {
+  if (targetTierRank <= activeTierRank) {
     const activeName = currentPlan ? currentPlan.name : activeMembership.membership_type;
     return {
       canUpgrade: false,
@@ -130,6 +130,27 @@ async function calculateMembershipUpgrade(userId, targetPlanId, couponCode = nul
         name: activeName,
         slug: activeMembership.membership_type,
         price: currentPlan ? Number(currentPlan.price) : 0,
+      },
+      targetPlan: {
+        id: targetPlan.id,
+        name: targetPlan.name,
+        price: targetPrice,
+      },
+    };
+  }
+
+  // Lifetime-to-lifetime: cannot auto-calculate remaining value — admin must handle
+  if (currentPlan && currentPlan.is_lifetime && targetPlan.is_lifetime) {
+    return {
+      canUpgrade: false,
+      requiresAdminAction: true,
+      message:
+        'Upgrading from a lifetime plan to another lifetime plan cannot be processed automatically. Please contact support to complete this upgrade.',
+      currentPlan: {
+        id: currentPlan.id,
+        name: currentPlan.name,
+        slug: activeMembership.membership_type,
+        price: Number(currentPlan.price),
       },
       targetPlan: {
         id: targetPlan.id,
