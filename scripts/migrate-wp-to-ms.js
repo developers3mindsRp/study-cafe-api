@@ -11,6 +11,10 @@
  *     materials, payments, outbox_events, roles) are NEVER truncated;
  *     data you add via the admin panel is preserved across runs.
  *
+ * Media: single `media` table (WordPress sc_media → media with category=library).
+ * Legacy `media_assets` (admin icons) is merged after WP media import, then dropped.
+ * No separate consolidate migration needed when using this full sync.
+ *
  * Usage:
  *   node scripts/migrate-wp-to-ms.js
  *   npm run migrate:wp-to-ms
@@ -134,6 +138,7 @@ async function main() {
     await migrateRedirections(src, tgt);
     await migrateWpLinks(src, tgt);
     await migrateMedia(src, tgt);
+    await mergeLegacyMediaAssets(tgt);
     await migrateForumTopics(src, tgt);
     await migrateEnrollments(src, tgt);
     await migrateUserCourses(src, tgt);
@@ -504,23 +509,18 @@ async function createAllTables(tgt) {
       status VARCHAR(20) DEFAULT 'enabled'
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-    -- Media / Attachments (platform-service)
+    -- Media (WordPress legacy attachments + admin library + icons)
     CREATE TABLE IF NOT EXISTS media (
       id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
       wp_post_id BIGINT UNSIGNED UNIQUE,
       title VARCHAR(500),
-      url VARCHAR(500),
-      mime_type VARCHAR(100),
-      created_at DATETIME
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-    -- Media assets library (platform-service admin icons / uploads registry)
-    CREATE TABLE IF NOT EXISTS media_assets (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      url VARCHAR(512) NOT NULL,
-      label VARCHAR(128) NULL,
-      category VARCHAR(64) DEFAULT 'icon',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      label VARCHAR(128),
+      url VARCHAR(512),
+      mime_type VARCHAR(128),
+      category VARCHAR(64) DEFAULT 'library',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      KEY idx_media_category (category),
+      KEY idx_media_url (url(191))
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
     -- Forum Topics (platform-service)
@@ -900,6 +900,87 @@ async function createAllTables(tgt) {
 
     // Ensure premium_plans has columns expected by platform-service (for existing DBs)
     await ensurePremiumPlansColumns(tgt);
+    // Unified media table (label, category, indexes) for existing DBs created before this schema
+    await ensureMediaTableSchema(tgt);
+}
+
+/**
+ * Upgrade existing `media` tables to unified schema (label, category, wider url/mime_type, indexes).
+ * Idempotent — safe on every migrate-wp-to-ms run.
+ */
+async function ensureMediaTableSchema(tgt) {
+    const alters = [
+        'ALTER TABLE media ADD COLUMN label VARCHAR(128) NULL',
+        "ALTER TABLE media ADD COLUMN category VARCHAR(64) NULL DEFAULT 'library'",
+        'ALTER TABLE media MODIFY COLUMN url VARCHAR(512) NULL',
+        'ALTER TABLE media MODIFY COLUMN mime_type VARCHAR(128) NULL',
+    ];
+    for (const sql of alters) {
+        try {
+            await tgt.query(sql, { raw: true });
+        } catch (e) {
+            if (e.original && e.original.code === 'ER_DUP_FIELDNAME') continue;
+            if (e.message && e.message.includes('Duplicate column name')) continue;
+            throw e;
+        }
+    }
+
+    await tgt.query("UPDATE media SET category = 'library' WHERE category IS NULL", { raw: true });
+    await tgt.query(`
+      UPDATE media
+      SET label = title
+      WHERE (label IS NULL OR TRIM(label) = '')
+        AND title IS NOT NULL AND TRIM(title) != ''
+    `, { raw: true });
+
+    const indexes = [
+        'CREATE INDEX idx_media_category ON media (category)',
+        'CREATE INDEX idx_media_url ON media (url(191))',
+    ];
+    for (const sql of indexes) {
+        try {
+            await tgt.query(sql, { raw: true });
+        } catch (e) {
+            if (e.original && (e.original.code === 'ER_DUP_KEYNAME' || e.original.errno === 1061)) continue;
+            if (e.message && (e.message.includes('Duplicate key name') || e.message.includes('already exists'))) continue;
+            throw e;
+        }
+    }
+}
+
+/**
+ * If an older deploy created `media_assets` (icon picker), merge into `media` and drop it.
+ * Runs after WP media import; does not touch other modules.
+ */
+async function mergeLegacyMediaAssets(tgt) {
+    const [tables] = await tgt.query(
+        "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'media_assets'",
+        { type: QueryTypes.SELECT },
+    );
+    if (!tables.length) return;
+
+    console.log('🖼️  Merging legacy media_assets into media...');
+    const [mimeCols] = await tgt.query(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'media_assets' AND COLUMN_NAME = 'mime_type'`,
+        { type: QueryTypes.SELECT },
+    );
+    const mimeSelect = mimeCols.length ? 'ma.mime_type' : 'NULL';
+
+    const [insert] = await tgt.query(`
+      INSERT INTO media (url, label, title, mime_type, category, created_at)
+      SELECT ma.url, ma.label, ma.label, ${mimeSelect}, ma.category, ma.created_at
+      FROM media_assets ma
+      WHERE ma.url IS NOT NULL AND TRIM(ma.url) != ''
+        AND NOT EXISTS (
+          SELECT 1 FROM media m
+          WHERE m.url = ma.url AND (m.category <=> ma.category)
+        )
+    `, { raw: true });
+
+    await tgt.query('DROP TABLE media_assets', { raw: true });
+    const n = insert?.affectedRows ?? insert?.[0]?.affectedRows ?? 0;
+    console.log(`   ✅ Merged ${n} row(s) from media_assets; table dropped`);
 }
 
 async function ensurePremiumPlansColumns(tgt) {
@@ -1960,21 +2041,27 @@ async function migrateRedirections(src, tgt) {
 }
 
 async function migrateMedia(src, tgt) {
-    console.log('🖼️  Migrating media...');
+    console.log('🖼️  Migrating WordPress media (sc_media → media)...');
     try {
         await tgt.query('DELETE FROM media', { raw: true });
         let offset = 0;
         let total = 0;
+        let skipped = 0;
         while (true) {
             const rows = await src.query('SELECT * FROM sc_media ORDER BY id LIMIT ? OFFSET ?', { replacements: [BATCH, offset], type: QueryTypes.SELECT });
             if (!rows.length) break;
-            const values = rows.map(m => `(${m.id}, ${esc(m.wp_post_id)}, ${esc(m.title)}, ${esc(m.url)}, ${esc(m.mime_type)}, ${escDate(m.created_at)})`).join(',');
-            await tgt.query(`INSERT INTO media (id, wp_post_id, title, url, mime_type, created_at) VALUES ${values}`, { raw: true });
-            total += rows.length;
+            const valid = rows.filter((m) => m.url && String(m.url).trim());
+            skipped += rows.length - valid.length;
+            if (valid.length) {
+                const values = valid.map(m => `(${m.id}, ${esc(m.wp_post_id)}, ${esc(m.title)}, ${esc(m.title)}, ${esc(m.url)}, ${esc(m.mime_type)}, 'library', ${escDate(m.created_at)})`).join(',');
+                await tgt.query(`INSERT INTO media (id, wp_post_id, title, label, url, mime_type, category, created_at) VALUES ${values}`, { raw: true });
+                total += valid.length;
+            }
             offset += BATCH;
             process.stdout.write(`   ${total} media\r`);
         }
-        console.log(total ? `   ✅ ${total} media` : '   ✅ 0 media');
+        const skipNote = skipped ? ` (${skipped} without url skipped)` : '';
+        console.log(total ? `   ✅ ${total} media${skipNote}` : `   ✅ 0 media${skipNote}`);
     } catch (e) {
         if (e.message && e.message.includes("doesn't exist")) { console.log('   ⏭️  sc_media not in source, skip'); return; }
         throw e;

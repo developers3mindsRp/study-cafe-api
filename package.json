@@ -40,6 +40,7 @@
     "ensure-home-sections": "node scripts/ensure-home-sections-meta.js",
     "ensure-hide-from-public": "node --require dotenv/config scripts/apply-mysql-sql-file.js services/course-service/scripts/add-hide-from-public-to-courses.sql",
     "ensure-global-settings": "node --require dotenv/config scripts/apply-mysql-sql-file.js services/platform-service/scripts/create-global-settings-table.sql",
+    "ensure-consolidate-media": "npm run db:consolidate-media --prefix services/platform-service",
     "ensure-course-page-settings": "node scripts/ensure-course-page-settings-table.js",
     "ensure-marketing-pages": "node scripts/ensure-marketing-pages-table.js",
     "ensure-google-reviews-testimonials": "node scripts/ensure-google-reviews-and-testimonials-tables.js",

@@ -127,7 +127,7 @@ const {
   Tag,
   ArticleType,
   Court,
-  MediaAsset,
+  Media,
   ContactInquiry,
   SeoMetadata,
   SiteSeoRoute,
@@ -3104,22 +3104,142 @@ async function upsertCmsPageBySlug(slug, data) {
   return row.get({ plain: true });
 }
 
-// ── Media Assets ────────────────────────────────────────────────────
+// ── Media (unified table: WordPress legacy + admin library + icons) ──
 
-async function getMediaAssetsInternal(category) {
-  const where = category ? { category } : {};
-  const rows = await MediaAsset.findAll({ where, order: [['created_at', 'DESC']] });
-  return rows.map((r) => r.get({ plain: true }));
+const IMAGE_URL_EXT = /\.(jpe?g|png|gif|webp|svg)(\?.*)?$/i;
+const DOC_URL_EXT = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx)(\?.*)?$/i;
+
+function formatMediaRow(row) {
+  const plain = typeof row.get === 'function' ? row.get({ plain: true }) : row;
+  return {
+    ...plain,
+    label: plain.label || plain.title || null,
+  };
 }
 
-async function createMediaAsset({ url, label, category = 'icon' }) {
-  const row = await MediaAsset.create({ url, label, category });
-  return row.get({ plain: true });
+function buildMediaAssetTypeWhere(type) {
+  const t = type && String(type).trim().toLowerCase();
+  if (!t || t === 'all') return null;
+  if (t === 'image') {
+    return {
+      [Op.or]: [
+        { mime_type: { [Op.like]: 'image/%' } },
+        { url: { [Op.regexp]: IMAGE_URL_EXT.source } },
+      ],
+    };
+  }
+  if (t === 'document') {
+    return {
+      [Op.or]: [
+        { mime_type: 'application/pdf' },
+        { mime_type: { [Op.like]: 'application/vnd.%' } },
+        { mime_type: 'application/msword' },
+        { mime_type: 'application/octet-stream' },
+        { url: { [Op.regexp]: DOC_URL_EXT.source } },
+      ],
+    };
+  }
+  return null;
+}
+
+async function getMediaAssetsInternal(options = {}) {
+  const normalized =
+    typeof options === 'string' || options === null || options === undefined
+      ? { category: options || null }
+      : options;
+
+  const {
+    category = null,
+    type = null,
+    search = null,
+    page = null,
+    limit = 24,
+  } = normalized;
+
+  const conditions = [];
+  if (category) conditions.push({ category: String(category).trim() });
+
+  // Skip broken legacy rows in library listings (does not affect icon picker or other categories)
+  if (!category || String(category).trim() === 'library') {
+    conditions.push({
+      url: { [Op.and]: [{ [Op.ne]: null }, { [Op.ne]: '' }] },
+    });
+  }
+
+  const typeWhere = buildMediaAssetTypeWhere(type);
+  if (typeWhere) conditions.push(typeWhere);
+
+  if (search && String(search).trim()) {
+    const term = `%${String(search).trim()}%`;
+    conditions.push({
+      [Op.or]: [
+        { label: { [Op.like]: term } },
+        { title: { [Op.like]: term } },
+        { url: { [Op.like]: term } },
+      ],
+    });
+  }
+
+  const where =
+    conditions.length === 0
+      ? {}
+      : conditions.length === 1
+        ? conditions[0]
+        : { [Op.and]: conditions };
+
+  const order = [['created_at', 'DESC'], ['id', 'DESC']];
+
+  if (page == null || page === '') {
+    const rows = await Media.findAll({ where, order });
+    return rows.map(formatMediaRow);
+  }
+
+  const safePage = Math.max(1, Number(page) || 1);
+  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 24));
+  const offset = (safePage - 1) * safeLimit;
+
+  const { count, rows } = await Media.findAndCountAll({
+    where,
+    limit: safeLimit,
+    offset,
+    order,
+  });
+
+  const total = typeof count === 'number' ? count : count.length;
+  const totalPages = Math.ceil(total / safeLimit) || 0;
+
+  return {
+    data: rows.map(formatMediaRow),
+    total,
+    page: safePage,
+    limit: safeLimit,
+    totalPages,
+  };
+}
+
+async function createMediaAsset({ url, label, category = 'library', mime_type = null }) {
+  if (!url || !String(url).trim()) {
+    throw new AppError('url is required', 400);
+  }
+  const safeUrl = String(url).trim();
+  const safeCategory = category || 'library';
+  const existing = await Media.findOne({ where: { url: safeUrl, category: safeCategory } });
+  if (existing) return formatMediaRow(existing);
+  const displayLabel = label || null;
+  const row = await Media.create({
+    url: safeUrl,
+    label: displayLabel,
+    title: displayLabel,
+    category: safeCategory,
+    mime_type,
+  });
+  return formatMediaRow(row);
 }
 
 async function deleteMediaAsset(id) {
-  const row = await MediaAsset.findByPk(id);
+  const row = await Media.findByPk(id);
   if (!row) return null;
+  // Only remove registry row; never delete files on disk (articles/banners keep working)
   await row.destroy();
   return { id };
 }

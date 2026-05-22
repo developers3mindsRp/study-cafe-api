@@ -151,7 +151,7 @@ function register(router) {
   router.post('/admin/upload', requireAdmin, uploadImageMw, controller.uploadImage);
   router.post('/admin/upload-file', requireAdmin, uploadFileMw, controller.uploadFile);
 
-  // ── Media assets (icons library) ────────────────────────────────────
+  // ── Media library (unified `media` table) ───────────────────────────
   router.get('/admin/platform/contact-inquiries', requireAdmin, p.contactInquiries);
   router.get('/admin/platform/media-assets', requireAdmin, p.getMediaAssets);
   router.post('/admin/platform/media-assets', requireAdmin, p.postMediaAsset);

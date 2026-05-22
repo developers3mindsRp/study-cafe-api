@@ -137,9 +137,9 @@ function register(router) {
   router.post('/internal/platform/upload/image', internalAuth, uploadImageMw, controller.uploadImage);
   router.post('/internal/platform/upload/file', internalAuth, uploadFileMw, controller.uploadFile);
 
-  // ── Media assets (icons library) ────────────────────────────────────
-  router.get('/internal/platform/media-assets', internalAuth, controller.getMediaAssets);
-  router.post('/internal/platform/media-assets', internalAuth, controller.createMediaAsset);
+  // ── Media library (unified `media` table) ───────────────────────────
+  router.get('/internal/platform/media-assets', internalAuth, validate(schemas.mediaAssetsListQuery), controller.getMediaAssets);
+  router.post('/internal/platform/media-assets', internalAuth, validate(schemas.createMediaAsset), controller.createMediaAsset);
   router.delete('/internal/platform/media-assets/:id', internalAuth, controller.deleteMediaAsset);
 
   // ── Banners ─────────────────────────────────────────────────────────
