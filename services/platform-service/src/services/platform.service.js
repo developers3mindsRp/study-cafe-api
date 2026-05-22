@@ -133,33 +133,39 @@ const {
   SiteSeoRoute,
 } = require('../models');
 
+/** Build a display label from a user row, preferring first_name + last_name. */
+function buildAuthorLabel(r) {
+  const firstName = r.first_name && r.first_name.trim();
+  const lastName = r.last_name && r.last_name.trim();
+  const fullName = [firstName, lastName].filter(Boolean).join(' ');
+  if (fullName) return fullName;
+  return (r.display_name && r.display_name.trim())
+    || (r.name && r.name.trim())
+    || (r.email ? r.email.split('@')[0] : null)
+    || null;
+}
+
 /** Get display_name for one author from users table (same DB). */
 async function getAuthorDisplayName(authorId) {
   if (authorId == null) return null;
   const rows = await sequelize.query(
-    'SELECT display_name FROM users WHERE id = ? LIMIT 1',
+    'SELECT first_name, last_name, display_name FROM users WHERE id = ? LIMIT 1',
     { replacements: [authorId], type: QueryTypes.SELECT }
   );
-  const name = rows[0] && (rows[0].display_name != null && rows[0].display_name !== '') ? rows[0].display_name : null;
-  return name;
+  return rows[0] ? buildAuthorLabel(rows[0]) : null;
 }
 
-/** Get display_name for many author ids; returns Map<authorId, display_name>. */
+/** Get display label for many author ids; returns Map<authorId, label>. */
 async function getAuthorDisplayNamesBatch(authorIds) {
   const uniq = [...new Set(authorIds)].filter((id) => id != null);
   if (uniq.length === 0) return new Map();
   const rows = await sequelize.query(
-    'SELECT id, display_name, name, email FROM users WHERE id IN (?)',
+    'SELECT id, first_name, last_name, display_name, name, email FROM users WHERE id IN (?)',
     { replacements: [uniq], type: QueryTypes.SELECT }
   );
   const map = new Map();
   rows.forEach((r) => {
-    // Prefer display_name, fall back to name, then email prefix
-    const label = (r.display_name && r.display_name.trim())
-      || (r.name && r.name.trim())
-      || (r.email ? r.email.split('@')[0] : null)
-      || null;
-    map.set(Number(r.id), label);
+    map.set(Number(r.id), buildAuthorLabel(r));
   });
   return map;
 }
