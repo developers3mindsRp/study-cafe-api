@@ -46,9 +46,41 @@ function publicMediaUrl(relativePath, _whichApi) {
   return `${origin}/uploads/${rel}`;
 }
 
+const STUDYCAFE_UPLOAD_PATH_RE = /^https?:\/\/(?:www\.)?studycafe\.in(\/wp-content\/uploads\/.*)$/i;
+const STUDYCAFE_UPLOAD_IN_CONTENT_RE = /https?:\/\/(?:www\.)?studycafe\.in(\/wp-content\/uploads\/[^"'\\\s<>]*)/gi;
+
+/**
+ * Rewrite legacy WordPress upload URLs from studycafe.in → assets.studycafe.in.
+ * Only affects /wp-content/uploads/ paths on the studycafe.in domain; third-party URLs are unchanged.
+ *
+ * @param {string|null|undefined} url
+ * @returns {string|null|undefined}
+ */
+function rewriteStudycafeUploadUrl(url) {
+  if (url == null || url === '') return url;
+  const s = String(url).trim();
+  const match = s.match(STUDYCAFE_UPLOAD_PATH_RE);
+  if (!match) return url;
+  return `${resolveAssetsOrigin()}${match[1]}`;
+}
+
+/**
+ * Rewrite all embedded studycafe.in wp-content/uploads URLs inside HTML/JSON content.
+ *
+ * @param {string|null|undefined} content
+ * @returns {string|null|undefined}
+ */
+function rewriteStudycafeUploadUrlsInContent(content) {
+  if (content == null || content === '') return content;
+  const origin = resolveAssetsOrigin();
+  return String(content).replace(STUDYCAFE_UPLOAD_IN_CONTENT_RE, `${origin}$1`);
+}
+
 module.exports = {
   getYearMonthParts,
   relativePathFromFile,
   publicMediaUrl,
+  rewriteStudycafeUploadUrl,
+  rewriteStudycafeUploadUrlsInContent,
   DEFAULT_PRODUCTION_ASSETS_ORIGIN,
 };
