@@ -7,7 +7,7 @@ function getPlaybackPayload(videoIdRaw, _userId) {
   if (!videoId) {
     return { videoId: null, embedUrl: null, provider: 'vimeo' };
   }
-  const token = process.env.VIMEO_ACCESS_TOKEN || '';
+  const token = process.env.VIMEO_ACCESS_TOKEN?.trim();
   return {
     videoId,
     embedUrl: `https://player.vimeo.com/video/${encodeURIComponent(videoId)}`,

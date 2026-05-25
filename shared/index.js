@@ -17,7 +17,6 @@ const {
     getYearMonthParts,
     relativePathFromFile,
     publicMediaUrl,
-    DEFAULT_PRODUCTION_ASSETS_ORIGIN,
 } = require('./mediaUrl');
 const { computeMembershipUpgradeCredit } = require('./membershipUpgradeProration');
 
@@ -36,6 +35,5 @@ module.exports = {
     getYearMonthParts,
     relativePathFromFile,
     publicMediaUrl,
-    DEFAULT_PRODUCTION_ASSETS_ORIGIN,
     computeMembershipUpgradeCredit,
 };

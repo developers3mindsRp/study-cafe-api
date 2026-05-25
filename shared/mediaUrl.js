@@ -1,6 +1,9 @@
 const path = require('path');
+const { required } = require('./env');
 
-const DEFAULT_PRODUCTION_ASSETS_ORIGIN = 'https://assets.studycafe.in';
+function resolveAssetsOrigin() {
+  return required('ASSETS_BASE_URL').replace(/\/$/, '');
+}
 
 /**
  * @param {Date} [d]
@@ -23,19 +26,11 @@ function relativePathFromFile(uploadsRoot, fileAbsolutePath) {
   return rel;
 }
 
-function resolveAssetsOrigin() {
-  if (process.env.ASSETS_BASE_URL) {
-    return process.env.ASSETS_BASE_URL.replace(/\/$/, '');
-  }
-  return DEFAULT_PRODUCTION_ASSETS_ORIGIN;
-}
-
 /**
  * Public URL for a file under the uploads base (served at /uploads/ on assets host).
  *
  * Always returns an absolute URL so the value persisted in the database is the
- * exact URL the frontend should render. Defaults to https://assets.studycafe.in;
- * override with ASSETS_BASE_URL (e.g. for staging).
+ * exact URL the frontend should render. Set ASSETS_BASE_URL in .env.
  *
  * @param {string} relativePath - e.g. 2026/04/file.jpg
  * @param {'platform' | 'user'} [_whichApi] - retained for API compatibility (unused)
@@ -82,5 +77,4 @@ module.exports = {
   publicMediaUrl,
   rewriteStudycafeUploadUrl,
   rewriteStudycafeUploadUrlsInContent,
-  DEFAULT_PRODUCTION_ASSETS_ORIGIN,
 };

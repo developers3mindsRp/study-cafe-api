@@ -1,19 +1,26 @@
+const {
+  required,
+  requiredInt,
+  serviceUrl,
+} = require('../../../../shared/env');
+
 module.exports = {
-  port: parseInt(process.env.PORT || '3000', 10),
+  port: requiredInt('PORT'),
   serviceName: 'api-gateway',
-  authServiceUrl: process.env.AUTH_SERVICE_URL || 'http://localhost:4001',
-  courseServiceUrl: process.env.COURSE_SERVICE_URL || 'http://localhost:4002',
-  orderServiceUrl: process.env.ORDER_SERVICE_URL || 'http://localhost:4003',
-  adminServiceUrl: process.env.ADMIN_SERVICE_URL || 'http://localhost:4004',
-  platformServiceUrl: process.env.PLATFORM_SERVICE_URL || 'http://localhost:4005',
-  downloadsServiceUrl: process.env.DOWNLOADS_SERVICE_URL || 'http://localhost:4006',
+  authServiceUrl: serviceUrl('AUTH_SERVICE_URL'),
+  courseServiceUrl: serviceUrl('COURSE_SERVICE_URL'),
+  orderServiceUrl: serviceUrl('ORDER_SERVICE_URL'),
+  adminServiceUrl: serviceUrl('ADMIN_SERVICE_URL'),
+  platformServiceUrl: serviceUrl('PLATFORM_SERVICE_URL'),
+  downloadsServiceUrl: serviceUrl('DOWNLOADS_SERVICE_URL'),
   redis: {
-    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    url: required('REDIS_URL'),
   },
   rateLimit: {
-    windowSec: parseInt(process.env.RATE_LIMIT_WINDOW || '60', 10),
-    maxPerWindow: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
+    windowSec: requiredInt('RATE_LIMIT_WINDOW'),
+    maxPerWindow: requiredInt('RATE_LIMIT_MAX'),
   },
-  /** Injected on proxy to downloads-service internal routes (admin panel). */
-  internalApiKey: process.env.INTERNAL_API_KEY || '',
+  internalApiKey: required('INTERNAL_API_KEY'),
 };
+
+process.env.SERVICE_NAME = module.exports.serviceName;

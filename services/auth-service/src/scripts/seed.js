@@ -1,12 +1,10 @@
 const bcrypt = require('bcryptjs');
 const { Role, User } = require('../models');
-
-const DEFAULT_SUPER_ADMIN_EMAIL = 'admin@studycafe.in';
-const DEFAULT_SUPER_ADMIN_PASSWORD = 'SuperAdmin@123';
+const { required } = require('../../../../shared/env');
 
 async function seed() {
-  const email = process.env.SEED_SUPER_ADMIN_EMAIL || DEFAULT_SUPER_ADMIN_EMAIL;
-  const password = process.env.SEED_SUPER_ADMIN_PASSWORD || DEFAULT_SUPER_ADMIN_PASSWORD;
+  const email = required('SEED_SUPER_ADMIN_EMAIL');
+  const password = required('SEED_SUPER_ADMIN_PASSWORD');
 
   await Promise.all([
     Role.findOrCreate({ where: { name: 'user' }, defaults: { name: 'user' } }),
