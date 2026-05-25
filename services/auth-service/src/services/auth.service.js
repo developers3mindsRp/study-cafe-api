@@ -262,6 +262,10 @@ async function register({
     });
   }
 
+  emailService.sendWelcomeEmail({ to: emailNorm, name: name ? String(name).trim() : null }).catch((err) => {
+    logger.warn('[register] Welcome email failed (non-blocking)', { email: emailNorm, err: err?.message });
+  });
+
   const withRole = await User.findByPk(user.id, {
     include: [{ model: Role, as: 'Role', attributes: ['name'] }],
     attributes: [

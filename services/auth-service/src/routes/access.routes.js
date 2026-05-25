@@ -1,5 +1,6 @@
 const accessController = require('../controllers/access.controller');
 const accessService = require('../services/access.service');
+const { sendPaymentEmail } = require('../services/email.service');
 const { requireGrantAuth } = require('../middleware');
 const schemas = require('../validations/schemas');
 const { validate } = require('../../../../shared');
@@ -66,6 +67,15 @@ function register(router) {
       raw: true,
     });
     sendSuccess(res, rows);
+  }));
+
+  router.post('/internal/send-payment-email', requireGrantAuth, asyncHandler(async (req, res) => {
+    const { to, status, orderId } = req.body;
+    if (!to || !status || !orderId) {
+      throw new AppError('to, status, and orderId are required', 400);
+    }
+    const result = await sendPaymentEmail(req.body);
+    sendSuccess(res, result);
   }));
 }
 

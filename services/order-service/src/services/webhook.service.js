@@ -1,7 +1,7 @@
 const crypto = require('crypto');
-const { Order, Payment, WebhookEvent } = require('../models');
+const { sequelize, Order, Payment, WebhookEvent } = require('../models');
 const config = require('../config');
-const { completePayment } = require('./orders.service');
+const { completePayment, emitPaymentEmailOutbox } = require('./orders.service');
 const { logger } = require('../../../../shared');
 
 function verifySignature(rawBody, signature) {
@@ -104,13 +104,27 @@ async function handlePaymentFailed(body) {
     return 'skipped';
   }
 
-  await order.update({ status: 'failed' });
-  await Payment.create({
-    order_id: order.id,
-    razorpay_payment_id: payment.id,
-    amount: payment.amount / 100,
-    status: 'failed',
-    source: 'webhook',
+  await sequelize.transaction(async (t) => {
+    const locked = await Order.findOne({
+      where: { id: order.id },
+      lock: t.LOCK.UPDATE,
+      transaction: t,
+    });
+    if (!locked) return;
+    await locked.update({ status: 'failed' }, { transaction: t });
+    await Payment.create(
+      {
+        order_id: locked.id,
+        razorpay_payment_id: payment.id,
+        amount: payment.amount / 100,
+        status: 'failed',
+        source: 'webhook',
+      },
+      { transaction: t }
+    );
+    await emitPaymentEmailOutbox(locked, payment.id, 'failed', t, {
+      failReason: payment.error_description || 'Payment could not be processed',
+    });
   });
   logger.info(`[WEBHOOK] payment.failed — marked order ${order.order_id} as failed`);
   return 'processed';
