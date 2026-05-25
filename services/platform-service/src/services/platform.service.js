@@ -1974,11 +1974,44 @@ async function getArticlesInternal(options = {}) {
   });
 
   if (result.data && result.data.length > 0) {
+    const articleIds = result.data.map((r) => r.id);
     const authorIds = result.data.map((r) => r.author_id).filter(Boolean);
-    const authorNames = await getAuthorDisplayNamesBatch(authorIds);
+
+    const [authorNames, catMaps, tagMaps] = await Promise.all([
+      getAuthorDisplayNamesBatch(authorIds),
+      ArticleCategoryMap.findAll({ where: { article_id: { [Op.in]: articleIds } }, attributes: ['article_id', 'category_id'], raw: true }),
+      ArticleTagMap.findAll({ where: { article_id: { [Op.in]: articleIds } }, attributes: ['article_id', 'tag_id'], raw: true }),
+    ]);
+
+    const allCatIds = [...new Set(catMaps.map((r) => Number(r.category_id)))];
+    const allTagIds = [...new Set(tagMaps.map((r) => Number(r.tag_id)))];
+
+    const [catRecords, tagRecords] = await Promise.all([
+      allCatIds.length ? Category.findAll({ where: { id: { [Op.in]: allCatIds } }, attributes: ['id', 'name'], raw: true }) : [],
+      allTagIds.length ? Tag.findAll({ where: { id: { [Op.in]: allTagIds } }, attributes: ['id', 'name'], raw: true }) : [],
+    ]);
+
+    const catById = new Map(catRecords.map((r) => [Number(r.id), r.name]));
+    const tagById = new Map(tagRecords.map((r) => [Number(r.id), r.name]));
+
+    const catsByArticle = new Map();
+    const tagsByArticle = new Map();
+    catMaps.forEach((r) => {
+      const aid = Number(r.article_id);
+      if (!catsByArticle.has(aid)) catsByArticle.set(aid, []);
+      catsByArticle.get(aid).push({ id: Number(r.category_id), name: catById.get(Number(r.category_id)) ?? '' });
+    });
+    tagMaps.forEach((r) => {
+      const aid = Number(r.article_id);
+      if (!tagsByArticle.has(aid)) tagsByArticle.set(aid, []);
+      tagsByArticle.get(aid).push({ id: Number(r.tag_id), name: tagById.get(Number(r.tag_id)) ?? '' });
+    });
+
     result.data = result.data.map((r) => ({
       ...r,
       author_name: authorNames.get(r.author_id) ?? r.author_id,
+      categories: catsByArticle.get(Number(r.id)) ?? [],
+      tags: tagsByArticle.get(Number(r.id)) ?? [],
     }));
   }
 
