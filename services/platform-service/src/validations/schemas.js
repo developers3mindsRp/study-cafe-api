@@ -507,7 +507,18 @@ const createMediaAsset = {
     body: Joi.object({
         url: Joi.string().uri().required(),
         label: Joi.string().max(255).allow('', null),
-        category: Joi.string().max(50).default('icon'),
+        mime_type: Joi.string().max(128).allow('', null),
+        category: Joi.string().max(50).default('library'),
+    }),
+};
+
+const mediaAssetsListQuery = {
+    query: Joi.object({
+        category: Joi.string().max(64).allow('', null),
+        type: Joi.string().valid('image', 'document', 'all').allow('', null),
+        search: Joi.string().max(200).allow('', null),
+        page: Joi.number().integer().min(1).allow('', null),
+        limit: Joi.number().integer().min(1).max(100).default(24),
     }),
 };
 
@@ -550,4 +561,5 @@ module.exports = {
     createBanner,
     updateBanner,
     createMediaAsset,
+    mediaAssetsListQuery,
 };

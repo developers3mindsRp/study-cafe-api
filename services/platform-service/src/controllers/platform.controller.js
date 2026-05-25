@@ -442,6 +442,17 @@ const uploadImage = asyncHandler(async (req, res) => {
   logger.info(`[uploadImage] saved → path: ${req.file.path}, size: ${req.file.size} bytes`);
   const rel = relativePathFromFile(uploadsDir, req.file.path);
   const url = publicMediaUrl(rel, 'platform');
+  const label = (req.file.originalname || '').replace(/\.[^.]+$/, '') || null;
+  try {
+    await platformService.mediaAssets.createMediaAsset({
+      url,
+      label,
+      category: 'library',
+      mime_type: req.file.mimetype || null,
+    });
+  } catch (err) {
+    logger.warn(`[uploadImage] media registry skipped (upload still OK): ${err.message}`);
+  }
   sendSuccess(res, { url });
 });
 
@@ -454,6 +465,17 @@ const uploadFile = asyncHandler(async (req, res) => {
   logger.info(`[uploadFile] saved → path: ${req.file.path}, size: ${req.file.size} bytes`);
   const rel = relativePathFromFile(uploadsDir, req.file.path);
   const url = publicMediaUrl(rel, 'platform');
+  const label = (req.file.originalname || '').replace(/\.[^.]+$/, '') || null;
+  try {
+    await platformService.mediaAssets.createMediaAsset({
+      url,
+      label,
+      category: 'library',
+      mime_type: req.file.mimetype || null,
+    });
+  } catch (err) {
+    logger.warn(`[uploadFile] media registry skipped (upload still OK): ${err.message}`);
+  }
   sendSuccess(res, {
     url,
     filename: req.file.filename,
@@ -466,15 +488,26 @@ const uploadFile = asyncHandler(async (req, res) => {
 // ── Media Assets ────────────────────────────────────────────────────
 
 const getMediaAssets = asyncHandler(async (req, res) => {
-  const { category } = req.query;
-  const data = await platformService.mediaAssets.getMediaAssetsInternal(category || null);
+  const { category, type, search, page, limit } = req.query;
+  const data = await platformService.mediaAssets.getMediaAssetsInternal({
+    category: category || null,
+    type: type || null,
+    search: search || null,
+    page: page ?? null,
+    limit: limit ?? 24,
+  });
   sendSuccess(res, data);
 });
 
 const createMediaAsset = asyncHandler(async (req, res) => {
-  const { url, label, category } = req.body;
+  const { url, label, category, mime_type } = req.body;
   if (!url) throw new AppError('url is required', 400);
-  const data = await platformService.mediaAssets.createMediaAsset({ url, label, category });
+  const data = await platformService.mediaAssets.createMediaAsset({
+    url,
+    label,
+    category,
+    mime_type,
+  });
   sendCreated(res, data);
 });
 

@@ -7,7 +7,8 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "worker:article-publish": "node src/workers/article-publish-worker.js",
-    "db:create-global-settings": "cd ../.. && npm run ensure-global-settings"
+    "db:create-global-settings": "cd ../.. && npm run ensure-global-settings",
+    "db:consolidate-media": "cd ../.. && node --require dotenv/config services/platform-service/scripts/consolidate-media-tables.js"
   },
   "dependencies": {
     "bullmq": "^5.34.5",
