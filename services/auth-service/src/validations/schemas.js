@@ -63,6 +63,19 @@ const changePassword = {
     }),
 };
 
+const forgotPassword = {
+    body: Joi.object({
+        email: Joi.string().email().required(),
+    }),
+};
+
+const resetPassword = {
+    body: Joi.object({
+        token: Joi.string().min(16).required(),
+        password: Joi.string().min(6).max(128).required(),
+    }),
+};
+
 // ── Access ──────────────────────────────────────────────────────────
 
 const checkAccess = {
@@ -144,6 +157,8 @@ module.exports = {
     verifyEmailOtp,
     refreshToken,
     changePassword,
+    forgotPassword,
+    resetPassword,
     checkAccess,
     grantCourse,
     revokeCourse,

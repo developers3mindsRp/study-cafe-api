@@ -56,6 +56,13 @@ function hashOtp(purpose, subjectId, otp) {
     .digest('hex');
 }
 
+function hashPasswordResetToken(token) {
+  return crypto
+    .createHmac('sha256', config.otpPepper)
+    .update(`password_reset|${token}`)
+    .digest('hex');
+}
+
 async function saveOtp(purpose, subjectId, otp) {
   const redis = await getRedis();
   const key = `otp:${purpose}:${subjectId}`;
@@ -82,6 +89,17 @@ async function rateLimitLoginOtp(emailNorm) {
   if (n === 1) await redis.expire(key, 3600);
   if (n > config.loginOtpMaxPerHour) {
     throw new AppError('Too many code requests. Try again later.', 429);
+  }
+}
+
+async function rateLimitPasswordReset(emailNorm) {
+  const redis = await getRedis();
+  const key = `ratelimit:password_reset:${emailNorm}`;
+  const n = await redis.incr(key);
+  if (n === 1) await redis.expire(key, 3600);
+  // Keep slightly stricter than login OTP to reduce abuse.
+  if (n > Math.max(3, Math.floor(config.loginOtpMaxPerHour / 2))) {
+    throw new AppError('Too many reset requests. Try again later.', 429);
   }
 }
 
@@ -434,6 +452,72 @@ async function changePassword(userId, { currentPassword, newPassword }) {
   await user.update({ password_hash });
 }
 
+const PASSWORD_RESET_TTL_SECONDS = 60 * 30; // 30 minutes
+
+async function requestPasswordReset({ email }) {
+  const norm = String(email).trim().toLowerCase();
+  await rateLimitPasswordReset(norm);
+
+  const user = await User.findOne({
+    where: { email: norm, is_active: true },
+    attributes: ['id', 'email'],
+  });
+
+  // Always return a generic response, even if no user exists.
+  if (!user) {
+    return { ok: true, message: 'If an account exists for this email, a reset link was sent.' };
+  }
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = hashPasswordResetToken(token);
+
+  const redis = await getRedis();
+  const key = `pwdreset:${tokenHash}`;
+  await redis.setEx(key, PASSWORD_RESET_TTL_SECONDS, String(user.id));
+
+  const resetUrl = `${config.publicSiteUrl}/reset-password?token=${encodeURIComponent(token)}`;
+  const ttlMinutes = Math.max(1, Math.round(PASSWORD_RESET_TTL_SECONDS / 60));
+
+  try {
+    const sendResult = await emailService.sendPasswordResetEmail({
+      to: norm,
+      resetUrl,
+      ttlMinutes,
+    });
+    if (!sendResult.sent) {
+      logger.warn('[passwordReset] email not sent', { email: norm, reason: sendResult.reason });
+      await redis.del(key);
+      throw new AppError('Password reset email is not configured. Please contact support.', 503);
+    }
+  } catch (err) {
+    logger.error('[passwordReset] send failed', { err: err?.message || err });
+    await redis.del(key);
+    if (err instanceof AppError) throw err;
+    throw new AppError('Could not send reset email. Try again shortly.', 503);
+  }
+
+  return { ok: true, message: 'If an account exists for this email, a reset link was sent.' };
+}
+
+async function resetPassword({ token, password }) {
+  const t = String(token || '').trim();
+  if (!t) throw new AppError('Invalid or expired reset token', 400);
+
+  const tokenHash = hashPasswordResetToken(t);
+  const redis = await getRedis();
+  const key = `pwdreset:${tokenHash}`;
+  const userId = await redis.get(key);
+  if (!userId) throw new AppError('Invalid or expired reset token', 400);
+
+  const user = await User.scope('withPassword').findByPk(userId);
+  if (!user || user.is_active !== true) throw new AppError('User not found or inactive', 404);
+
+  const password_hash = await bcrypt.hash(password, 10);
+  await user.update({ password_hash });
+  await redis.del(key);
+  return { ok: true };
+}
+
 async function refreshTokens(refreshToken) {
   const decoded = verifyRefresh(refreshToken);
   const user = await User.findByPk(decoded.userId, {
@@ -469,5 +553,7 @@ module.exports = {
   validateToken,
   refreshTokens,
   changePassword,
+  requestPasswordReset,
+  resetPassword,
   hasActiveMembershipForUserId,
 };
