@@ -7,6 +7,7 @@ const {
 } = require("../models");
 const { QueryTypes, Op } = require("sequelize");
 const { logger } = require("../../../../shared");
+const { notifyWithdrawalEmail } = require("./withdrawalEmail.service");
 
 /** Match order-service normalization: trim + uppercase (referral hex codes are stored uppercase). */
 function normalizeReferralCodeInput(code) {
@@ -162,6 +163,18 @@ const affiliateService = {
       status: "pending",
     });
 
+    const plain = request.get({ plain: true });
+    notifyWithdrawalEmail({
+      affiliateId: affiliate_id,
+      request: plain,
+      status: 'created',
+    }).catch((err) => {
+      logger.warn('[createWithdrawal] email failed (non-blocking)', {
+        requestId: plain.id,
+        err: err?.message,
+      });
+    });
+
     return request;
   },
 
@@ -206,6 +219,23 @@ const affiliateService = {
     }
 
     await request.update({ status, remarks });
+    const plain = request.get({ plain: true });
+
+    if (status === 'approved' || status === 'rejected') {
+      notifyWithdrawalEmail({
+        affiliateId: request.affiliate_id,
+        request: plain,
+        status,
+        remarks,
+      }).catch((err) => {
+        logger.warn('[updateWithdrawalStatus] email failed (non-blocking)', {
+          requestId: plain.id,
+          status,
+          err: err?.message,
+        });
+      });
+    }
+
     return request;
   },
 

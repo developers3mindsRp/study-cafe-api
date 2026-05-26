@@ -1,6 +1,6 @@
 const accessController = require('../controllers/access.controller');
 const accessService = require('../services/access.service');
-const { sendPaymentEmail } = require('../services/email.service');
+const { sendPaymentEmail, sendWithdrawalEmail } = require('../services/email.service');
 const { requireGrantAuth } = require('../middleware');
 const schemas = require('../validations/schemas');
 const { validate } = require('../../../../shared');
@@ -75,6 +75,19 @@ function register(router) {
       throw new AppError('to, status, and orderId are required', 400);
     }
     const result = await sendPaymentEmail(req.body);
+    sendSuccess(res, result);
+  }));
+
+  router.post('/internal/send-withdrawal-email', requireGrantAuth, asyncHandler(async (req, res) => {
+    const { to, status, requestId, amount } = req.body;
+    if (!to || !status || requestId == null || amount == null) {
+      throw new AppError('to, status, requestId, and amount are required', 400);
+    }
+    const allowed = new Set(['created', 'approved', 'rejected']);
+    if (!allowed.has(status)) {
+      throw new AppError('status must be created, approved, or rejected', 400);
+    }
+    const result = await sendWithdrawalEmail(req.body);
     sendSuccess(res, result);
   }));
 }

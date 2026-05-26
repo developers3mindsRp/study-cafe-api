@@ -72,6 +72,10 @@ module.exports = {
   },
 
   publicBaseUrl: optional('PUBLIC_BASE_URL', 'http://localhost:3000'),
+  /** Public website URL for email CTAs (align with auth-service PUBLIC_SITE_URL) */
+  publicSiteUrl: optional('PUBLIC_SITE_URL', 'https://studycafe.in').replace(/\/+$/, ''),
+  /** Inbox for Contact Us form admin notifications */
+  contactAdminEmail: optional('CONTACT_ADMIN_EMAIL', 'contact@studycafe.in'),
 
   redis: {
     /** Full ioredis URL. Required for BullMQ. Falls back to localhost only in development. */

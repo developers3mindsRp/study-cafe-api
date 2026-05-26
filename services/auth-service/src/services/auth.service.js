@@ -436,6 +436,16 @@ async function changePassword(userId, { currentPassword, newPassword }) {
   if (!passwordValid) throw new AppError('Current password is incorrect', 400);
   const password_hash = await bcrypt.hash(newPassword, 10);
   await user.update({ password_hash });
+
+  const plain = user.get({ plain: true });
+  if (plain.email) {
+    emailService.sendPasswordChangedEmail({ to: plain.email, name: plain.name }).catch((err) => {
+      logger.warn('[changePassword] confirmation email failed (non-blocking)', {
+        userId,
+        err: err?.message || String(err),
+      });
+    });
+  }
 }
 
 async function refreshTokens(refreshToken) {

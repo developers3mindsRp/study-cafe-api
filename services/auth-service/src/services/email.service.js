@@ -4,6 +4,14 @@ const { logger } = require('../../../../shared');
 const { buildOtpMailboxHtml, buildOtpPlainText } = require('../emailTemplates/otpMailbox');
 const { buildPaymentEmailHtml, buildPaymentEmailPlainText } = require('../emailTemplates/paymentEmail');
 const { buildWelcomeEmailHtml, buildWelcomeEmailPlainText } = require('../emailTemplates/welcomeEmail');
+const {
+  buildPasswordChangedEmailHtml,
+  buildPasswordChangedEmailPlainText,
+} = require('../emailTemplates/passwordChangedEmail');
+const {
+  buildWithdrawalEmailHtml,
+  buildWithdrawalEmailPlainText,
+} = require('../emailTemplates/withdrawalEmail');
 
 let transporterPromise;
 
@@ -182,4 +190,99 @@ async function sendWelcomeEmail({ to, name }) {
   }
 }
 
-module.exports = { sendOtpEmail, sendPaymentEmail, sendWelcomeEmail, isSmtpConfigured };
+/**
+ * Confirm password change to the account holder.
+ * @param {object} opts
+ * @param {string} opts.to
+ * @param {string} [opts.name]
+ */
+async function sendPasswordChangedEmail({ to, name }) {
+  const subject = 'Your Study Cafe password was changed';
+  const templateOpts = { name, email: to, siteUrl: config.publicSiteUrl };
+  const text = buildPasswordChangedEmailPlainText(templateOpts);
+  const html = buildPasswordChangedEmailHtml(templateOpts);
+
+  if (!isSmtpConfigured()) {
+    logger.warn('[email] SMTP not configured — password-changed email not sent', { to });
+    return { sent: false, reason: 'smtp_not_configured' };
+  }
+
+  const transport = await getTransporter();
+  if (!transport) {
+    logger.warn('[email] No transporter — password-changed email not sent', { to });
+    return { sent: false, reason: 'smtp_not_configured' };
+  }
+
+  try {
+    const info = await transport.sendMail({ from: config.smtp.from, to, subject, text, html });
+    logger.info('[email] Password-changed email sent', { to, messageId: info.messageId });
+    return { sent: true };
+  } catch (err) {
+    logger.error('[email] Password-changed email sendMail failed', {
+      to,
+      err: err?.message || String(err),
+      code: err?.code,
+    });
+    throw err;
+  }
+}
+
+/**
+ * Affiliate withdrawal request notification.
+ * @param {object} opts
+ * @param {string} opts.to
+ * @param {string} [opts.name]
+ * @param {'created'|'approved'|'rejected'} opts.status
+ * @param {number|string} opts.requestId
+ * @param {number} opts.amount
+ * @param {string} [opts.currency]
+ * @param {string} [opts.remarks]
+ */
+async function sendWithdrawalEmail(opts) {
+  const { to, status, requestId } = opts;
+  const subjects = {
+    created: `Withdrawal request received — #${requestId}`,
+    approved: `Withdrawal request approved — #${requestId}`,
+    rejected: `Withdrawal request declined — #${requestId}`,
+  };
+  const subject = subjects[status] || `Withdrawal update — #${requestId}`;
+
+  const templateOpts = { ...opts, siteUrl: config.publicSiteUrl };
+  const text = buildWithdrawalEmailPlainText(templateOpts);
+  const html = buildWithdrawalEmailHtml(templateOpts);
+
+  if (!isSmtpConfigured()) {
+    logger.warn('[email] SMTP not configured — withdrawal email not sent', { to, status });
+    return { sent: false, reason: 'smtp_not_configured' };
+  }
+
+  const transport = await getTransporter();
+  if (!transport) {
+    logger.warn('[email] No transporter — withdrawal email not sent', { to, status });
+    return { sent: false, reason: 'smtp_not_configured' };
+  }
+
+  try {
+    const info = await transport.sendMail({ from: config.smtp.from, to, subject, text, html });
+    logger.info('[email] Withdrawal email sent', { to, status, requestId, messageId: info.messageId });
+    return { sent: true };
+  } catch (err) {
+    logger.error('[email] Withdrawal email sendMail failed', {
+      to,
+      status,
+      requestId,
+      err: err?.message || String(err),
+      code: err?.code,
+    });
+    throw err;
+  }
+}
+
+module.exports = {
+  sendOtpEmail,
+  sendPaymentEmail,
+  sendWelcomeEmail,
+  sendPasswordChangedEmail,
+  sendWithdrawalEmail,
+  isSmtpConfigured,
+};
