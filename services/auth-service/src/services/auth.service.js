@@ -280,6 +280,10 @@ async function register({
     });
   }
 
+  emailService.sendWelcomeEmail({ to: emailNorm, name: name ? String(name).trim() : null }).catch((err) => {
+    logger.warn('[register] Welcome email failed (non-blocking)', { email: emailNorm, err: err?.message });
+  });
+
   const withRole = await User.findByPk(user.id, {
     include: [{ model: Role, as: 'Role', attributes: ['name'] }],
     attributes: [
@@ -450,6 +454,16 @@ async function changePassword(userId, { currentPassword, newPassword }) {
   if (!passwordValid) throw new AppError('Current password is incorrect', 400);
   const password_hash = await bcrypt.hash(newPassword, 10);
   await user.update({ password_hash });
+
+  const plain = user.get({ plain: true });
+  if (plain.email) {
+    emailService.sendPasswordChangedEmail({ to: plain.email, name: plain.name }).catch((err) => {
+      logger.warn('[changePassword] confirmation email failed (non-blocking)', {
+        userId,
+        err: err?.message || String(err),
+      });
+    });
+  }
 }
 
 const PASSWORD_RESET_TTL_SECONDS = 60 * 30; // 30 minutes

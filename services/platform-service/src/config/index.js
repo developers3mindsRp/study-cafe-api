@@ -5,6 +5,7 @@ const {
   requiredInt,
   optionalInt,
   requiredBool,
+  readOptional,
   mysqlConfig,
   serviceUrl,
 } = require('../../../../shared/env');
@@ -29,7 +30,13 @@ module.exports = {
     pass: required('SMTP_PASS'),
     from: required('SMTP_FROM'),
   },
-  publicBaseUrl: required('PUBLIC_BASE_URL'),
+
+  publicBaseUrl: readOptional('PUBLIC_BASE_URL'),
+  /** Public website URL for email CTAs (align with auth-service PUBLIC_SITE_URL) */
+  publicSiteUrl: (readOptional('PUBLIC_SITE_URL') || '').replace(/\/+$/, ''),
+  /** Inbox for Contact Us form admin notifications */
+  contactAdminEmail: readOptional('CONTACT_ADMIN_EMAIL'),
+
   redis: {
     url: required('REDIS_URL'),
   },

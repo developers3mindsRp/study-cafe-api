@@ -100,7 +100,7 @@ function coerceSqlBoolean(value) {
   return false;
 }
 
-const { paginate, AppError } = require('../../../../shared');
+const { paginate, AppError, logger } = require('../../../../shared');
 const articleScheduling = require('./article-scheduling.service');
 const {
   sequelize,
@@ -2449,7 +2449,17 @@ async function createContactInquiry(data) {
     message: data.message,
     status: 'new',
   });
-  return row.get({ plain: true });
+  const plain = row.get({ plain: true });
+
+  const { sendContactInquiryEmails } = require('./contactInquiryEmail.service');
+  sendContactInquiryEmails(plain).catch((err) => {
+    logger.warn('[contact] enquiry emails failed (non-blocking)', {
+      inquiryId: plain.id,
+      err: err?.message || String(err),
+    });
+  });
+
+  return plain;
 }
 
 async function getContactInquiry() {

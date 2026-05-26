@@ -33,7 +33,7 @@ function buildUnsubscribeUrl(token) {
  * Send a single email. Returns { ok: true } or { ok: false, error }.
  * Never throws — caller can tally success/failure.
  */
-async function sendMail({ to, subject, html }) {
+async function sendMail({ to, subject, html, text }) {
   try {
     logger.info(
       `[mailer] attempt to=${to} subject="${subject}" host=${config.smtp.host || 'not-set'} port=${config.smtp.port}`,
@@ -43,6 +43,7 @@ async function sendMail({ to, subject, html }) {
       to,
       subject,
       html,
+      ...(text ? { text } : {}),
     });
     // SMTP accepted the message; inbox delivery is tracked in your provider (e.g. Mailgun logs).
     logger.info(

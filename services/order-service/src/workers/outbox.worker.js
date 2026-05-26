@@ -67,6 +67,26 @@ async function processEvent(record) {
         logger.warn(`Failed to record affiliate commission for order ${data.orderId}: ${err.message}`);
         throw err;
       });
+    } else if (event_type === 'PAYMENT_EMAIL') {
+      await axios.post(
+        `${config.authServiceUrl}/internal/send-payment-email`,
+        {
+          to: data.to,
+          status: data.status,
+          orderId: data.orderId,
+          type: data.type,
+          itemName: data.itemName,
+          amount: data.amount,
+          currency: data.currency,
+          buyerName: data.buyerName,
+          couponCode: data.couponCode,
+          couponDiscount: data.couponDiscount,
+          originalAmount: data.originalAmount,
+          paymentId: data.paymentId,
+          failReason: data.failReason,
+        },
+        { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 15000 }
+      );
     } else if (event_type === 'ORDER_REFUNDED') {
       if (data.type === 'course') {
         await Promise.all([
