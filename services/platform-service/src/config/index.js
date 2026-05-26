@@ -3,6 +3,7 @@ const dotenv = require('dotenv');
 const {
   required,
   requiredInt,
+  optionalInt,
   requiredBool,
   mysqlConfig,
   serviceUrl,
@@ -12,7 +13,8 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env'), override: true });
 
 module.exports = {
   env: required('NODE_ENV'),
-  port: requiredInt('PORT'),
+  /** Set via cross-env in npm scripts / PM2 for the HTTP server only; workers omit PORT. */
+  port: optionalInt('PORT'),
   serviceName: 'platform-service',
   jwt: {
     secret: required('JWT_SECRET'),

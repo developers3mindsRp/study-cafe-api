@@ -30,6 +30,17 @@ function requiredInt(name) {
   return n;
 }
 
+/** Integer env var may be unset (returns undefined). No fallback values. */
+function optionalInt(name) {
+  const raw = readOptional(name);
+  if (raw === undefined) return undefined;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) {
+    throw new Error(`Invalid integer for environment variable ${name}`);
+  }
+  return n;
+}
+
 function requiredBool(name) {
   const v = required(name).toLowerCase();
   if (v === 'true' || v === '1') return true;
@@ -88,6 +99,7 @@ module.exports = {
   loadRootEnv,
   required,
   requiredInt,
+  optionalInt,
   requiredBool,
   readOptional,
   mysqlConfig,
