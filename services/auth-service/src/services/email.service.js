@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const axios = require('axios');
 const config = require('../config');
 const { logger } = require('../../../../shared');
 const { buildOtpMailboxHtml, buildOtpPlainText } = require('../emailTemplates/otpMailbox');
@@ -16,6 +17,14 @@ const {
   buildWithdrawalEmailHtml,
   buildWithdrawalEmailPlainText,
 } = require('../emailTemplates/withdrawalEmail');
+const {
+  buildMembershipUpgradeEmailHtml,
+  buildMembershipUpgradeEmailPlainText,
+} = require('../emailTemplates/membershipUpgradeEmail');
+const {
+  buildCourseCompletionCertificateEmailHtml,
+  buildCourseCompletionCertificateEmailPlainText,
+} = require('../emailTemplates/courseCompletionCertificateEmail');
 
 let transporterPromise;
 
@@ -320,6 +329,123 @@ async function sendWithdrawalEmail(opts) {
   }
 }
 
+/**
+ * Confirmed membership upgrade email.
+ * @param {object} opts
+ * @param {string} opts.to
+ * @param {string} [opts.name]
+ * @param {string} [opts.membershipPlanName]
+ * @param {string} [opts.orderId]
+ * @param {string} [opts.startsAt]
+ * @param {string} [opts.expiresAt]
+ */
+async function sendMembershipUpgradeEmail(opts) {
+  const { to, membershipPlanName, orderId } = opts;
+  const subject = `Membership upgrade confirmed — ${membershipPlanName || 'Study Cafe'}`;
+
+  const templateOpts = { ...opts, siteUrl: config.publicSiteUrl };
+  const text = buildMembershipUpgradeEmailPlainText(templateOpts);
+  const html = buildMembershipUpgradeEmailHtml(templateOpts);
+
+  if (!isSmtpConfigured()) {
+    logger.warn('[email] SMTP not configured — membership email not sent', { to });
+    return { sent: false, reason: 'smtp_not_configured' };
+  }
+
+  const transport = await getTransporter();
+  if (!transport) {
+    logger.warn('[email] No transporter — membership email not sent', { to });
+    return { sent: false, reason: 'smtp_not_configured' };
+  }
+
+  try {
+    const info = await transport.sendMail({ from: config.smtp.from, to, subject, text, html });
+    logger.info('[email] Membership upgrade email sent', { to, orderId, messageId: info.messageId });
+    return { sent: true };
+  } catch (err) {
+    logger.error('[email] Membership upgrade email sendMail failed', {
+      to,
+      err: err?.message || String(err),
+      code: err?.code,
+    });
+    throw err;
+  }
+}
+
+/**
+ * Course completion + certificate-ready email.
+ * @param {object} opts
+ * @param {string} opts.to
+ * @param {string} [opts.name]
+ * @param {string} [opts.courseTitle]
+ * @param {string} [opts.completionDate]
+ */
+async function sendCourseCompletionCertificateEmail(opts) {
+  const { to, courseTitle, userId, courseId } = opts;
+  const subject = `Your certificate is ready — ${courseTitle || 'Study Cafe'}`;
+
+  const templateOpts = { ...opts, siteUrl: config.publicSiteUrl };
+  const text = buildCourseCompletionCertificateEmailPlainText(templateOpts);
+  const html = buildCourseCompletionCertificateEmailHtml(templateOpts);
+
+  if (!isSmtpConfigured()) {
+    logger.warn('[email] SMTP not configured — course completion email not sent', { to });
+    return { sent: false, reason: 'smtp_not_configured' };
+  }
+
+  const transport = await getTransporter();
+  if (!transport) {
+    logger.warn('[email] No transporter — course completion email not sent', { to });
+    return { sent: false, reason: 'smtp_not_configured' };
+  }
+
+  try {
+    let attachments = undefined;
+    // If course-service details are provided, fetch PDF and attach it.
+    if (userId && courseId) {
+      try {
+        const pdfRes = await axios.get(
+          `${String(config.courseServiceUrl || '').replace(/\/+$/, '')}/internal/certificates/course/${Number(courseId)}/pdf`,
+          {
+            params: { userId: Number(userId) },
+            responseType: 'arraybuffer',
+            timeout: 15000,
+            headers: { 'x-internal-api-key': config.internalApiKey },
+            validateStatus: (s) => s === 200,
+          }
+        );
+        const pdfBuf = Buffer.from(pdfRes.data);
+        const safeTitle = String(courseTitle || 'course').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+        attachments = [
+          {
+            filename: `certificate-${safeTitle || 'course'}.pdf`,
+            content: pdfBuf,
+            contentType: 'application/pdf',
+          },
+        ];
+      } catch (err) {
+        logger.warn('[email] Certificate PDF fetch failed — sending email without attachment', {
+          to,
+          userId,
+          courseId,
+          err: err?.message || String(err),
+        });
+      }
+    }
+
+    const info = await transport.sendMail({ from: config.smtp.from, to, subject, text, html, attachments });
+    logger.info('[email] Course completion email sent', { to, courseTitle, messageId: info.messageId, attached: !!attachments });
+    return { sent: true };
+  } catch (err) {
+    logger.error('[email] Course completion email sendMail failed', {
+      to,
+      err: err?.message || String(err),
+      code: err?.code,
+    });
+    throw err;
+  }
+}
+
 module.exports = {
   sendOtpEmail,
   sendPasswordResetEmail,
@@ -327,5 +453,7 @@ module.exports = {
   sendWelcomeEmail,
   sendPasswordChangedEmail,
   sendWithdrawalEmail,
+  sendMembershipUpgradeEmail,
+  sendCourseCompletionCertificateEmail,
   isSmtpConfigured,
 };

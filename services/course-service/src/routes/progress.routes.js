@@ -11,6 +11,11 @@ function register(router) {
   router.get('/progress/overall', progressController.overall);
 
   router.post('/internal/progress/summary', internalAuth, progressController.internalSummary);
+  router.get(
+    '/internal/certificates/course/:courseId/pdf',
+    internalAuth,
+    certificateController.getCertificatePdfInternal
+  );
 
   router.get(
     '/certificates/course/:courseId',
