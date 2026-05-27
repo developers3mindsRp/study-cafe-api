@@ -11,7 +11,15 @@ const courseClient = axios.create({
 });
 
 courseClient.interceptors.response.use((response) => {
-  if (response.data && typeof response.data === 'object' && response.data.success === true && 'data' in response.data) {
+  // Only unwrap { success, data } for non-paginated responses.
+  // Paginated responses also have a `meta` key — leave those intact.
+  if (
+    response.data &&
+    typeof response.data === 'object' &&
+    response.data.success === true &&
+    'data' in response.data &&
+    !('meta' in response.data)
+  ) {
     response.data = response.data.data;
   }
   return response;

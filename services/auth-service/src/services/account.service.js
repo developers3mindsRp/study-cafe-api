@@ -170,6 +170,7 @@ async function myCourses(userId) {
       id: `${r.user_id}-${r.course_id}`,
       userId: String(r.user_id),
       courseId: String(r.course_id),
+      isAdminGranted: r.order_id == null,
       course: {
         id: String(r.course_id),
         title,

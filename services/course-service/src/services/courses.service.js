@@ -836,7 +836,7 @@ const coursesService = {
    * Admin: paginated batches across all courses (or one course), with full sessions + recordings.
    */
   async listBatchesAdminPaginated({ courseId = null, page = 1, limit = 10 } = {}) {
-    const safeLimit = Math.min(50, Math.max(1, parseInt(String(limit), 10) || 10));
+    const safeLimit = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 10));
     const safePage = Math.max(1, parseInt(String(page), 10) || 1);
     const offset = (safePage - 1) * safeLimit;
 
