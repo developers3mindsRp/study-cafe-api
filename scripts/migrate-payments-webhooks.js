@@ -8,16 +8,10 @@
  * Safe to re-run — each step checks if the change already exists.
  */
 
-require('dotenv').config();
+const { mysqlConfig } = require('../shared/env');
 const mysql = require('mysql2/promise');
 
-const DB_CONFIG = {
-  host: process.env.MYSQL_HOST || 'localhost',
-  port: parseInt(process.env.MYSQL_PORT || '3306', 10),
-  user: process.env.MYSQL_USER || 'studycafe_user',
-  password: process.env.MYSQL_PASSWORD || 'GDZ@p84i-F2X',
-  database: process.env.MYSQL_DATABASE || 'studycafe_db',
-};
+const DB_CONFIG = mysqlConfig();
 
 async function columnExists(conn, table, column) {
   const [rows] = await conn.query(

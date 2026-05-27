@@ -1,6 +1,18 @@
-const SERVICE_NAME = process.env.SERVICE_NAME || 'app';
+const { required } = require('./env');
+
+function resolveAssetsOrigin() {
+  return required('ASSETS_BASE_URL').replace(/\/$/, '');
+}
+
+const SERVICE_NAME = process.env.SERVICE_NAME;
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
-const LOG_LEVEL = LEVELS[process.env.LOG_LEVEL] ?? LEVELS.debug;
+const LOG_LEVEL = LEVELS[required('LOG_LEVEL')];
+if (LOG_LEVEL === undefined) {
+  throw new Error('Invalid LOG_LEVEL in environment (debug|info|warn|error)');
+}
+if (!SERVICE_NAME) {
+  throw new Error('SERVICE_NAME must be set (load service config before logger)');
+}
 
 function formatMeta(meta) {
     if (!meta || Object.keys(meta).length === 0) return '';

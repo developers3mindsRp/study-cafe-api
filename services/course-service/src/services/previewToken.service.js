@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const config = require('../config');
 
 const TTL_SECONDS = 15 * 60; // 15 minutes
-const SECRET = config.internalApiKey || 'dev-internal';
+const SECRET = config.internalApiKey;
 
 // Once validated, token may be reused until expiry (Next.js issues multiple SSR/data requests per page load).
 const validatedTokens = new Map();

@@ -3,10 +3,13 @@
  * Run a .sql file against MySQL (no mysql CLI required). Uses root package "mysql2".
  * Env: MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE (optional).
  * Use --no-database to connect without a default schema (e.g. user grants).
+ *
+ * SQL files may use __MYSQL_PASSWORD__ as a placeholder replaced from MYSQL_PASSWORD.
  */
 const fs = require('fs');
 const path = require('path');
 const mysql = require('mysql2/promise');
+const { mysqlConfig, required } = require('../shared/env');
 
 async function main() {
   const args = process.argv.slice(2);
@@ -17,12 +20,16 @@ async function main() {
     process.exit(1);
   }
   const abs = path.isAbsolute(file) ? file : path.join(process.cwd(), file);
-  const host = process.env.MYSQL_HOST || '127.0.0.1';
-  const port = parseInt(process.env.MYSQL_PORT || '3306', 10);
-  const user = process.env.MYSQL_USER || 'root';
-  const password = process.env.MYSQL_PASSWORD || '';
-  const database = noDatabase ? undefined : process.env.MYSQL_DATABASE || 'studycafe_db';
-  const sql = fs.readFileSync(abs, 'utf8');
+  const db = mysqlConfig();
+  const host = db.host;
+  const port = db.port;
+  const user = db.user;
+  const password = db.password;
+  const database = noDatabase ? undefined : db.database;
+  let sql = fs.readFileSync(abs, 'utf8');
+  if (sql.includes('__MYSQL_PASSWORD__')) {
+    sql = sql.replaceAll('__MYSQL_PASSWORD__', required('MYSQL_PASSWORD'));
+  }
   const conn = await mysql.createConnection({
     host,
     port,
@@ -38,6 +45,7 @@ async function main() {
   }
   console.log('OK:', file);
 }
+
 main().catch((err) => {
   console.error(err);
   process.exit(1);

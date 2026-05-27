@@ -3,6 +3,10 @@ const axios = require('axios');
 const config = require('../config');
 const { logger } = require('../../../../shared');
 const { buildOtpMailboxHtml, buildOtpPlainText } = require('../emailTemplates/otpMailbox');
+const {
+  buildPasswordResetMailboxHtml,
+  buildPasswordResetPlainText,
+} = require('../emailTemplates/passwordResetMailbox');
 const { buildPaymentEmailHtml, buildPaymentEmailPlainText } = require('../emailTemplates/paymentEmail');
 const { buildWelcomeEmailHtml, buildWelcomeEmailPlainText } = require('../emailTemplates/welcomeEmail');
 const {
@@ -92,6 +96,44 @@ async function sendOtpEmail({ to, otp, purpose }) {
     logger.error('[email] sendMail failed', {
       to,
       purpose,
+      err: err?.message || String(err),
+      code: err?.code,
+      response: err?.response,
+      responseCode: err?.responseCode,
+    });
+    throw err;
+  }
+}
+
+async function sendPasswordResetEmail({ to, resetUrl, ttlMinutes }) {
+  const subject = 'Reset your StudyCafe password';
+  const text = buildPasswordResetPlainText({ resetUrl, siteUrl: config.publicSiteUrl, ttlMinutes });
+  const html = buildPasswordResetMailboxHtml({ resetUrl, siteUrl: config.publicSiteUrl, ttlMinutes });
+
+  if (!isSmtpConfigured()) {
+    logger.warn('[email] SMTP not configured — password reset not delivered by email', { to });
+    return { sent: false, reason: 'smtp_not_configured' };
+  }
+
+  const transport = await getTransporter();
+  if (!transport) {
+    logger.warn('[email] No transporter', { to });
+    return { sent: false, reason: 'smtp_not_configured' };
+  }
+
+  try {
+    const info = await transport.sendMail({
+      from: config.smtp.from,
+      to,
+      subject,
+      text,
+      html,
+    });
+    logger.info('[email] Password reset sent', { to, messageId: info.messageId });
+    return { sent: true };
+  } catch (err) {
+    logger.error('[email] sendMail failed (password reset)', {
+      to,
       err: err?.message || String(err),
       code: err?.code,
       response: err?.response,
@@ -406,6 +448,7 @@ async function sendCourseCompletionCertificateEmail(opts) {
 
 module.exports = {
   sendOtpEmail,
+  sendPasswordResetEmail,
   sendPaymentEmail,
   sendWelcomeEmail,
   sendPasswordChangedEmail,
