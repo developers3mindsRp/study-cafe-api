@@ -1059,7 +1059,7 @@ async function getArticlesPublic(options = {}) {
 async function getAuthorPublicProfile(authorId) {
   if (authorId == null) return null;
   const rows = await sequelize.query(
-    `SELECT id, display_name, name, profession, designation, company, city, state, country, profile_pic_url
+    `SELECT id, first_name, last_name, display_name, name, profession, designation, company, city, state, country, profile_pic_url
      FROM users WHERE id = ? LIMIT 1`,
     { replacements: [authorId], type: QueryTypes.SELECT },
   );
@@ -1067,7 +1067,7 @@ async function getAuthorPublicProfile(authorId) {
   if (!r) return null;
   return {
     id: Number(r.id),
-    display_name: r.display_name || r.name || null,
+    display_name: buildAuthorLabel(r),
     name: r.name || null,
     profession: r.profession || null,
     designation: r.designation || null,
@@ -1909,7 +1909,14 @@ function assertValidArticleSchedule(status, scheduledAt) {
 function buildArticlesWhere(options = {}) {
   const { status, search, blog_access_tier, date_from, date_to } = options;
   const where = {};
-  if (status) where.status = status;
+  if (status === 'scheduled_future') {
+    where[Op.or] = [
+      { status: 'scheduled' },
+      { published_at: { [Op.gt]: new Date() } },
+    ];
+  } else if (status) {
+    where.status = status;
+  }
   if (blog_access_tier) where.blog_access_tier = blog_access_tier;
   if (date_from || date_to) {
     where.created_at = {};
