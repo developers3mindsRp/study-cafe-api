@@ -8,8 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const mysql = require('mysql2/promise');
-
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+const { mysqlConfig: getMysqlConfig } = require('../shared/env');
 
 const sqlPath = path.join(
   __dirname,
@@ -21,11 +20,8 @@ const sqlPath = path.join(
 );
 
 async function main() {
-  const host = process.env.MYSQL_HOST || '127.0.0.1';
-  const port = parseInt(process.env.MYSQL_PORT || '3306', 10);
-  const user = process.env.MYSQL_USER || 'studycafe_user';
-  const password = process.env.MYSQL_PASSWORD || '';
-  const database = process.env.MYSQL_DATABASE || 'studycafe_db';
+  const db = getMysqlConfig();
+  const { host, port, user, password, database } = db;
 
   const sql = fs.readFileSync(sqlPath, 'utf8');
   const conn = await mysql.createConnection({

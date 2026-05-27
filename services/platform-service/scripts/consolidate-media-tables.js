@@ -20,6 +20,7 @@
  *       Use this script only when you cannot run the full WP migration.
  */
 const mysql = require('mysql2/promise');
+const { mysqlConfig: getMysqlConfig } = require('../../../shared/env');
 
 async function columnExists(conn, table, column) {
   const [rows] = await conn.query(
@@ -49,11 +50,8 @@ async function indexExists(conn, table, indexName) {
 }
 
 async function main() {
-  const host = process.env.MYSQL_HOST || '127.0.0.1';
-  const port = parseInt(process.env.MYSQL_PORT || '3306', 10);
-  const user = process.env.MYSQL_USER || 'root';
-  const password = process.env.MYSQL_PASSWORD || '';
-  const database = process.env.MYSQL_DATABASE || 'studycafe_db';
+  const db = getMysqlConfig();
+  const { host, port, user, password, database } = db;
 
   const conn = await mysql.createConnection({
     host,

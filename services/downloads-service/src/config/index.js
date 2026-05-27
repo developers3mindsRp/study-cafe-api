@@ -1,17 +1,16 @@
+const {
+  required,
+  requiredInt,
+  mysqlConfig,
+  serviceUrl,
+} = require('../../../../shared/env');
+
 module.exports = {
-  port: parseInt(process.env.PORT || '4006', 10),
+  port: requiredInt('PORT'),
   serviceName: 'downloads-service',
-  internalApiKey: process.env.INTERNAL_API_KEY || '',
-  /** auth-service base URL (must reach /auth/validate and /internal/users/:id/memberships) */
-  authServiceUrl: process.env.AUTH_SERVICE_URL || 'http://127.0.0.1:4001',
-  mysql: {
-    host: process.env.MYSQL_HOST || 'localhost',
-    port: parseInt(process.env.MYSQL_PORT || '3306', 10),
-    user: process.env.MYSQL_USER || 'studycafe_user',
-    password: process.env.MYSQL_PASSWORD || '',
-    database: process.env.MYSQL_DATABASE || 'studycafe_db',
-    connectionLimit: 10,
-    queueLimit: 0,
-    waitForConnections: true,
-  },
+  internalApiKey: required('INTERNAL_API_KEY'),
+  authServiceUrl: serviceUrl('AUTH_SERVICE_URL'),
+  mysql: mysqlConfig(),
 };
+
+process.env.SERVICE_NAME = module.exports.serviceName;

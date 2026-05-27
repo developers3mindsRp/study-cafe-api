@@ -578,6 +578,70 @@ async function emitPurchaseOutbox(locked, t, options = {}) {
   }
 }
 
+// ─── Payment email outbox helper ──────────────────────────────────────────────
+
+async function resolveItemName(order) {
+  const t = String(order.type || '').toLowerCase();
+  const eid = order.entity_id;
+  if (t === 'course' && eid) {
+    try {
+      const { data } = await axios.get(`${config.courseServiceUrl}/internal/courses/${eid}`, {
+        timeout: 5000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200,
+      });
+      const payload = parseApiResponse(data);
+      return payload?.title || payload?.name || 'Course';
+    } catch { return 'Course'; }
+  }
+  if (t === 'membership' && eid) {
+    const name = await resolveMembershipPlanDisplayName(eid);
+    return name || 'Membership Plan';
+  }
+  return t === 'payment_link' ? 'Payment Link Purchase' : 'Purchase';
+}
+
+async function resolveRecipientEmail(order) {
+  if (order.buyer_email) return order.buyer_email;
+  if (!order.user_id) return null;
+  const contact = await fetchUserContact(order.user_id);
+  return contact?.email || null;
+}
+
+async function emitPaymentEmailOutbox(locked, razorpayPaymentId, status, t, extra = {}) {
+  const recipientEmail = await resolveRecipientEmail(locked);
+  if (!recipientEmail) {
+    logger.warn(`[orders] No email for payment notification, order=${locked.order_id}`);
+    return;
+  }
+  const itemName = await resolveItemName(locked);
+  const buyerName = locked.buyer_name || (locked.user_id ? (await fetchUserContact(locked.user_id))?.name : null) || null;
+
+  await OutboxEvent.create(
+    {
+      aggregate_type: 'order',
+      aggregate_id: locked.order_id,
+      event_type: 'PAYMENT_EMAIL',
+      payload: {
+        to: recipientEmail,
+        status,
+        orderId: locked.order_id,
+        type: locked.type,
+        itemName,
+        amount: parseFloat(locked.amount) || 0,
+        currency: locked.currency || 'INR',
+        buyerName: buyerName,
+        couponCode: locked.coupon_code || null,
+        couponDiscount: parseFloat(locked.coupon_discount) || 0,
+        originalAmount: parseFloat(locked.original_amount) || null,
+        paymentId: razorpayPaymentId || null,
+        failReason: extra.failReason || null,
+      },
+    },
+    { transaction: t }
+  );
+}
+
 // ─── completePayment ──────────────────────────────────────────────────────────
 // Called by both checkout verify and webhook. Uses SELECT … FOR UPDATE to
 // prevent a double-payment race when verify + webhook arrive simultaneously.
@@ -632,6 +696,7 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
       }
 
       await emitPurchaseOutbox(locked, t);
+      await emitPaymentEmailOutbox(locked, razorpayPaymentId, 'success', t);
       return { verified: true };
     });
   } catch (err) {
@@ -822,6 +887,7 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
           transaction: t,
         });
         await emitPurchaseOutbox(locked, t);
+        await emitPaymentEmailOutbox(locked, `free:${locked.order_id}`, 'success', t);
         if (couponResult && !reused) {
           await recordCouponUsage(couponResult.coupon.id, userId, locked.order_id, t);
         }
@@ -1105,6 +1171,7 @@ async function createPaymentLinkOrder(userId, body) {
           transaction: t,
         });
         await emitPurchaseOutbox(locked, t);
+        await emitPaymentEmailOutbox(locked, `free:${locked.order_id}`, 'success', t);
       });
       await redis.del(lockKey);
       const rpConfig = await getRazorpayConfig();
@@ -2394,6 +2461,7 @@ async function createManualOrder(data) {
         { transaction: t }
       );
       await emitPurchaseOutbox(locked, t);
+      await emitPaymentEmailOutbox(locked, manualRef, 'success', t);
       if (couponResult) {
         await recordCouponUsage(couponResult.coupon.id, user_id, orderId, t);
       }
@@ -2546,6 +2614,7 @@ async function updateOrder(id, data) {
         transaction: t,
       });
       await emitPurchaseOutbox(reloaded, t);
+      await emitPaymentEmailOutbox(reloaded, manualRef, 'success', t);
     }
 
     // Paid/completed order had item swapped: grant new course/plan without duplicate affiliate commission.
@@ -2660,6 +2729,7 @@ module.exports = {
   createOrder,
   verifyOrder,
   completePayment,
+  emitPaymentEmailOutbox,
   createPaymentLinkOrder,
   verifyPaymentLinkOrder,
   listOrders,

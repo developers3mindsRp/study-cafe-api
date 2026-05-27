@@ -163,6 +163,18 @@ const changePassword = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+const forgotPassword = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+  const out = await authService.requestPasswordReset({ email });
+  sendSuccess(res, out);
+});
+
+const resetPassword = asyncHandler(async (req, res) => {
+  const { token, password } = req.body;
+  await authService.resetPassword({ token, password });
+  sendNoContent(res);
+});
+
 module.exports = {
   register,
   login,
@@ -174,4 +186,6 @@ module.exports = {
   me,
   refresh,
   changePassword,
+  forgotPassword,
+  resetPassword,
 };

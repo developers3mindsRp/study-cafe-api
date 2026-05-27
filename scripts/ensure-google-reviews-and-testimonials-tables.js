@@ -11,28 +11,10 @@
 
 'use strict';
 
-const path = require('path');
 const { Sequelize } = require('sequelize');
+const { mysqlConfig: getMysqlConfig } = require('../shared/env');
 
-try {
-  require('dotenv').config({ path: path.resolve(__dirname, '../services/platform-service/.env') });
-} catch (_) {}
-try {
-  require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
-} catch (_) {}
-
-let mysqlConfig;
-try {
-  mysqlConfig = require('../services/platform-service/src/config').mysql;
-} catch (_) {
-  mysqlConfig = {
-    host: process.env.MYSQL_HOST || '127.0.0.1',
-    port: parseInt(process.env.MYSQL_PORT || '3306', 10),
-    user: process.env.MYSQL_USER || 'studycafe_user',
-    password: process.env.MYSQL_PASSWORD || '',
-    database: process.env.MYSQL_DATABASE || 'studycafe_db',
-  };
-}
+const mysqlConfig = getMysqlConfig();
 
 const GOOGLE_REVIEWS_SQL = `
   CREATE TABLE IF NOT EXISTS google_reviews (

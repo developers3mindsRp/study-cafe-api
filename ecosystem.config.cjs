@@ -2,20 +2,12 @@
  * PM2: one process per microservice (replaces a single "npm start" with concurrently).
  * Usage from repo root (after: npm run install:all, copy .env from .env.example and set secrets):
  *   pm2 start ecosystem.config.cjs
- *   pm2 status
- *   pm2 logs
- *   pm2 delete ecosystem.config.cjs
- *
- * Environment: loads ./.env via dotenv. You can also export variables before `pm2 start`.
- * Override inter-service URLs with AUTH_SERVICE_URL, etc., or set INTERNAL_SERVICE_HOST=127.0.0.1
- * to default all service base URLs at once.
- *
- * `override: true` — dotenv normally does not override variables already in the process (e.g. MYSQL_USER=root
- * left in the PM2/shell environment). The repo .env should win so production uses the intended DB user and host.
  */
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env'), override: true });
+
+const { required, serviceUrl } = require('./shared/env');
 
 const root = __dirname;
 const logsDir = path.join(root, 'logs');
@@ -25,20 +17,19 @@ try {
   /* PM2 may still use ~/.pm2/logs if this fails */
 }
 
-const h = process.env.INTERNAL_SERVICE_HOST || '127.0.0.1';
-const auth = process.env.AUTH_SERVICE_URL || `http://${h}:4001`;
-const course = process.env.COURSE_SERVICE_URL || `http://${h}:4002`;
-const order = process.env.ORDER_SERVICE_URL || `http://${h}:4003`;
-const admin = process.env.ADMIN_SERVICE_URL || `http://${h}:4004`;
-const platform = process.env.PLATFORM_SERVICE_URL || `http://${h}:4005`;
-const downloads = process.env.DOWNLOADS_SERVICE_URL || `http://${h}:4006`;
+const auth = serviceUrl('AUTH_SERVICE_URL');
+const course = serviceUrl('COURSE_SERVICE_URL');
+const order = serviceUrl('ORDER_SERVICE_URL');
+const admin = serviceUrl('ADMIN_SERVICE_URL');
+const platform = serviceUrl('PLATFORM_SERVICE_URL');
+const downloads = serviceUrl('DOWNLOADS_SERVICE_URL');
 
 const mysql = {
-  MYSQL_HOST: process.env.MYSQL_HOST || '127.0.0.1',
-  MYSQL_PORT: process.env.MYSQL_PORT || '3306',
-  MYSQL_USER: process.env.MYSQL_USER || 'studycafe_user',
-  MYSQL_PASSWORD: process.env.MYSQL_PASSWORD,
-  MYSQL_DATABASE: process.env.MYSQL_DATABASE || 'studycafe_db',
+  MYSQL_HOST: required('MYSQL_HOST'),
+  MYSQL_PORT: String(required('MYSQL_PORT')),
+  MYSQL_USER: required('MYSQL_USER'),
+  MYSQL_PASSWORD: required('MYSQL_PASSWORD'),
+  MYSQL_DATABASE: required('MYSQL_DATABASE'),
 };
 
 function stripUndefined(obj) {
@@ -76,10 +67,10 @@ const apps = [
       ...prod,
       ...mysql,
       PORT: '4001',
-      REDIS_URL: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
-      JWT_SECRET: process.env.JWT_SECRET,
-      JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
-      INTERNAL_API_KEY: process.env.INTERNAL_API_KEY,
+      REDIS_URL: required('REDIS_URL'),
+      JWT_SECRET: required('JWT_SECRET'),
+      JWT_REFRESH_SECRET: required('JWT_REFRESH_SECRET'),
+      INTERNAL_API_KEY: required('INTERNAL_API_KEY'),
       COURSE_SERVICE_URL: course,
       PLATFORM_SERVICE_URL: platform,
     }),
@@ -95,9 +86,9 @@ const apps = [
       ...mysql,
       PORT: '4002',
       AUTH_SERVICE_URL: auth,
-      PUBLIC_SITE_URL: process.env.PUBLIC_SITE_URL,
+      PUBLIC_SITE_URL: required('PUBLIC_SITE_URL'),
       CERTIFICATES_UPLOAD_DIR: process.env.CERTIFICATES_UPLOAD_DIR,
-      INTERNAL_API_KEY: process.env.INTERNAL_API_KEY,
+      INTERNAL_API_KEY: required('INTERNAL_API_KEY'),
     }),
   },
   {
@@ -110,14 +101,15 @@ const apps = [
       ...prod,
       ...mysql,
       PORT: '4003',
-      REDIS_URL: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+      REDIS_URL: required('REDIS_URL'),
       AUTH_SERVICE_URL: auth,
       COURSE_SERVICE_URL: course,
       PLATFORM_SERVICE_URL: platform,
       ADMIN_SERVICE_URL: admin,
-      INTERNAL_API_KEY: process.env.INTERNAL_API_KEY,
-      RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID,
-      RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET,
+      INTERNAL_API_KEY: required('INTERNAL_API_KEY'),
+      RAZORPAY_KEY_ID: required('RAZORPAY_KEY_ID'),
+      RAZORPAY_KEY_SECRET: required('RAZORPAY_KEY_SECRET'),
+      RAZORPAY_WEBHOOK_SECRET: required('RAZORPAY_WEBHOOK_SECRET'),
     }),
   },
   {
@@ -130,12 +122,12 @@ const apps = [
       ...prod,
       ...mysql,
       PORT: '4005',
-      REDIS_URL: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
-      JWT_SECRET: process.env.JWT_SECRET,
-      INTERNAL_API_KEY: process.env.INTERNAL_API_KEY,
-      ASSETS_BASE_URL: process.env.ASSETS_BASE_URL,
+      REDIS_URL: required('REDIS_URL'),
+      JWT_SECRET: required('JWT_SECRET'),
+      INTERNAL_API_KEY: required('INTERNAL_API_KEY'),
+      ASSETS_BASE_URL: required('ASSETS_BASE_URL'),
       UPLOADS_DIR: process.env.UPLOADS_DIR,
-      PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL,
+      PUBLIC_BASE_URL: required('PUBLIC_BASE_URL'),
     }),
   },
   {
@@ -147,7 +139,7 @@ const apps = [
     env: stripUndefined({
       ...prod,
       ...mysql,
-      REDIS_URL: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+      REDIS_URL: required('REDIS_URL'),
     }),
   },
   {
@@ -164,8 +156,8 @@ const apps = [
       COURSE_SERVICE_URL: course,
       ORDER_SERVICE_URL: order,
       PLATFORM_SERVICE_URL: platform,
-      INTERNAL_API_KEY: process.env.INTERNAL_API_KEY,
-      FRONTEND_URL: process.env.FRONTEND_URL,
+      INTERNAL_API_KEY: required('INTERNAL_API_KEY'),
+      FRONTEND_URL: required('FRONTEND_URL'),
     }),
   },
   {
@@ -179,7 +171,7 @@ const apps = [
       ...mysql,
       PORT: '4006',
       AUTH_SERVICE_URL: auth,
-      INTERNAL_API_KEY: process.env.INTERNAL_API_KEY,
+      INTERNAL_API_KEY: required('INTERNAL_API_KEY'),
     }),
   },
   {
@@ -191,14 +183,14 @@ const apps = [
     env: stripUndefined({
       ...prod,
       PORT: '3000',
-      REDIS_URL: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+      REDIS_URL: required('REDIS_URL'),
       AUTH_SERVICE_URL: auth,
       COURSE_SERVICE_URL: course,
       ORDER_SERVICE_URL: order,
       ADMIN_SERVICE_URL: admin,
       PLATFORM_SERVICE_URL: platform,
       DOWNLOADS_SERVICE_URL: downloads,
-      INTERNAL_API_KEY: process.env.INTERNAL_API_KEY,
+      INTERNAL_API_KEY: required('INTERNAL_API_KEY'),
     }),
   },
 ];

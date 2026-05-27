@@ -43,6 +43,11 @@ connect()
     startSchedulePoller();
 
     // Step 4: accept HTTP traffic
+    if (!config.port) {
+      throw new Error(
+        'Missing required environment variable: PORT (set via npm script, e.g. cross-env PORT=4005)',
+      );
+    }
     server = app.listen(config.port, () => {
       logger.info(`[server] ${config.serviceName} listening`, { port: config.port });
       console.log(`${config.serviceName} listening on port ${config.port}`);
