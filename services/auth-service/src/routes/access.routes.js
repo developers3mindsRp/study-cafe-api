@@ -1,6 +1,11 @@
 const accessController = require('../controllers/access.controller');
 const accessService = require('../services/access.service');
-const { sendPaymentEmail, sendWithdrawalEmail } = require('../services/email.service');
+const {
+  sendPaymentEmail,
+  sendWithdrawalEmail,
+  sendMembershipUpgradeEmail,
+  sendCourseCompletionCertificateEmail,
+} = require('../services/email.service');
 const { requireGrantAuth } = require('../middleware');
 const schemas = require('../validations/schemas');
 const { validate } = require('../../../../shared');
@@ -88,6 +93,24 @@ function register(router) {
       throw new AppError('status must be created, approved, or rejected', 400);
     }
     const result = await sendWithdrawalEmail(req.body);
+    sendSuccess(res, result);
+  }));
+
+  router.post('/internal/send-membership-upgrade-email', requireGrantAuth, asyncHandler(async (req, res) => {
+    const { to, membershipPlanName, orderId } = req.body;
+    if (!to || !membershipPlanName || !orderId) {
+      throw new AppError('to, membershipPlanName, and orderId are required', 400);
+    }
+    const result = await sendMembershipUpgradeEmail(req.body);
+    sendSuccess(res, result);
+  }));
+
+  router.post('/internal/send-course-completion-certificate-email', requireGrantAuth, asyncHandler(async (req, res) => {
+    const { to, courseTitle, completionDate } = req.body;
+    if (!to || !courseTitle || !completionDate) {
+      throw new AppError('to, courseTitle, and completionDate are required', 400);
+    }
+    const result = await sendCourseCompletionCertificateEmail(req.body);
     sendSuccess(res, result);
   }));
 }

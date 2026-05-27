@@ -51,6 +51,30 @@ async function processEvent(record) {
         },
         { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
       );
+
+      // Fire-and-forget membership upgrade email.
+      // Prefer userEmail (fetched from auth-service at outbox creation time) over buyerEmail.
+      const membershipEmailTo = data.userEmail || data.buyerEmail || null;
+      const membershipEmailName = data.userName || data.buyerName || null;
+      if (membershipEmailTo) {
+        axios
+          .post(
+            `${config.authServiceUrl}/internal/send-membership-upgrade-email`,
+            {
+              to: membershipEmailTo,
+              name: membershipEmailName,
+              email: membershipEmailTo,
+              orderId: data.orderId,
+              membershipPlanName: data.membershipPlanName,
+              startsAt: data.startsAt,
+              expiresAt: data.expiresAt,
+            },
+            { headers: { 'x-internal-api-key': config.internalApiKey }, timeout: 15000 }
+          )
+          .catch((err) => {
+            logger.warn(`[membership-email] failed order=${data.orderId}: ${err?.message || String(err)}`);
+          });
+      }
     } else if (event_type === 'AFFILIATE_COMMISSION') {
       await axios.post(
         `${config.courseServiceUrl}/internal/affiliate/record-commission`,

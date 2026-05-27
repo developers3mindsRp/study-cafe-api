@@ -67,6 +67,30 @@ async function main() {
   });
   console.log('   ', JSON.stringify(w3));
 
+  console.log('6. Membership upgrade — confirmation...');
+  const mem = await authEmail.sendMembershipUpgradeEmail({
+    to: TO,
+    name: 'Shudhanshu',
+    email: TO,
+    membershipPlanName: 'Pro Annual Plan',
+    orderId: 'ORD_MEM_TEST_001',
+    startsAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 365 * 86400000).toISOString(),
+  });
+  console.log('   ', JSON.stringify(mem));
+
+  console.log('7. Course completion + certificate email...');
+  const cert = await authEmail.sendCourseCompletionCertificateEmail({
+    to: TO,
+    name: 'Shudhanshu',
+    courseTitle: 'React Masterclass',
+    completionDate: new Date().toISOString().slice(0, 10),
+    // Optional: include to attach PDF (requires course-service running + internal PDF endpoint)
+    userId: 1,
+    courseId: 1,
+  });
+  console.log('   ', JSON.stringify(cert));
+
   console.log('\nDone. Check inbox:', TO);
   console.log('Admin contact alert goes to:', process.env.CONTACT_ADMIN_EMAIL || 'contact@studycafe.in');
 }

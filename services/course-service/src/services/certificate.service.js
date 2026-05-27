@@ -64,6 +64,35 @@ async function getCertificateData(userId, courseId, authHeader) {
   };
 }
 
+/**
+ * Internal variant used for server-side PDF generation (email attachment).
+ * Skips bearer-based access check since it's called over internal auth.
+ */
+async function getCertificateDataInternal(userId, courseId) {
+  const progressService = require('./progress.service');
+  const cid = Number(courseId);
+  if (!Number.isFinite(cid) || cid <= 0) return null;
+
+  // progress.service.getCourseProgress expects an authHeader, but for internal usage
+  // we only need its aggregate completion status; pass null.
+  const progress = await progressService.getCourseProgress(String(cid), userId, null);
+  if (progress.totalSessions === 0 || progress.status !== 'completed') {
+    return null;
+  }
+
+  const course = await coursesService.getByIdInternal(cid);
+  const courseTitle = course?.title?.trim() || 'Course';
+
+  let completionDateMs = await getCompletionMoment(userId, cid);
+  if (!completionDateMs) completionDateMs = new Date();
+
+  const studentName = await getLearnerDisplayName(userId);
+  const completionDate = completionDateMs.toISOString().slice(0, 10);
+
+  return { courseTitle, studentName, completionDate };
+}
+
 module.exports = {
   getCertificateData,
+  getCertificateDataInternal,
 };

@@ -146,9 +146,18 @@ async function resolveMembershipPlanDisplayName(entityId) {
   return null;
 }
 
-function buildMembershipPayload(order, plan) {
+function buildMembershipPayload(order, plan, userContact = null) {
   const now = new Date();
-  const payload = { userId: order.user_id, orderId: order.order_id };
+  const payload = {
+    userId: order.user_id,
+    orderId: order.order_id,
+    // Prefer the registered user email (from auth-service) over the order's buyer_email
+    userEmail: userContact?.email || null,
+    userName: userContact?.name || null,
+    buyerEmail: order.buyer_email || null,
+    buyerName: order.buyer_name || null,
+    membershipPlanName: plan?.name || order.entity_id || null,
+  };
 
   if (plan && plan.is_lifetime) {
     const farFuture = new Date(now);
@@ -488,7 +497,9 @@ async function emitPurchaseOutbox(locked, t, options = {}) {
     }
   } else if (locked.type === 'membership') {
     const plan = await fetchPlanDetails(locked.entity_id);
-    const payload = buildMembershipPayload(locked, plan);
+    // Fetch user's email from auth-service (authoritative source) rather than buyer_email on the order
+    const userContact = locked.user_id ? await fetchUserContact(locked.user_id) : null;
+    const payload = buildMembershipPayload(locked, plan, userContact);
     await OutboxEvent.create(
       {
         aggregate_type: 'order',
