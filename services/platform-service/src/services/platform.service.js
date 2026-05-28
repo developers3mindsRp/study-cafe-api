@@ -1426,7 +1426,7 @@ function escapeHtmlText(s) {
 function buildPremiumPreviewHtml(excerpt, fullContent) {
   if (excerpt && String(excerpt).trim()) return String(excerpt);
   const plain = stripTags(stripRelatedShortcodesAndMarkers(fullContent));
-  const cut = plain.length > 560 ? `${plain.slice(0, 560)}…` : plain;
+  const cut = plain.length > 180 ? `${plain.slice(0, 180)}…` : plain;
   return `<p>${escapeHtmlText(cut)}</p>`;
 }
 
