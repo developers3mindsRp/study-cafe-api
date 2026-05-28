@@ -13,10 +13,11 @@ const emailService = require('./email.service');
 /**
  * Verify a password against any supported hash format:
  *   - bcrypt ($2a$, $2b$, $2y$)  — new registrations from this app
- *   - phpass ($P$, $H$)           — WordPress migrated users
+ *   - wp-bcrypt ($wp$2y$)         — WordPress 6.8+ migrated users (bcrypt with $wp$ prefix)
+ *   - phpass ($P$, $H$)           — WordPress migrated users (older WP versions)
  *   - plain MD5 (32 hex chars)    — very old WordPress accounts
  *
- * On a successful phpass/MD5 login we silently upgrade the stored hash to bcrypt.
+ * On a successful phpass/MD5/wp-bcrypt login we silently upgrade the stored hash to bcrypt.
  */
 async function verifyAndMaybeUpgradePassword(password, user) {
   const stored = user.password_hash;
@@ -25,6 +26,25 @@ async function verifyAndMaybeUpgradePassword(password, user) {
   // bcrypt — the normal path for new users
   if (stored.startsWith('$2a$') || stored.startsWith('$2b$') || stored.startsWith('$2y$')) {
     return bcrypt.compare(password, stored);
+  }
+
+  // WordPress 6.8+ wp-bcrypt: "$wp$2y$10$..." format
+  // WP pre-hashes with HMAC-SHA384(key='wp-sha384') → base64 → then bcrypt.
+  // The "$wp" prefix is 3 chars; slice(3) recovers "$2y$10$..." for bcrypt.compare().
+  if (stored.startsWith('$wp$')) {
+    const bcryptHash = stored.slice(3); // "$wp$2y$..." → "$2y$10$..."
+    const hmacDigest = crypto.createHmac('sha384', 'wp-sha384').update(password, 'utf8').digest();
+    const preHashed = hmacDigest.toString('base64');
+    const match = await bcrypt.compare(preHashed, bcryptHash);
+    if (match) {
+      // Silently upgrade to clean bcrypt on next login (no WP pre-hash step needed)
+      try {
+        const newHash = await bcrypt.hash(password, 10);
+        await user.update({ password_hash: newHash });
+      } catch (_) { /* non-critical, ignore */ }
+      return true;
+    }
+    return false;
   }
 
   // phpass or MD5 — WordPress migrated users
@@ -175,7 +195,7 @@ async function sessionFromUserEntity(user) {
   try {
     const redis = await getRedis();
     await redis.setEx(`token:${plain.id}`, config.cacheTtl, accessToken);
-  } catch (_) {}
+  } catch (_) { }
   const permissions = getEffectivePermissions(role, plain.permission_overrides);
   const has_active_membership = await hasActiveMembershipForUserId(plain.id);
   return {
