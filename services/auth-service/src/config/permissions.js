@@ -9,6 +9,9 @@ const ALL_PERMISSIONS = [
   'newsletter:list', 'newsletter:edit', 'newsletter:create', 'newsletter:delete', 'newsletter:send',
   'courses:list', 'courses:view', 'courses:create', 'courses:edit', 'courses:delete',
   'marketing_pages:list', 'marketing_pages:view', 'marketing_pages:create', 'marketing_pages:edit', 'marketing_pages:delete',
+  'course_categories:list', 'course_categories:view', 'course_categories:create', 'course_categories:edit', 'course_categories:delete',
+  'course_reviews:list', 'course_reviews:view', 'course_reviews:edit', 'course_reviews:delete',
+  'media:list', 'media:view', 'media:edit', 'media:delete',
   'orders:list', 'orders:view',
   'coupons:list', 'coupons:view', 'coupons:create', 'coupons:edit', 'coupons:delete',
   'payment_links:list', 'payment_links:view', 'payment_links:create', 'payment_links:edit', 'payment_links:delete',
@@ -79,6 +82,22 @@ const MODULE_HIERARCHY = {
     ['marketing_pages:edit'],
     ['marketing_pages:create'],
     ['marketing_pages:delete'],
+  ],
+  course_categories: [
+    ['course_categories:list', 'course_categories:view'],
+    ['course_categories:edit'],
+    ['course_categories:create'],
+    ['course_categories:delete'],
+  ],
+  course_reviews: [
+    ['course_reviews:list', 'course_reviews:view'],
+    ['course_reviews:edit'],
+    ['course_reviews:delete'],
+  ],
+  media: [
+    ['media:list', 'media:view'],
+    ['media:edit'],
+    ['media:delete'],
   ],
   orders: [
     ['orders:list', 'orders:view'],
