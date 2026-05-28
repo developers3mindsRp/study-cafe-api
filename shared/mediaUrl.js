@@ -41,8 +41,9 @@ function publicMediaUrl(relativePath, _whichApi) {
   return `${origin}/uploads/${rel}`;
 }
 
-const STUDYCAFE_UPLOAD_PATH_RE = /^https?:\/\/(?:www\.)?studycafe\.in(\/wp-content\/uploads\/.*)$/i;
-const STUDYCAFE_UPLOAD_IN_CONTENT_RE = /https?:\/\/(?:www\.)?studycafe\.in(\/wp-content\/uploads\/[^"'\\\s<>]*)/gi;
+// Matches both studycafe.in and assets.studycafe.in wp-content/uploads URLs
+const STUDYCAFE_UPLOAD_PATH_RE = /^https?:\/\/(?:assets\.)?(?:www\.)?studycafe\.in(\/wp-content\/uploads\/.*)$/i;
+const STUDYCAFE_UPLOAD_IN_CONTENT_RE = /https?:\/\/(?:assets\.)?(?:www\.)?studycafe\.in(\/wp-content\/uploads\/[^"'\\\s<>]*)/gi;
 
 /**
  * Rewrite legacy WordPress upload URLs from studycafe.in → assets.studycafe.in.
@@ -56,7 +57,9 @@ function rewriteStudycafeUploadUrl(url) {
   const s = String(url).trim();
   const match = s.match(STUDYCAFE_UPLOAD_PATH_RE);
   if (!match) return url;
-  return `${resolveAssetsOrigin()}${match[1]}`;
+  // Strip /wp-content: /wp-content/uploads/... → /uploads/...
+  const cleanPath = match[1].replace('/wp-content', '');
+  return `${resolveAssetsOrigin()}${cleanPath}`;
 }
 
 /**
@@ -68,7 +71,11 @@ function rewriteStudycafeUploadUrl(url) {
 function rewriteStudycafeUploadUrlsInContent(content) {
   if (content == null || content === '') return content;
   const origin = resolveAssetsOrigin();
-  return String(content).replace(STUDYCAFE_UPLOAD_IN_CONTENT_RE, `${origin}$1`);
+  // Strip /wp-content from each matched URL path
+  return String(content).replace(STUDYCAFE_UPLOAD_IN_CONTENT_RE, (_, wpPath) => {
+    const cleanPath = wpPath.replace('/wp-content', '');
+    return `${origin}${cleanPath}`;
+  });
 }
 
 module.exports = {

@@ -1,8 +1,9 @@
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.env') });
 const { sequelize, User, Role } = require('../src/models');
 const bcrypt = require('bcryptjs');
 
-const EMAIL = process.argv[2] || 'admin@studycafe.in';
-const PASSWORD = process.argv[3] || 'admin123';
+const EMAIL    = process.argv[2] || process.env.SEED_SUPER_ADMIN_EMAIL    || 'admin@studycafe.in';
+const PASSWORD = process.argv[3] || process.env.SEED_SUPER_ADMIN_PASSWORD || 'admin123';
 
 async function seedAdmin() {
     try {
