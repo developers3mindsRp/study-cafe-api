@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const { User, Role } = require('../models');
 const { Op } = require('sequelize');
 const { getEffectivePermissions, expandPermissionHierarchy } = require('../config/permissions');
+const { AppError } = require('../../../../shared');
 
 const ADMIN_PANEL_ROLES = ['super_admin', 'admin', 'editor', 'viewer', 'editor_articles', 'custom'];
 
@@ -94,6 +95,33 @@ async function createAdminUser({
     throw new Error('Permission "admin:access" is required so the user can open the admin panel');
   }
   const expanded = expandPermissionHierarchy(overrides);
+
+  const normEmail = String(email).trim().toLowerCase();
+  const existingUser = await User.findOne({
+    where: { email: normEmail },
+    include: [{ model: Role, as: 'Role' }]
+  });
+
+  if (existingUser) {
+    const existingRoleName = existingUser.Role?.name || 'user';
+    if (existingRoleName === 'super_admin' || existingRoleName === 'admin') {
+      throw new AppError('Email is already registered', 400);
+    }
+
+    const updates = {
+      role_id,
+      is_active: true,
+      permission_overrides: expanded,
+    };
+    if (name) updates.name = name;
+    if (password) {
+      updates.password_hash = await bcrypt.hash(password, 10);
+    }
+
+    await existingUser.update(updates);
+    return getAdminUser(existingUser.id);
+  }
+
   const password_hash = await bcrypt.hash(password, 10);
   const user = await User.scope('withPassword').create({
     email,

@@ -4,8 +4,14 @@ const config = require('../config');
 const { completePayment, emitPaymentEmailOutbox } = require('./orders.service');
 const { logger } = require('../../../../shared');
 
-function verifySignature(rawBody, signature) {
-  const secret = config.razorpay.webhookSecret;
+const { getRazorpayConfig } = require('./payment.service');
+
+async function verifySignature(rawBody, signature) {
+  let secret = config.razorpay.webhookSecret;
+  if (!secret) {
+    const dynamicConfig = await getRazorpayConfig();
+    secret = dynamicConfig?.webhook_secret;
+  }
   if (!secret) {
     logger.error('[WEBHOOK] RAZORPAY_WEBHOOK_SECRET is not configured');
     return false;
@@ -273,7 +279,7 @@ async function processWebhook(rawBody, signature, parsedBody) {
 
   logger.info(`[WEBHOOK] Incoming event: ${eventType} | id: ${eventId}`);
 
-  if (!verifySignature(rawBody, signature)) {
+  if (!await verifySignature(rawBody, signature)) {
     logger.warn(`[WEBHOOK] ✗ Signature FAILED for event: ${eventType}`);
     return { statusCode: 400, body: { status: 'invalid_signature' } };
   }

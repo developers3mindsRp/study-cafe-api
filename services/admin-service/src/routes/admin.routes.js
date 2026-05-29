@@ -12,6 +12,11 @@ function register(router) {
   router.put('/admin/payment-config', requireAdmin, controller.updatePaymentConfig);
   router.get('/admin/logs', requireAdmin, controller.getLogs);
 
+  router.get('/admin/payment-gateways', requireAdmin, controller.getPaymentGateways);
+  router.post('/admin/payment-gateways', requireAdmin, controller.createPaymentGateway);
+  router.put('/admin/payment-gateways/:id', requireAdmin, controller.updatePaymentGateway);
+  router.delete('/admin/payment-gateways/:id', requireAdmin, controller.deletePaymentGateway);
+
   router.get('/admin/courses', requireAdmin, controller.getCourses);
   router.get('/admin/courses/:id', requireAdmin, controller.getCourse);
   router.get('/admin/courses/:id/sessions', requireAdmin, controller.getCourseSessions);

@@ -1,9 +1,31 @@
-const { PaymentConfig } = require('../models');
+const { PaymentConfig, PaymentGateway } = require('../models');
 
 async function getPaymentConfig() {
+  try {
+    // 1. Try to find the active razorpay gateway key
+    const activeGateway = await PaymentGateway.findOne({
+      where: { gateway_name: 'razorpay', is_active: 1 }
+    });
+
+    if (activeGateway) {
+      return {
+        key_id: activeGateway.key_id || '',
+        key_secret: activeGateway.key_secret || '',
+        webhook_secret: activeGateway.webhook_secret || ''
+      };
+    }
+  } catch (err) {
+    console.error('[paymentConfigService] Failed to load from payment_gateways:', err.message);
+  }
+
+  // 2. Fallback to old payment_config table if database table doesn't have active keys
   const row = await PaymentConfig.findByPk(1);
   const c = row ? row.get({ plain: true }) : {};
-  return { key_id: c.razorpay_key_id || '', key_secret: c.razorpay_key_secret || '' };
+  return { 
+    key_id: c.razorpay_key_id || '', 
+    key_secret: c.razorpay_key_secret || '',
+    webhook_secret: ''
+  };
 }
 
 async function updatePaymentConfig({ razorpay_key_id, razorpay_key_secret }) {

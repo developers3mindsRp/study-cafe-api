@@ -24,6 +24,7 @@ const AdminLog = require('./AdminLog')(sequelize);
 const PaymentConfig = require('./PaymentConfig')(sequelize);
 const Coupon = require('./PromoCode')(sequelize);
 const PaymentLink = require('./PaymentLink')(sequelize);
+const PaymentGateway = require('./PaymentGateway')(sequelize);
 
 async function connect() {
   await sequelize.authenticate();
@@ -59,6 +60,26 @@ CREATE TABLE IF NOT EXISTS payment_links (
   } catch (err) {
     if (err?.parent?.errno !== 1060 && err?.original?.errno !== 1060) throw err;
   }
+
+  try {
+    await sequelize.query(`
+CREATE TABLE IF NOT EXISTS payment_gateways (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  gateway_name VARCHAR(50) NOT NULL DEFAULT 'razorpay',
+  key_id VARCHAR(255) NOT NULL,
+  key_secret VARCHAR(255) NOT NULL,
+  webhook_secret VARCHAR(255) NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_payment_gateways_is_active (is_active)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  } catch (err) {
+    console.error('[admin-service] payment_gateways bootstrap:', err.message);
+    throw err;
+  }
 }
 
 module.exports = {
@@ -67,5 +88,6 @@ module.exports = {
   PaymentConfig,
   Coupon,
   PaymentLink,
+  PaymentGateway,
   connect,
 };

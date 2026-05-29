@@ -3,6 +3,7 @@ const {
   requiredInt,
   mysqlConfig,
   serviceUrl,
+  readOptional,
 } = require('../../../../shared/env');
 
 module.exports = {
@@ -18,9 +19,9 @@ module.exports = {
   adminServiceUrl: serviceUrl('ADMIN_SERVICE_URL'),
   internalApiKey: required('INTERNAL_API_KEY'),
   razorpay: {
-    keyId: required('RAZORPAY_KEY_ID'),
-    keySecret: required('RAZORPAY_KEY_SECRET'),
-    webhookSecret: required('RAZORPAY_WEBHOOK_SECRET'),
+    keyId: readOptional('RAZORPAY_KEY_ID'),
+    keySecret: readOptional('RAZORPAY_KEY_SECRET'),
+    webhookSecret: readOptional('RAZORPAY_WEBHOOK_SECRET'),
   },
   outbox: {
     pollMs: requiredInt('OUTBOX_POLL_MS'),

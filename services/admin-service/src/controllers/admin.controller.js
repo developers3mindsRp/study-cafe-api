@@ -8,6 +8,7 @@ const adminLogsService = require('../services/adminLogs.service');
 const userImportService = require('../services/userImport.service');
 const paymentConfigService = require('../services/paymentConfig.service');
 const paymentLinkService = require('../services/paymentLink.service');
+const paymentGatewayService = require('../services/paymentGateway.service');
 const { sequelize, Coupon } = require('../models');
 const { Op } = require('sequelize');
 
@@ -960,12 +961,48 @@ const createCoursePreviewToken = asyncHandler(async (req, res) => {
   sendSuccess(res, { previewUrl, expiresInSeconds: 900 });
 });
 
+const getPaymentGateways = asyncHandler(async (req, res) => {
+  const list = await paymentGatewayService.listPaymentGateways();
+  sendSuccess(res, list);
+});
+
+const getPaymentGateway = asyncHandler(async (req, res) => {
+  const item = await paymentGatewayService.getPaymentGatewayById(req.params.id);
+  sendSuccess(res, item);
+});
+
+const createPaymentGateway = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const item = await paymentGatewayService.createPaymentGateway(req.body);
+  await adminLogsService.logAction(adminId, 'CREATE_PAYMENT_GATEWAY', 'payment_gateway', String(item.id), { name: item.name }, req.ip);
+  sendCreated(res, item);
+});
+
+const updatePaymentGateway = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const item = await paymentGatewayService.updatePaymentGateway(req.params.id, req.body);
+  await adminLogsService.logAction(adminId, 'UPDATE_PAYMENT_GATEWAY', 'payment_gateway', req.params.id, { name: item.name, is_active: item.is_active }, req.ip);
+  sendSuccess(res, item);
+});
+
+const deletePaymentGateway = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const result = await paymentGatewayService.deletePaymentGateway(req.params.id);
+  await adminLogsService.logAction(adminId, 'DELETE_PAYMENT_GATEWAY', 'payment_gateway', req.params.id, {}, req.ip);
+  sendSuccess(res, result);
+});
+
 module.exports = {
   me,
   getPaymentConfigInternal,
   getStats, 
   updatePaymentConfig,
   getLogs,
+  getPaymentGateways,
+  getPaymentGateway,
+  createPaymentGateway,
+  updatePaymentGateway,
+  deletePaymentGateway,
   createCourse,
   updateCourse,
   createBatch,
