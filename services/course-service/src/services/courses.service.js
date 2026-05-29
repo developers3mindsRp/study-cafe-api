@@ -1996,9 +1996,6 @@ const coursesService = {
    * Returns deduplicated list ordered by id ASC.
    */
   async listByIdsOrCatIds({ ids = [], cat_ids = [] } = {}) {
-    const { Op, QueryTypes } = require('sequelize');
-    const { sequelize, CourseCategory } = require('../models');
-
     const courseIdSet = new Set(ids.map(Number).filter(Boolean));
 
     // Resolve courses belonging to any of the given category IDs
@@ -2015,55 +2012,63 @@ const coursesService = {
 
     if (courseIdSet.size === 0) return [];
 
-    // When plan cat_ids are present, prefer showing those category names on each course.
-    // For courses added via direct course_ids (no cat_id match), fall back to the course's own first category.
-    // MIN() is required for MySQL ONLY_FULL_GROUP_BY compliance.
-    const planCatIds = cat_ids.map(Number).filter(Boolean);
-    let rows;
-    if (planCatIds.length > 0) {
-      rows = await sequelize.query(
-        `SELECT c.id, c.title, c.slug, c.brief_description, c.thumbnail_url, c.price, c.sale_price,
-                COALESCE(
-                  MIN(CASE WHEN ccm.course_cat_id IN (:catIds) THEN cc.name END),
-                  MIN(cc.name)
-                ) AS category_name,
-                COALESCE(
-                  MIN(CASE WHEN ccm.course_cat_id IN (:catIds) THEN cc.slug END),
-                  MIN(cc.slug)
-                ) AS category_slug
-         FROM courses c
-         LEFT JOIN course_categories ccm ON ccm.course_id = c.id
-         LEFT JOIN course_cats cc ON cc.id = ccm.course_cat_id
-         WHERE c.id IN (:ids) AND c.is_published = 1
-         GROUP BY c.id, c.title, c.slug, c.brief_description, c.thumbnail_url, c.price, c.sale_price
-         ORDER BY c.id ASC`,
-        { replacements: { ids: [...courseIdSet], catIds: planCatIds }, type: QueryTypes.SELECT }
-      );
-    } else {
-      rows = await sequelize.query(
-        `SELECT c.id, c.title, c.slug, c.brief_description, c.thumbnail_url, c.price, c.sale_price,
-                MIN(cc.name) AS category_name, MIN(cc.slug) AS category_slug
-         FROM courses c
-         LEFT JOIN course_categories ccm ON ccm.course_id = c.id
-         LEFT JOIN course_cats cc ON cc.id = ccm.course_cat_id
-         WHERE c.id IN (:ids) AND c.is_published = 1
-         GROUP BY c.id, c.title, c.slug, c.brief_description, c.thumbnail_url, c.price, c.sale_price
-         ORDER BY c.id ASC`,
-        { replacements: { ids: [...courseIdSet] }, type: QueryTypes.SELECT }
-      );
+    // Use the same query pattern as listAll() so category data is consistent with admin table.
+    // Only return published courses; order by id ASC.
+    const resolvedIds = [...courseIdSet];
+    const courseRows = await Course.findAll({
+      where: { id: { [Op.in]: resolvedIds }, is_published: true },
+      order: [['id', 'ASC']],
+      attributes: ['id', 'title', 'slug', 'brief_description', 'thumbnail_url', 'price', 'sale_price'],
+    });
+
+    if (courseRows.length === 0) return [];
+
+    const foundIds = courseRows.map((r) => Number(r.id)).filter((id) => id > 0);
+    const catLinks = await CourseCategory.findAll({
+      where: { course_id: { [Op.in]: foundIds } },
+      attributes: ['course_id', 'course_cat_id'],
+      raw: true,
+    });
+
+    const linkedCatIds = [...new Set(catLinks.map((l) => Number(l.course_cat_id)).filter(Boolean))];
+    let catById = new Map();
+    if (linkedCatIds.length > 0) {
+      const catRows = await CourseCat.findAll({
+        where: { id: { [Op.in]: linkedCatIds } },
+        attributes: ['id', 'name', 'slug'],
+        raw: true,
+      });
+      catById = new Map(catRows.map((c) => [Number(c.id), c]));
     }
 
-    return rows.map((d) => ({
-      id: d.id,
-      title: d.title,
-      slug: d.slug,
-      brief_description: d.brief_description,
-      thumbnail_url: d.thumbnail_url,
-      price: d.price,
-      sale_price: d.sale_price,
-      category: d.category_name || null,
-      cat_slug: d.category_slug || null,
-    }));
+    // Build per-course category list; prefer plan cat_ids for the primary label
+    const planCatIdSet = new Set(cat_ids.map(Number).filter(Boolean));
+    const catsByCourse = new Map();
+    for (const link of catLinks) {
+      const cid = Number(link.course_id);
+      const cat = catById.get(Number(link.course_cat_id));
+      if (!cat) continue;
+      if (!catsByCourse.has(cid)) catsByCourse.set(cid, []);
+      catsByCourse.get(cid).push({ id: cat.id, name: cat.name, slug: cat.slug ?? null, fromPlan: planCatIdSet.has(Number(link.course_cat_id)) });
+    }
+
+    return courseRows.map((r) => {
+      const d = r.get({ plain: true });
+      const cats = catsByCourse.get(Number(d.id)) || [];
+      // Prefer a category that came from the plan's cat_ids; fall back to first available
+      const primary = cats.find((c) => c.fromPlan) || cats[0] || null;
+      return {
+        id: d.id,
+        title: d.title,
+        slug: d.slug,
+        brief_description: d.brief_description,
+        thumbnail_url: d.thumbnail_url,
+        price: d.price,
+        sale_price: d.sale_price,
+        category: primary?.name || null,
+        cat_slug: primary?.slug || null,
+      };
+    });
   },
 
   /**
