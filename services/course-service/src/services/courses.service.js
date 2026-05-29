@@ -2015,19 +2015,43 @@ const coursesService = {
 
     if (courseIdSet.size === 0) return [];
 
-    // Use a raw query to easily join course_cats without alias issues.
-    // MIN() aggregates are required for MySQL ONLY_FULL_GROUP_BY mode.
-    const rows = await sequelize.query(
-      `SELECT c.id, c.title, c.slug, c.brief_description, c.thumbnail_url, c.price, c.sale_price,
-              MIN(cc.name) AS category_name, MIN(cc.slug) AS category_slug
-       FROM courses c
-       LEFT JOIN course_categories ccm ON ccm.course_id = c.id
-       LEFT JOIN course_cats cc ON cc.id = ccm.course_cat_id
-       WHERE c.id IN (:ids) AND c.is_published = 1
-       GROUP BY c.id, c.title, c.slug, c.brief_description, c.thumbnail_url, c.price, c.sale_price
-       ORDER BY c.id ASC`,
-      { replacements: { ids: [...courseIdSet] }, type: QueryTypes.SELECT }
-    );
+    // When plan cat_ids are present, prefer showing those category names on each course.
+    // For courses added via direct course_ids (no cat_id match), fall back to the course's own first category.
+    // MIN() is required for MySQL ONLY_FULL_GROUP_BY compliance.
+    const planCatIds = cat_ids.map(Number).filter(Boolean);
+    let rows;
+    if (planCatIds.length > 0) {
+      rows = await sequelize.query(
+        `SELECT c.id, c.title, c.slug, c.brief_description, c.thumbnail_url, c.price, c.sale_price,
+                COALESCE(
+                  MIN(CASE WHEN ccm.course_cat_id IN (:catIds) THEN cc.name END),
+                  MIN(cc.name)
+                ) AS category_name,
+                COALESCE(
+                  MIN(CASE WHEN ccm.course_cat_id IN (:catIds) THEN cc.slug END),
+                  MIN(cc.slug)
+                ) AS category_slug
+         FROM courses c
+         LEFT JOIN course_categories ccm ON ccm.course_id = c.id
+         LEFT JOIN course_cats cc ON cc.id = ccm.course_cat_id
+         WHERE c.id IN (:ids) AND c.is_published = 1
+         GROUP BY c.id, c.title, c.slug, c.brief_description, c.thumbnail_url, c.price, c.sale_price
+         ORDER BY c.id ASC`,
+        { replacements: { ids: [...courseIdSet], catIds: planCatIds }, type: QueryTypes.SELECT }
+      );
+    } else {
+      rows = await sequelize.query(
+        `SELECT c.id, c.title, c.slug, c.brief_description, c.thumbnail_url, c.price, c.sale_price,
+                MIN(cc.name) AS category_name, MIN(cc.slug) AS category_slug
+         FROM courses c
+         LEFT JOIN course_categories ccm ON ccm.course_id = c.id
+         LEFT JOIN course_cats cc ON cc.id = ccm.course_cat_id
+         WHERE c.id IN (:ids) AND c.is_published = 1
+         GROUP BY c.id, c.title, c.slug, c.brief_description, c.thumbnail_url, c.price, c.sale_price
+         ORDER BY c.id ASC`,
+        { replacements: { ids: [...courseIdSet] }, type: QueryTypes.SELECT }
+      );
+    }
 
     return rows.map((d) => ({
       id: d.id,

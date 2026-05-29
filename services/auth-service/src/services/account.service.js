@@ -280,11 +280,17 @@ async function fetchCoursesByIdsOrCatIds(ids, cat_ids) {
  */
 async function getMembershipCourses(userId) {
   const { UserMembership } = require('../models');
+  const { Op } = require('sequelize');
   const now = new Date();
+
+  // Resolve both internal id and wp_user_id so migrated memberships are found
+  const userRow = await User.findByPk(userId, { attributes: ['id', 'wp_user_id'] });
+  const lookupIds = [String(userId)];
+  if (userRow?.wp_user_id != null) lookupIds.push(String(userRow.wp_user_id));
 
   // Get ALL active memberships for this user (multiple plans possible)
   const memberships = await UserMembership.findAll({
-    where: { user_id: userId },
+    where: { user_id: { [Op.in]: lookupIds } },
     order: [['expires_at', 'DESC']],
   });
 
