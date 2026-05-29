@@ -70,6 +70,7 @@ function register(router) {
   router.get('/admin/users/distinct-states', requireAdmin, controller.getUserDistinctStates);
   router.get('/admin/users/:id/enrollments', requireAdmin, controller.getUserEnrollments);
   router.get('/admin/users/:id/memberships', requireAdmin, controller.getUserMemberships);
+  router.post('/admin/users/:id/membership', requireAdmin, controller.grantUserMembership);
   router.post('/admin/courses/:id/materials', requireAdmin, controller.addMaterial);
   router.get('/admin/course-reviews', requireAdmin, controller.getCourseReviews);
   router.get('/admin/course-reviews/:id', requireAdmin, controller.getCourseReviewById);

@@ -346,6 +346,23 @@ const getUserMemberships = asyncHandler(async (req, res) => {
   sendSuccess(res, Array.isArray(data) ? data : data || []);
 });
 
+const grantUserMembership = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { membershipType, startsAt, expiresAt } = req.body;
+  if (!membershipType || !startsAt || !expiresAt) {
+    throw new AppError('membershipType, startsAt, and expiresAt are required', 400);
+  }
+  await authClient.post('/access/grant-membership', {
+    userId: req.params.id,
+    membershipType,
+    startsAt,
+    expiresAt,
+    orderId: null,
+  });
+  await adminLogsService.logAction(adminId, 'GRANT_MEMBERSHIP', 'user_membership', String(req.params.id), { membershipType, startsAt, expiresAt }, req.ip);
+  sendSuccess(res, { granted: true });
+});
+
 const getUserDistinctStates = asyncHandler(async (req, res) => {
   const { data } = await authClient.get('/users/distinct-states');
   sendSuccess(res, Array.isArray(data) ? data : []);
@@ -1024,6 +1041,7 @@ module.exports = {
   removeBatchEnrollment,
   getUserEnrollments,
   getUserMemberships,
+  grantUserMembership,
   getUserDistinctStates,
   getBatches,
   addMaterial,
