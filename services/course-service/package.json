@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "migrate:affiliate-commission": "node scripts/add-courses-affiliate-commission-column.js"
+    "migrate:affiliate-commission": "node scripts/add-courses-affiliate-commission-column.js",
+    "migrate:detail-sections": "node scripts/add-courses-detail-sections-column.js"
   },
   "dependencies": {
     "axios": "^1.7.2",

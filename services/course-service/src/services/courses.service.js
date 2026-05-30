@@ -124,6 +124,14 @@ function stripCurriculumVideos(course) {
   return { ...course, curriculum: stripped };
 }
 
+function withCourseComputedFields(course) {
+  if (!course) return course;
+  return {
+    ...course,
+    is_lifetime: course.validity === 'lifetime',
+  };
+}
+
 function withCourseMetaDetail(course) {
   const title = (course?.title || "").trim();
   const fallbackDescription =
@@ -555,7 +563,7 @@ const coursesService = {
         const cid = Number(l.course_id);
         const cat = catById.get(Number(l.course_cat_id));
         if (!cat) continue;
-        const entry = { id: cat.id, name: cat.name, slug: cat.slug ?? null };
+        const entry = { id: Number(cat.id), name: cat.name, slug: cat.slug ?? null };
         if (!catsByCourse.has(cid)) catsByCourse.set(cid, []);
         catsByCourse.get(cid).push(entry);
       }
@@ -566,7 +574,7 @@ const coursesService = {
       d.language = normalizeLanguage(d.language);
       const cats = catsByCourse.get(Number(d.id)) || [];
       d.categories = cats;
-      d.course_cat_ids = cats.map((c) => c.id);
+      d.course_cat_ids = cats.map((c) => Number(c.id));
       return withListingDuration(d);
     });
   },
@@ -625,12 +633,12 @@ const coursesService = {
       });
     }
 
-    const result = withCourseMetaDetail({
+    const result = withCourseComputedFields(withCourseMetaDetail({
       ...enriched,
       batches,
       materials: materials.map((m) => m.get({ plain: true })),
       categories,
-    });
+    }));
     if (!allowed) return stripCurriculumVideos(result);
     return result;
   },
@@ -682,12 +690,12 @@ const coursesService = {
       });
     }
 
-    const result = withCourseMetaDetail({
+    const result = withCourseComputedFields(withCourseMetaDetail({
       ...enriched,
       batches,
       materials: materials.map((m) => m.get({ plain: true })),
       categories,
-    });
+    }));
     if (!allowed) return stripCurriculumVideos(result);
     return result;
   },
@@ -997,6 +1005,8 @@ const coursesService = {
       start_date: data.start_date || null,
       end_date: data.end_date || null,
       affiliate_commission: Number.isFinite(affiliatePct) ? affiliatePct : 0,
+      validity: data.validity === 'lifetime' ? 'lifetime' : '1year',
+      detail_sections: data.detail_sections || null,
     });
     const plain = row.get({ plain: true });
     await this.upsertPrimaryAuthorProfile(plain.id, data);
@@ -1057,6 +1067,8 @@ const coursesService = {
       "start_date",
       "end_date",
       "affiliate_commission",
+      "validity",
+      "detail_sections",
     ];
     const updatePayload = {};
     for (const field of updatableFields) {
