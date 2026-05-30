@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { User, UserCourse, Role } = require('../models');
 const config = require('../config');
-const { AppError } = require('../../../../shared');
+const { AppError, logger } = require('../../../../shared');
 
 function mapUserToProfile(userRow) {
   const u = userRow.get ? userRow.get({ plain: true }) : userRow;
@@ -93,7 +93,12 @@ async function fetchProgressSummary(userId, courseIds) {
     );
     const payload = data.data !== undefined ? data.data : data;
     return payload && typeof payload === 'object' ? payload : {};
-  } catch {
+  } catch (err) {
+    logger.warn('[account] fetchProgressSummary failed (non-blocking)', {
+      userId,
+      courseIds: courseIds.slice(0, 10),
+      error: err.message,
+    });
     return {};
   }
 }
@@ -136,7 +141,11 @@ async function fetchCourseMeta(courseId) {
     });
     const payload = data.data !== undefined ? data.data : data;
     return payload;
-  } catch {
+  } catch (err) {
+    logger.warn('[account] fetchCourseMeta failed (non-blocking)', {
+      courseId,
+      error: err.message,
+    });
     return null;
   }
 }
@@ -247,7 +256,11 @@ async function fetchPlanBySlug(slug) {
       },
     );
     return detail?.data ?? detail ?? null;
-  } catch {
+  } catch (err) {
+    logger.warn('[account] fetchPlanBySlug failed (non-blocking)', {
+      slug,
+      error: err.message,
+    });
     return null;
   }
 }
@@ -268,7 +281,12 @@ async function fetchCoursesByIdsOrCatIds(ids, cat_ids) {
       },
     );
     return Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
-  } catch {
+  } catch (err) {
+    logger.warn('[account] fetchCoursesByIdsOrCatIds failed (non-blocking)', {
+      ids,
+      cat_ids,
+      error: err.message,
+    });
     return [];
   }
 }

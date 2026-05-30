@@ -15,6 +15,7 @@
 const { Queue } = require('bullmq');
 const config = require('../config');
 const { getRedisConnection, closeAllRedisConnections } = require('./redis.connection');
+const { logger } = require('../../../../shared');
 
 const { name: queueName } = config.articlePublishQueue;
 
@@ -57,7 +58,7 @@ function publishJobId(articleId) {
 async function closeQueue() {
   if (_queue) {
     await _queue.close().catch((err) =>
-      console.error('[article-queue] queue.close() error:', err.message),
+      logger.error('[article-queue] queue.close() error', { error: err.message }),
     );
     _queue = null;
   }

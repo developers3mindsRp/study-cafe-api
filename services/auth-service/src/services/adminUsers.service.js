@@ -2,7 +2,7 @@ const bcrypt = require('bcryptjs');
 const { User, Role } = require('../models');
 const { Op } = require('sequelize');
 const { getEffectivePermissions, expandPermissionHierarchy } = require('../config/permissions');
-const { AppError } = require('../../../../shared');
+const { AppError, logger } = require('../../../../shared');
 
 const ADMIN_PANEL_ROLES = ['super_admin', 'admin', 'editor', 'viewer', 'editor_articles', 'custom'];
 
@@ -123,15 +123,23 @@ async function createAdminUser({
   }
 
   const password_hash = await bcrypt.hash(password, 10);
-  const user = await User.scope('withPassword').create({
-    email,
-    password_hash,
-    name: name || null,
-    role_id,
-    is_active: true,
-    permission_overrides: expanded,
-  });
-  return getAdminUser(user.id);
+  try {
+    const user = await User.scope('withPassword').create({
+      email,
+      password_hash,
+      name: name || null,
+      role_id,
+      is_active: true,
+      permission_overrides: expanded,
+    });
+    return getAdminUser(user.id);
+  } catch (err) {
+    logger.error('[adminUsers] createAdminUser failed during user creation', {
+      error: err.message,
+      payload: { email, role_id },
+    });
+    throw err;
+  }
 }
 
 async function updateAdminUser(id, {
@@ -163,15 +171,29 @@ async function updateAdminUser(id, {
     const list = Array.isArray(permission_overrides) ? permission_overrides : [];
     updates.permission_overrides = expandPermissionHierarchy(list);
   }
-  await user.update(updates);
-  return getAdminUser(id);
+  try {
+    await user.update(updates);
+    return getAdminUser(id);
+  } catch (err) {
+    logger.error('[adminUsers] updateAdminUser failed', {
+      error: err.message,
+      id,
+      updates: Object.keys(updates),
+    });
+    throw err;
+  }
 }
 
 async function deleteAdminUser(id) {
-  const user = await User.findByPk(id);
-  if (!user) return false;
-  await user.destroy();
-  return true;
+  try {
+    const user = await User.findByPk(id);
+    if (!user) return false;
+    await user.destroy();
+    return true;
+  } catch (err) {
+    logger.error('[adminUsers] deleteAdminUser failed', { error: err.message, id });
+    throw err;
+  }
 }
 
 module.exports = {

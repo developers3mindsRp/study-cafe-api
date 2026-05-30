@@ -220,6 +220,7 @@ function normalizeLanguage(value) {
         const p = JSON.parse(v);
         if (Array.isArray(p)) return p;
       } catch { }
+      // Note: JSON parse failure falls through to comma split or single-item return
       if (v.includes(","))
         return v
           .split(",")
@@ -234,6 +235,7 @@ function normalizeLanguage(value) {
       const p = JSON.parse(value);
       if (Array.isArray(p)) return p;
     } catch { }
+    // Note: JSON parse failure falls through to comma split or single-item return
     if (value.includes(","))
       return value
         .split(",")
@@ -251,7 +253,8 @@ function parseCurriculumDays(curriculum) {
   if (typeof cur === "string") {
     try {
       cur = JSON.parse(cur);
-    } catch {
+    } catch (err) {
+      logger.warn('[courses] parseCurriculumDays: invalid JSON in curriculum field', { error: err.message });
       return [];
     }
   }
@@ -1120,7 +1123,8 @@ const coursesService = {
         typeof course.curriculum === "string"
           ? JSON.parse(course.curriculum)
           : course.curriculum || [];
-    } catch {
+    } catch (err) {
+      logger.warn('[courses] createBatch: failed to parse course curriculum JSON', { error: err.message });
       curriculum = [];
     }
 
@@ -1229,7 +1233,8 @@ const coursesService = {
         typeof course.curriculum === "string"
           ? JSON.parse(course.curriculum)
           : course.curriculum || [];
-    } catch {
+    } catch (err) {
+      logger.warn('[courses] syncBatchSessions: failed to parse course curriculum JSON', { error: err.message });
       curriculum = [];
     }
 

@@ -43,7 +43,7 @@ function normalizeFeatures(raw) {
 
   // ✅ 🔥 CRITICAL FIX: Ensure raw is array
   if (!Array.isArray(raw)) {
-    console.warn('normalizeFeatures received non-array:', raw);
+    logger.warn('[platform] normalizeFeatures received non-array value', { type: typeof raw });
     return [];
   }
 
@@ -526,7 +526,7 @@ let warnedMissingGlobalSettingsTable = false;
 function warnMissingGlobalSettingsTableOnce() {
   if (warnedMissingGlobalSettingsTable) return;
   warnedMissingGlobalSettingsTable = true;
-  console.warn(
+  logger.warn(
     '[platform-service] The `global_settings` table is missing. Run `npm run ensure-global-settings` from the study-cafe-api repo root, then restart. Public reads are degraded until then.',
   );
 }
@@ -2185,11 +2185,11 @@ async function createArticle(data) {
 
   const out = await getArticleByIdInternal(articleId);
   await syncArticleSeoMetadata(out).catch((err) => {
-    console.error('[createArticle] sync SEO metadata failed', err.message);
+    logger.error('[createArticle] sync SEO metadata failed', { error: err.message });
   });
-  console.log('[createArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
+  logger.info('[createArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
   await articleScheduling.syncArticlePublishJob(out).catch((err) => {
-    console.error('[createArticle] sync schedule failed', err.message, err.stack);
+    logger.error('[createArticle] sync schedule failed', { error: err.message, stack: err.stack });
   });
   return out;
 }
@@ -2303,12 +2303,12 @@ async function updateArticle(id, data) {
     slugChanged;
   if (seoFieldsTouched) {
     await syncArticleSeoMetadata(out, slugChanged ? previousSlug : null).catch((err) => {
-      console.error('[updateArticle] sync SEO metadata failed', err.message);
+      logger.error('[updateArticle] sync SEO metadata failed', { error: err.message });
     });
   }
-  console.log('[updateArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
+  logger.info('[updateArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
   await articleScheduling.syncArticlePublishJob(out).catch((err) => {
-    console.error('[updateArticle] sync schedule failed', err.message, err.stack);
+    logger.error('[updateArticle] sync schedule failed', { error: err.message, stack: err.stack });
   });
   return out;
 }

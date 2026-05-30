@@ -1,5 +1,6 @@
 const { Sequelize } = require('sequelize');
 const config = require('../config');
+const { logger } = require('../../../../shared');
 
 const sequelize = new Sequelize(
   config.mysql.database,
@@ -50,7 +51,7 @@ CREATE TABLE IF NOT EXISTS payment_links (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
   } catch (err) {
-    console.error('[admin-service] payment_links bootstrap:', err.message);
+    logger.error('[admin-service] payment_links bootstrap failed', { error: err.message });
     throw err;
   }
   try {
@@ -77,7 +78,7 @@ CREATE TABLE IF NOT EXISTS payment_gateways (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
   } catch (err) {
-    console.error('[admin-service] payment_gateways bootstrap:', err.message);
+    logger.error('[admin-service] payment_gateways bootstrap failed', { error: err.message });
     throw err;
   }
 }

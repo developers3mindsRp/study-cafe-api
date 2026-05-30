@@ -1,4 +1,5 @@
 const { PaymentConfig, PaymentGateway } = require('../models');
+const { logger } = require('../../../../shared');
 
 async function getPaymentConfig() {
   try {
@@ -15,7 +16,9 @@ async function getPaymentConfig() {
       };
     }
   } catch (err) {
-    console.error('[paymentConfigService] Failed to load from payment_gateways:', err.message);
+    logger.error('[paymentConfigService] Failed to load from payment_gateways', {
+      error: err.message,
+    });
   }
 
   // 2. Fallback to old payment_config table if database table doesn't have active keys

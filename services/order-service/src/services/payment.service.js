@@ -1,6 +1,7 @@
 const axios = require('axios');
 const Razorpay = require('razorpay');
 const config = require('../config');
+const { logger } = require('../../../../shared');
 
 let cachedConfig = null;
 
@@ -18,7 +19,7 @@ async function getRazorpayConfig() {
     }
   } catch (err) {
     const errMsg = err.response?.data?.error || err.message;
-    console.warn(`[payment.service] Dynamic config load failed: ${errMsg}. Falling back to env...`);
+    logger.warn(`[payment.service] Dynamic config load failed: ${errMsg}. Falling back to env...`);
   }
 
   // 2. Fallback to local environment variables

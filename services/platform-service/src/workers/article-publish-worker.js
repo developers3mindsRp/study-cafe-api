@@ -56,7 +56,7 @@ worker.on('ready', () => {
     concurrency: CONCURRENCY,
     redis: config.redis.url.replace(/:[^:@]+@/, ':****@'),
   });
-  console.log(
+  logger.info(
     `[article-publish-worker] listening on "${queueName}" (concurrency=${CONCURRENCY}) — articles will publish on time.`,
   );
 });

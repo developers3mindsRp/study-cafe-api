@@ -1,5 +1,6 @@
 const { Sequelize } = require('sequelize');
 const config = require('../config');
+const { logger } = require('../../../../shared');
 
 const sequelize = new Sequelize(
   config.mysql.database,
@@ -36,7 +37,7 @@ async function connect() {
   try {
     await sequelize.authenticate();
   } catch (err) {
-    console.error('Sequelize auth failed:', err.message);
+    logger.error('[downloads-service] Sequelize auth failed', { error: err.message });
     throw err;
   }
 }
