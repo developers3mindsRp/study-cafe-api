@@ -47,7 +47,16 @@ function normalizeRow(row) {
   return normalized;
 }
 
-function validateRow(row, { planSlugMap, startsAt, expiresAt, seenEmails }) {
+function computeMembershipDates(plan) {
+  const now = new Date();
+  const startsAt = now.toISOString().slice(0, 10);
+  const days = Number(plan.duration_days);
+  const expires = new Date(now);
+  expires.setDate(expires.getDate() + (Number.isFinite(days) && days > 0 ? days : 365));
+  return { startsAt, expiresAt: expires.toISOString().slice(0, 10) };
+}
+
+function validateRow(row, { planSlugMap, seenEmails }) {
   const fieldErrors = [];
   const email = row.email;
   const rowNumber = row.rowNumber;
@@ -89,17 +98,6 @@ function validateRow(row, { planSlugMap, startsAt, expiresAt, seenEmails }) {
       fieldErrors.push({
         field: 'membership',
         message: `Plan "${membershipSlug}" exists but is inactive`,
-      });
-    }
-    if (!startsAt || !expiresAt) {
-      fieldErrors.push({
-        field: 'membership',
-        message: 'Membership start and expiry dates are required when assigning a plan',
-      });
-    } else if (new Date(expiresAt) <= new Date(startsAt)) {
-      fieldErrors.push({
-        field: 'membership',
-        message: 'Membership expiry must be after start date',
       });
     }
   }
@@ -250,7 +248,7 @@ function buildStatusPayload(row) {
  * Import users from parsed CSV rows. Validates each row independently;
  * invalid rows are reported without stopping valid rows from importing.
  */
-async function importUsers({ rows, startsAt, expiresAt, adminId, reqIp }) {
+async function importUsers({ rows, adminId, reqIp }) {
   if (!Array.isArray(rows) || rows.length === 0) {
     return { results: [], imported: 0, failed: 0, skipped: 0 };
   }
@@ -268,8 +266,6 @@ async function importUsers({ rows, startsAt, expiresAt, adminId, reqIp }) {
   for (const row of normalizedRows) {
     const { fieldErrors, membershipSlug } = validateRow(row, {
       planSlugMap,
-      startsAt,
-      expiresAt,
       seenEmails,
     });
 
@@ -342,6 +338,7 @@ async function importUsers({ rows, startsAt, expiresAt, adminId, reqIp }) {
     const plan = membershipSlug ? planSlugMap.get(membershipSlug) : null;
 
     if (membershipSlug && plan) {
+      const { startsAt, expiresAt } = computeMembershipDates(plan);
       try {
         const enrolledCourseIds = await fetchUserEnrolledCourseIds(userId);
         const grantResult = await grantMembershipWithCourses({
