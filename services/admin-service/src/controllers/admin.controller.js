@@ -462,7 +462,7 @@ const bulkGrantMembershipByEmails = asyncHandler(async (req, res) => {
 
 const importUsersFromCsv = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
-  const { rows, startsAt, expiresAt } = req.body;
+  const { rows } = req.body;
 
   if (!Array.isArray(rows) || rows.length === 0) {
     throw new AppError('rows array is required', 400);
@@ -474,8 +474,6 @@ const importUsersFromCsv = asyncHandler(async (req, res) => {
   try {
     const summary = await userImportService.importUsers({
       rows,
-      startsAt: startsAt || null,
-      expiresAt: expiresAt || null,
       adminId,
       reqIp: req.ip,
     });
