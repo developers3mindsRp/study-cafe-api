@@ -114,14 +114,16 @@ async function list(query = {}) {
         andConditions.push({ created_at: createdRange });
     }
 
-    const roleInclude = {
-        model: Role,
-        as: 'Role',
-        attributes: ['id', 'name'],
-    };
+    // Role filter: join only when filtering by role name, otherwise use role_id column directly.
+    let roleInclude = null;
     if (role != null && String(role).trim() !== '') {
-        roleInclude.where = { name: String(role).trim() };
-        roleInclude.required = true;
+        roleInclude = {
+            model: Role,
+            as: 'Role',
+            attributes: [],
+            where: { name: String(role).trim() },
+            required: true,
+        };
     } else if (role_id) {
         andConditions.push({ role_id: parseInt(role_id, 10) });
     }
@@ -132,32 +134,44 @@ async function list(query = {}) {
         ? String(sortOrder).toUpperCase()
         : 'DESC';
 
-    /**
-     * Secondary id tiebreaker — without this, offset-based pagination over a
-     * non-unique sort column (e.g. created_at) can silently skip/duplicate rows
-     * across pages, which breaks the "fetch all pages" export loop.
-     */
     const order = sortBy === 'id'
         ? [['id', orderDir]]
         : [[sortBy, orderDir], ['id', orderDir]];
 
-    // lean=true → return only the fields needed for lightweight dropdowns/selects.
+    // Only select columns needed by the admin table — avoids transferring bio, social links, etc.
+    const TABLE_COLUMNS = [
+        'id', 'name', 'display_name', 'email', 'phone',
+        'designation', 'profession', 'state', 'city', 'country',
+        'membership', 'plan', 'role_id', 'status', 'is_active',
+        'created_at',
+    ];
     const attributes = (lean === 'true' || lean === true)
-        ? ['id', 'name', 'display_name', 'email', 'role', 'role_id', 'designation', 'profession']
-        : { exclude: ['password_hash'] };
+        ? ['id', 'name', 'display_name', 'email', 'role_id', 'designation', 'profession', 'plan']
+        : TABLE_COLUMNS;
+
+    const include = roleInclude ? [roleInclude] : [];
 
     const { count, rows } = await User.findAndCountAll({
         where,
-        include: [roleInclude],
+        include,
         attributes,
         offset,
         limit: parseInt(limit, 10),
         order,
-        distinct: true,
+        distinct: include.length > 0,
+        raw: true,
+        nest: true,
+    });
+
+    const data = rows.map((u) => {
+        u.membership_name = u.plan
+            ? u.plan.charAt(0).toUpperCase() + u.plan.slice(1)
+            : null;
+        return u;
     });
 
     return {
-        data: rows,
+        data,
         total: count,
         page: parseInt(page, 10),
         limit: parseInt(limit, 10),
