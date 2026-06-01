@@ -124,11 +124,28 @@ function stripCurriculumVideos(course) {
   return { ...course, curriculum: stripped };
 }
 
+function enrichCurriculumWithDurations(curriculum) {
+  const days = parseCurriculumDays(curriculum);
+  if (!days.length) return days;
+  return days.map((day) => {
+    if (!day || typeof day !== "object") return day;
+    const sections = Array.isArray(day.sections) ? day.sections : [];
+    let total = 0;
+    for (const sec of sections) {
+      if (!sec || typeof sec !== "object") continue;
+      const n = parseInt(String(sec.duration ?? ""), 10);
+      if (Number.isFinite(n) && n > 0) total += n;
+    }
+    return { ...day, total_duration: total > 0 ? total : null };
+  });
+}
+
 function withCourseComputedFields(course) {
   if (!course) return course;
   return {
     ...course,
     is_lifetime: course.validity === 'lifetime',
+    curriculum: enrichCurriculumWithDurations(course.curriculum),
   };
 }
 
