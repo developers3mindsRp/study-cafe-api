@@ -653,11 +653,19 @@ const coursesService = {
       });
     }
 
+    const [featuredInRaw, alumniRaw] = await Promise.all([
+      this.getPageSetting('featured_in_logos'),
+      this.getPageSetting('alumni_logos'),
+    ]);
+    const safeParseArray = (v) => { try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; } };
+
     const result = withCourseComputedFields(withCourseMetaDetail({
       ...enriched,
       batches,
       materials: materials.map((m) => m.get({ plain: true })),
       categories,
+      featured_in_logos: safeParseArray(featuredInRaw),
+      alumni_logos: safeParseArray(alumniRaw),
     }));
     if (!allowed) return stripCurriculumVideos(result);
     return result;
@@ -710,11 +718,19 @@ const coursesService = {
       });
     }
 
+    const [featuredInRaw, alumniRaw] = await Promise.all([
+      this.getPageSetting('featured_in_logos'),
+      this.getPageSetting('alumni_logos'),
+    ]);
+    const safeParseArray = (v) => { try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; } };
+
     const result = withCourseComputedFields(withCourseMetaDetail({
       ...enriched,
       batches,
       materials: materials.map((m) => m.get({ plain: true })),
       categories,
+      featured_in_logos: safeParseArray(featuredInRaw),
+      alumni_logos: safeParseArray(alumniRaw),
     }));
     if (!allowed) return stripCurriculumVideos(result);
     return result;
