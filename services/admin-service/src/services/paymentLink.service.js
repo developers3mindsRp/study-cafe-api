@@ -229,7 +229,14 @@ async function updatePaymentLink(id, body) {
     const totalChanged =
       patch.total_seats !== undefined && Number(patch.total_seats) !== Number(prev.total_seats);
     if (rvChanged || totalChanged) {
+      // Changing random_value or total_seats always resets accumulator to 0
       patch.random_boost_accumulator = 0;
+    } else if (body.random_boost_accumulator !== undefined && body.random_boost_accumulator !== null) {
+      // Admin explicitly set the accumulator start value
+      const acc = parseInt(String(body.random_boost_accumulator), 10);
+      if (Number.isFinite(acc) && acc >= 0) {
+        patch.random_boost_accumulator = acc;
+      }
     }
     await row.update(patch);
     await row.reload();
