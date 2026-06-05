@@ -34,7 +34,7 @@ async function listAdminUsers() {
     where: { role_id: { [Op.in]: roleIds } },
     include: [{ model: Role, as: 'Role', attributes: ['id', 'name'] }],
     attributes: ['id', 'email', 'name', 'role_id', 'is_active'],
-    order: [['id', 'ASC']],
+    order: [['id', 'DESC']],
   });
   return users.map((u) => {
     const plain = u.get({ plain: true });
