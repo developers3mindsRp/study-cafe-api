@@ -1,5 +1,6 @@
 const IORedis = require('ioredis');
 const config = require('../config');
+const { logger } = require('../../../../shared');
 
 /**
  * Named connection registry — avoids opening redundant connections.
@@ -24,16 +25,16 @@ function getRedisConnection(name = 'default') {
   });
 
   conn.on('connect', () =>
-    console.log(`[redis:${name}] connected to ${config.redis.url.replace(/:[^:@]+@/, ':****@')}`),
+    logger.info(`[redis:${name}] connected to ${config.redis.url.replace(/:[^:@]+@/, ':****@')}`),
   );
   conn.on('ready', () =>
-    console.log(`[redis:${name}] ready`),
+    logger.info(`[redis:${name}] ready`),
   );
   conn.on('error', (err) =>
-    console.error(`[redis:${name}] error: ${err.message}`),
+    logger.error(`[redis:${name}] error`, { message: err.message }),
   );
   conn.on('close', () =>
-    console.log(`[redis:${name}] connection closed`),
+    logger.info(`[redis:${name}] connection closed`),
   );
 
   _connections.set(name, conn);
@@ -50,8 +51,8 @@ async function closeAllRedisConnections() {
     entries.map(([name, conn]) =>
       conn
         .quit()
-        .then(() => console.log(`[redis:${name}] quit OK`))
-        .catch((err) => console.error(`[redis:${name}] quit error: ${err.message}`)),
+        .then(() => logger.info(`[redis:${name}] quit OK`))
+        .catch((err) => logger.error(`[redis:${name}] quit error`, { message: err.message })),
     ),
   );
   _connections.clear();

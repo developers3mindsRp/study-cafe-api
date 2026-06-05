@@ -143,6 +143,7 @@ const createCourse = {
         course_cat_ids: Joi.array().items(Joi.number().integer().positive()),
         affiliate_commission: Joi.number().min(0).max(100),
         validity: Joi.string().valid('1year', 'lifetime').default('1year'),
+        detail_sections: Joi.string().allow('', null),
     }),
 };
 
@@ -196,6 +197,7 @@ const updateCourse = {
         course_cat_ids: Joi.array().items(Joi.number().integer().positive()),
         affiliate_commission: Joi.number().min(0).max(100),
         validity: Joi.string().valid('1year', 'lifetime'),
+        detail_sections: Joi.string().allow('', null),
     }),
 };
 

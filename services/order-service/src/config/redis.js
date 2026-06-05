@@ -1,12 +1,13 @@
 const Redis = require('redis');
 const config = require('./index');
+const { logger } = require('../../../../shared');
 
 let client;
 
 async function getRedis() {
   if (!client) {
     client = Redis.createClient({ url: config.redis.url });
-    client.on('error', (err) => console.error('Redis error:', err));
+    client.on('error', (err) => logger.error('[order] Redis client error', { error: err.message }));
     await client.connect();
   }
   return client;

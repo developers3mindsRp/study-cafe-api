@@ -124,6 +124,31 @@ function stripCurriculumVideos(course) {
   return { ...course, curriculum: stripped };
 }
 
+function enrichCurriculumWithDurations(curriculum) {
+  const days = parseCurriculumDays(curriculum);
+  if (!days.length) return days;
+  return days.map((day) => {
+    if (!day || typeof day !== "object") return day;
+    const sections = Array.isArray(day.sections) ? day.sections : [];
+    let total = 0;
+    for (const sec of sections) {
+      if (!sec || typeof sec !== "object") continue;
+      const n = parseInt(String(sec.duration ?? ""), 10);
+      if (Number.isFinite(n) && n > 0) total += n;
+    }
+    return { ...day, total_duration: total > 0 ? total : null };
+  });
+}
+
+function withCourseComputedFields(course) {
+  if (!course) return course;
+  return {
+    ...course,
+    is_lifetime: course.validity === 'lifetime',
+    curriculum: enrichCurriculumWithDurations(course.curriculum),
+  };
+}
+
 function withCourseMetaDetail(course) {
   const title = (course?.title || "").trim();
   const fallbackDescription =
@@ -212,6 +237,7 @@ function normalizeLanguage(value) {
         const p = JSON.parse(v);
         if (Array.isArray(p)) return p;
       } catch { }
+      // Note: JSON parse failure falls through to comma split or single-item return
       if (v.includes(","))
         return v
           .split(",")
@@ -226,6 +252,7 @@ function normalizeLanguage(value) {
       const p = JSON.parse(value);
       if (Array.isArray(p)) return p;
     } catch { }
+    // Note: JSON parse failure falls through to comma split or single-item return
     if (value.includes(","))
       return value
         .split(",")
@@ -243,7 +270,8 @@ function parseCurriculumDays(curriculum) {
   if (typeof cur === "string") {
     try {
       cur = JSON.parse(cur);
-    } catch {
+    } catch (err) {
+      logger.warn('[courses] parseCurriculumDays: invalid JSON in curriculum field', { error: err.message });
       return [];
     }
   }
@@ -555,7 +583,7 @@ const coursesService = {
         const cid = Number(l.course_id);
         const cat = catById.get(Number(l.course_cat_id));
         if (!cat) continue;
-        const entry = { id: cat.id, name: cat.name, slug: cat.slug ?? null };
+        const entry = { id: Number(cat.id), name: cat.name, slug: cat.slug ?? null };
         if (!catsByCourse.has(cid)) catsByCourse.set(cid, []);
         catsByCourse.get(cid).push(entry);
       }
@@ -566,7 +594,7 @@ const coursesService = {
       d.language = normalizeLanguage(d.language);
       const cats = catsByCourse.get(Number(d.id)) || [];
       d.categories = cats;
-      d.course_cat_ids = cats.map((c) => c.id);
+      d.course_cat_ids = cats.map((c) => Number(c.id));
       return withListingDuration(d);
     });
   },
@@ -625,12 +653,20 @@ const coursesService = {
       });
     }
 
-    const result = withCourseMetaDetail({
+    const [featuredInRaw, alumniRaw] = await Promise.all([
+      this.getPageSetting('featured_in_logos'),
+      this.getPageSetting('alumni_logos'),
+    ]);
+    const safeParseArray = (v) => { try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; } };
+
+    const result = withCourseComputedFields(withCourseMetaDetail({
       ...enriched,
       batches,
       materials: materials.map((m) => m.get({ plain: true })),
       categories,
-    });
+      featured_in_logos: safeParseArray(featuredInRaw),
+      alumni_logos: safeParseArray(alumniRaw),
+    }));
     if (!allowed) return stripCurriculumVideos(result);
     return result;
   },
@@ -682,12 +718,20 @@ const coursesService = {
       });
     }
 
-    const result = withCourseMetaDetail({
+    const [featuredInRaw, alumniRaw] = await Promise.all([
+      this.getPageSetting('featured_in_logos'),
+      this.getPageSetting('alumni_logos'),
+    ]);
+    const safeParseArray = (v) => { try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; } };
+
+    const result = withCourseComputedFields(withCourseMetaDetail({
       ...enriched,
       batches,
       materials: materials.map((m) => m.get({ plain: true })),
       categories,
-    });
+      featured_in_logos: safeParseArray(featuredInRaw),
+      alumni_logos: safeParseArray(alumniRaw),
+    }));
     if (!allowed) return stripCurriculumVideos(result);
     return result;
   },
@@ -997,6 +1041,8 @@ const coursesService = {
       start_date: data.start_date || null,
       end_date: data.end_date || null,
       affiliate_commission: Number.isFinite(affiliatePct) ? affiliatePct : 0,
+      validity: data.validity === 'lifetime' ? 'lifetime' : '1year',
+      detail_sections: data.detail_sections || null,
     });
     const plain = row.get({ plain: true });
     await this.upsertPrimaryAuthorProfile(plain.id, data);
@@ -1057,6 +1103,8 @@ const coursesService = {
       "start_date",
       "end_date",
       "affiliate_commission",
+      "validity",
+      "detail_sections",
     ];
     const updatePayload = {};
     for (const field of updatableFields) {
@@ -1108,7 +1156,8 @@ const coursesService = {
         typeof course.curriculum === "string"
           ? JSON.parse(course.curriculum)
           : course.curriculum || [];
-    } catch {
+    } catch (err) {
+      logger.warn('[courses] createBatch: failed to parse course curriculum JSON', { error: err.message });
       curriculum = [];
     }
 
@@ -1217,7 +1266,8 @@ const coursesService = {
         typeof course.curriculum === "string"
           ? JSON.parse(course.curriculum)
           : course.curriculum || [];
-    } catch {
+    } catch (err) {
+      logger.warn('[courses] syncBatchSessions: failed to parse course curriculum JSON', { error: err.message });
       curriculum = [];
     }
 

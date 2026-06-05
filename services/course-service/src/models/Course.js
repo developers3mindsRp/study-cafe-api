@@ -49,6 +49,10 @@ module.exports = (sequelize) => {
       end_date: { type: DataTypes.DATE, allowNull: true },
       affiliate_commission: { type: DataTypes.DECIMAL(10, 2), allowNull: false, defaultValue: 0 },
       validity: { type: DataTypes.STRING(20), allowNull: false, defaultValue: '1year' },
+      /** JSON array of dynamic description sections shown on the course detail page.
+       *  Each item: { type: 'text'|'cards', title: string, content?: string, items?: {icon?,title,content}[] }
+       */
+      detail_sections: { type: DataTypes.TEXT('long'), allowNull: true },
     },
     {
       tableName: 'courses',

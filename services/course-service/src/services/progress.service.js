@@ -1,7 +1,7 @@
 const { Op } = require('sequelize');
 const { QueryTypes } = require('sequelize');
 const { UserCourseProgress, Session, Recording, Batch, sequelize } = require('../models');
-const { AppError } = require('../../../../shared');
+const { AppError, logger } = require('../../../../shared');
 const coursesService = require('./courses.service');
 const { checkCourseAccess } = require('./accessClient');
 
@@ -249,8 +249,9 @@ async function getOverallProgress(userId, authHeader) {
         completedSessions: p.completedSessions,
         totalSessions: p.totalSessions,
       });
-    } catch {
+    } catch (err) {
       // skip if access lost
+      logger.warn(`[progress] getOverallProgress skipped course ${cid} for user ${userId}`, { error: err.message });
     }
   }
   return out;

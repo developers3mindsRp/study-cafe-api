@@ -35,7 +35,8 @@ async function fetchPlanDetails(entityId) {
       }
     );
     return data.data !== undefined ? data.data : data;
-  } catch {
+  } catch (err) {
+    logger.warn(`[orders] fetchPlanDetails failed for entity ${entityId}: ${err.message}`);
     return null;
   }
 }
@@ -93,7 +94,8 @@ async function fetchUserActiveMembership(userId) {
     );
     const payload = data.data !== undefined ? data.data : data;
     return payload || null;
-  } catch {
+  } catch (err) {
+    logger.warn(`[orders] fetchUserActiveMembership failed for user ${userId}: ${err.message}`);
     return null;
   }
 }
@@ -108,7 +110,8 @@ async function fetchPlanBySlug(slug) {
       }
     );
     return data.data !== undefined ? data.data : data;
-  } catch {
+  } catch (err) {
+    logger.warn(`[orders] fetchPlanBySlug failed for slug ${slug}: ${err.message}`);
     return null;
   }
 }
@@ -195,7 +198,8 @@ async function resolveReferrer(userId, referralCode) {
       if (Date.now() - referredAt.getTime() > windowMs) return null;
     }
     return referrer;
-  } catch {
+  } catch (err) {
+    logger.warn(`[orders] resolveReferrer failed for code ${referralCode}: ${err.message}`);
     return null;
   }
 }
@@ -207,7 +211,8 @@ async function fetchUserContact(userId) {
       { headers: { 'x-internal-api-key': config.internalApiKey }, timeout: 5000 }
     );
     return data.data || data;
-  } catch {
+  } catch (err) {
+    logger.warn(`[orders] fetchUserContact failed for user ${userId}: ${err.message}`);
     return null;
   }
 }
@@ -459,8 +464,9 @@ async function fetchCourseValidity(courseId) {
       { replacements: [Number(courseId)], type: QueryTypes.SELECT }
     );
     return rows[0]?.validity ?? '1year';
-  } catch {
+  } catch (err) {
     // Column may not exist yet (pre-migration); default to '1year'
+    logger.warn(`[orders] fetchCourseValidity failed for course ${courseId}: ${err.message}`);
     return '1year';
   }
 }
@@ -603,7 +609,10 @@ async function resolveItemName(order) {
       });
       const payload = parseApiResponse(data);
       return payload?.title || payload?.name || 'Course';
-    } catch { return 'Course'; }
+    } catch (err) {
+      logger.warn(`[orders] resolveItemName course fetch failed for entity ${eid}: ${err.message}`);
+      return 'Course';
+    }
   }
   if (t === 'membership' && eid) {
     const name = await resolveMembershipPlanDisplayName(eid);
@@ -1417,7 +1426,8 @@ async function listMyPurchases(userId) {
       const payload = data.data !== undefined ? data.data : data;
       courseCache.set(key, payload);
       return payload;
-    } catch {
+    } catch (err) {
+      logger.warn(`[orders] listMyPurchases course fetch failed for key ${key}: ${err.message}`);
       courseCache.set(key, null);
       return null;
     }
@@ -2268,7 +2278,9 @@ async function getInvoice(userId, orderId) {
       itemName = plan?.name || itemName;
       itemCategory = plan?.duration_days ? `${plan.duration_days} days` : '';
     }
-  } catch { /* use defaults */ }
+  } catch (err) { 
+    logger.warn('[orders] getInvoice item name enrichment failed (using defaults)', { error: err.message });
+  }
 
   const isFree = p.gateway === 'free' || Number(p.amount) === 0;
   return {

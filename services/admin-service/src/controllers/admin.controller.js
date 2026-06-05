@@ -60,7 +60,7 @@ function validateCouponPayload(body) {
   };
 }
 const { getAdminId, getAdminRole } = require('../middleware');
-const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, sendPaginated } = require('../../../../shared');
+const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, sendPaginated, logger } = require('../../../../shared');
 
 const me = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
@@ -122,7 +122,10 @@ async function syncCourseSeoMetadataToPlatform(course, body = {}, previousSlug) 
   try {
     await platformClient.post('/internal/platform/seo-metadata/sync-module', payload);
   } catch (err) {
-    console.error('[admin] course SEO metadata sync failed:', err.message);
+    logger.error('[admin] course SEO metadata sync failed', {
+      error: err.message,
+      payload,
+    });
   }
 }
 
@@ -459,7 +462,7 @@ const bulkGrantMembershipByEmails = asyncHandler(async (req, res) => {
 
 const importUsersFromCsv = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
-  const { rows, startsAt, expiresAt } = req.body;
+  const { rows } = req.body;
 
   if (!Array.isArray(rows) || rows.length === 0) {
     throw new AppError('rows array is required', 400);
@@ -471,8 +474,6 @@ const importUsersFromCsv = asyncHandler(async (req, res) => {
   try {
     const summary = await userImportService.importUsers({
       rows,
-      startsAt: startsAt || null,
-      expiresAt: expiresAt || null,
       adminId,
       reqIp: req.ip,
     });

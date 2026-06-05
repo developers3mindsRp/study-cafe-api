@@ -1,5 +1,6 @@
 const { Sequelize } = require('sequelize');
 const config = require('../config');
+const { logger } = require('../../../../shared');
 
 const sequelize = new Sequelize(
   config.mysql.database,
@@ -82,7 +83,7 @@ async function connect() {
     await ensureCoursePageSettingsTable(sequelize);
     await ensureMarketingPagesTable(sequelize);
   } catch (err) {
-    console.error('Sequelize auth failed:', err.message);
+    logger.error('[course-service] Sequelize auth/bootstrap failed', { error: err.message });
     throw err;
   }
 }

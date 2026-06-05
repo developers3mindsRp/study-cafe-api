@@ -1,6 +1,7 @@
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const config = require('../config');
 const { validateJWT, validateJWTUnlessOptions, optionalJWT, requireCourseAccess } = require('../middleware');
+const { logger } = require('../../../../shared');
 
 function register(app) {
   const authProxy = createProxyMiddleware({
@@ -23,7 +24,7 @@ function register(app) {
     onError(err, req, res) {
       const code = err?.code || err?.errno;
       const msg = err?.message || String(err);
-      console.error('[api-gateway] course proxy error:', code || msg, '→', config.courseServiceUrl, req.url);
+      logger.error('[api-gateway] course proxy error', { code, message: msg, target: config.courseServiceUrl, url: req.url });
       if (!res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'application/json' });
         res.end(
@@ -53,7 +54,7 @@ function register(app) {
     onError(err, req, res) {
       const code = err?.code || err?.errno;
       const msg = err?.message || String(err);
-      console.error('[api-gateway] admin proxy error:', code || msg, '→', config.adminServiceUrl, req.url);
+      logger.error('[api-gateway] admin proxy error', { code, message: msg, target: config.adminServiceUrl, url: req.url });
       if (!res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'application/json' });
         res.end(

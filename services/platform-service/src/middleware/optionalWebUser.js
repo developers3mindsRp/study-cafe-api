@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
 const config = require('../config');
 const { UserMembership } = require('../models');
+const { logger } = require('../../../../shared');
 
 /**
  * Optional JWT + membership hydration for public blog/article routes.
@@ -35,12 +36,12 @@ async function optionalWebUser(req, res, next) {
     };
   } catch (err) {
     req.viewer = null;
-    if (process.env.NODE_ENV !== 'production') {
-      // Surface common misconfigurations (mismatched JWT_SECRET, expired tokens, etc.)
-      // so premium-article gating doesn't silently treat real members as guests.
-      // eslint-disable-next-line no-console
-      console.warn('[optionalWebUser] token verify failed:', err?.name || err?.message || err);
-    }
+    // Surface common misconfigurations (mismatched JWT_SECRET, expired tokens, etc.)
+    // so premium-article gating doesn't silently treat real members as guests.
+    logger.warn('[optionalWebUser] token verify failed', {
+      name: err?.name,
+      message: err?.message,
+    });
   }
   return next();
 }

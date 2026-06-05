@@ -196,6 +196,7 @@ async function sessionFromUserEntity(user) {
     const redis = await getRedis();
     await redis.setEx(`token:${plain.id}`, config.cacheTtl, accessToken);
   } catch (_) { }
+  // Note: Redis caching failure is non-critical; auth proceeds without cache
   const permissions = getEffectivePermissions(role, plain.permission_overrides);
   const has_active_membership = await hasActiveMembershipForUserId(plain.id);
   return {

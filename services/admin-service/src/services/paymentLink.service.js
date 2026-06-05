@@ -1,6 +1,6 @@
 const { Op, QueryTypes } = require('sequelize');
 const { sequelize, PaymentLink } = require('../models');
-const { AppError } = require('../../../../shared');
+const { AppError, logger } = require('../../../../shared');
 
 function slugify(title) {
   const s = String(title || '')
@@ -146,76 +146,126 @@ async function assertSlugUnique(slug, excludeId) {
 }
 
 async function listPaymentLinks({ limit = 100, offset = 0, status, search } = {}) {
-  const where = {};
-  if (status) where.status = status;
-  if (search && String(search).trim()) {
-    const q = `%${String(search).trim()}%`;
-    where[Op.or] = [{ title: { [Op.like]: q } }, { slug: { [Op.like]: q } }];
-  }
-  const total = await PaymentLink.count({ where });
-  const rows = await PaymentLink.findAll({
-    where,
-    order: [['created_at', 'DESC']],
-    limit: Math.min(Number(limit) || 100, 500),
-    offset: Number(offset) || 0,
-  });
-  const data = [];
-  for (const r of rows) {
-    const plain = r.get({ plain: true });
-    const paid = await countPaidOrdersForPaymentLink(plain.id);
-    data.push({ ...plain, paid_orders_count: paid, seats_booked: paid });
-  }
-  return {
-    data,
-    meta: {
-      total,
+  try {
+    const where = {};
+    if (status) where.status = status;
+    if (search && String(search).trim()) {
+      const q = `%${String(search).trim()}%`;
+      where[Op.or] = [{ title: { [Op.like]: q } }, { slug: { [Op.like]: q } }];
+    }
+    const total = await PaymentLink.count({ where });
+    const rows = await PaymentLink.findAll({
+      where,
+      order: [['created_at', 'DESC']],
       limit: Math.min(Number(limit) || 100, 500),
       offset: Number(offset) || 0,
-    },
-  };
+    });
+    const data = [];
+    for (const r of rows) {
+      const plain = r.get({ plain: true });
+      const paid = await countPaidOrdersForPaymentLink(plain.id);
+      data.push({ ...plain, paid_orders_count: paid, seats_booked: paid });
+    }
+    return {
+      data,
+      meta: {
+        total,
+        limit: Math.min(Number(limit) || 100, 500),
+        offset: Number(offset) || 0,
+      },
+    };
+  } catch (err) {
+    logger.error('[paymentLink] listPaymentLinks failed', {
+      error: err.message,
+      payload: { limit, offset, status, search },
+    });
+    throw err;
+  }
 }
 
 async function getPaymentLinkById(id) {
-  const row = await PaymentLink.findByPk(id);
-  if (!row) throw new AppError('Payment link not found', 404);
-  const plain = row.get({ plain: true });
-  const paid_orders_count = await countPaidOrdersForPaymentLink(id);
-  return { ...plain, paid_orders_count, seats_booked: paid_orders_count };
+  try {
+    const row = await PaymentLink.findByPk(id);
+    if (!row) throw new AppError('Payment link not found', 404);
+    const plain = row.get({ plain: true });
+    const paid_orders_count = await countPaidOrdersForPaymentLink(id);
+    return { ...plain, paid_orders_count, seats_booked: paid_orders_count };
+  } catch (err) {
+    if (!err.isOperational) {
+      logger.error('[paymentLink] getPaymentLinkById failed', { error: err.message, id });
+    }
+    throw err;
+  }
 }
 
 async function createPaymentLink(body) {
-  const payload = validatePayload(body, { partial: false });
-  await assertSlugUnique(payload.slug);
-  const created = await PaymentLink.create(payload);
-  const plain = created.get({ plain: true });
-  return { ...plain, paid_orders_count: 0, seats_booked: 0 };
+  try {
+    const payload = validatePayload(body, { partial: false });
+    await assertSlugUnique(payload.slug);
+    const created = await PaymentLink.create(payload);
+    const plain = created.get({ plain: true });
+    return { ...plain, paid_orders_count: 0, seats_booked: 0 };
+  } catch (err) {
+    if (!err.isOperational) {
+      logger.error('[paymentLink] createPaymentLink failed', {
+        error: err.message,
+        payload: body,
+      });
+    }
+    throw err;
+  }
 }
 
 async function updatePaymentLink(id, body) {
-  const row = await PaymentLink.findByPk(id);
-  if (!row) throw new AppError('Payment link not found', 404);
-  const prev = row.get({ plain: true });
-  const patch = validatePayload({ ...prev, ...body }, { partial: true });
-  delete patch.seats_booked;
-  if (patch.slug) await assertSlugUnique(patch.slug, id);
-  const rvChanged =
-    patch.random_value !== undefined && String(patch.random_value ?? '') !== String(prev.random_value ?? '');
-  const totalChanged =
-    patch.total_seats !== undefined && Number(patch.total_seats) !== Number(prev.total_seats);
-  if (rvChanged || totalChanged) {
-    patch.random_boost_accumulator = 0;
+  try {
+    const row = await PaymentLink.findByPk(id);
+    if (!row) throw new AppError('Payment link not found', 404);
+    const prev = row.get({ plain: true });
+    const patch = validatePayload({ ...prev, ...body }, { partial: true });
+    delete patch.seats_booked;
+    if (patch.slug) await assertSlugUnique(patch.slug, id);
+    const rvChanged =
+      patch.random_value !== undefined && String(patch.random_value ?? '') !== String(prev.random_value ?? '');
+    const totalChanged =
+      patch.total_seats !== undefined && Number(patch.total_seats) !== Number(prev.total_seats);
+    if (rvChanged || totalChanged) {
+      // Changing random_value or total_seats always resets accumulator to 0
+      patch.random_boost_accumulator = 0;
+    } else if (body.random_boost_accumulator !== undefined && body.random_boost_accumulator !== null) {
+      // Admin explicitly set the accumulator start value
+      const acc = parseInt(String(body.random_boost_accumulator), 10);
+      if (Number.isFinite(acc) && acc >= 0) {
+        patch.random_boost_accumulator = acc;
+      }
+    }
+    await row.update(patch);
+    await row.reload();
+    const plain = row.get({ plain: true });
+    const paid_orders_count = await countPaidOrdersForPaymentLink(id);
+    return { ...plain, paid_orders_count, seats_booked: paid_orders_count };
+  } catch (err) {
+    if (!err.isOperational) {
+      logger.error('[paymentLink] updatePaymentLink failed', {
+        error: err.message,
+        id,
+        payload: body,
+      });
+    }
+    throw err;
   }
-  await row.update(patch);
-  await row.reload();
-  const plain = row.get({ plain: true });
-  const paid_orders_count = await countPaidOrdersForPaymentLink(id);
-  return { ...plain, paid_orders_count, seats_booked: paid_orders_count };
 }
 
 async function deletePaymentLink(id) {
-  const row = await PaymentLink.findByPk(id);
-  if (!row) throw new AppError('Payment link not found', 404);
-  await row.destroy();
+  try {
+    const row = await PaymentLink.findByPk(id);
+    if (!row) throw new AppError('Payment link not found', 404);
+    await row.destroy();
+  } catch (err) {
+    if (!err.isOperational) {
+      logger.error('[paymentLink] deletePaymentLink failed', { error: err.message, id });
+    }
+    throw err;
+  }
 }
 
 function attachPublicComputed(row) {
