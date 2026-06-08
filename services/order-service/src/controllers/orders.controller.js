@@ -74,6 +74,18 @@ const listCouponUsagesInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 });
 
+const getOrderStatsInternal = asyncHandler(async (req, res) => {
+  const { dateFrom, dateTo } = req.query;
+  const data = await ordersService.getOrderStats({ dateFrom, dateTo });
+  sendSuccess(res, data);
+});
+
+const getRevenueTimeSeriesInternal = asyncHandler(async (req, res) => {
+  const { dateFrom, dateTo, bucket } = req.query;
+  const data = await ordersService.getRevenueTimeSeries({ dateFrom, dateTo, bucket });
+  sendSuccess(res, data);
+});
+
 const listAllInternal = asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
   const offset = parseInt(req.query.offset || '0', 10);
@@ -204,6 +216,8 @@ module.exports = {
   getCoupons,
   applyCoupon,
   getInvoice,
+  getOrderStatsInternal,
+  getRevenueTimeSeriesInternal,
   listAllInternal,
   listCouponUsagesInternal,
   getCouponUsageSummaryInternal,

@@ -9,6 +9,7 @@ function register(router) {
   router.get('/platform/payment-links/:slug', controller.getPaymentLinkPublicBySlug);
   router.get('/internal/payment-links/:id', internalAuth, controller.getPaymentLinkInternal);
   router.get('/admin/stats', requireAdmin, controller.getStats);
+  router.get('/admin/dashboard/stats', requireAdmin, controller.getDashboardStats);
   router.put('/admin/payment-config', requireAdmin, controller.updatePaymentConfig);
   router.get('/admin/logs', requireAdmin, controller.getLogs);
 
