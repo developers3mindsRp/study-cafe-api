@@ -275,4 +275,9 @@ async function distinctStates() {
     return rows.map((r) => r.state).filter(Boolean);
 }
 
-module.exports = { list, getOne, create, update, remove, listByIds, distinctStates };
+async function count() {
+    const total = await User.count();
+    return { total };
+}
+
+module.exports = { list, getOne, create, update, remove, listByIds, distinctStates, count };
