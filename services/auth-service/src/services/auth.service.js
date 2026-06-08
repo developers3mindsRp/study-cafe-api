@@ -335,13 +335,36 @@ async function register({
   };
 }
 
-async function loginWithPassword({ email, password }) {
-  const norm = String(email).trim().toLowerCase();
-  const user = await User.scope('withPassword').findOne({
-    where: { email: norm, is_active: true },
-    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
-    attributes: SESSION_USER_ATTRS,
+async function findActiveUserByLoginIdentifier(identifier) {
+  const raw = String(identifier || '').trim();
+  if (!raw) return null;
+
+  const include = [{ model: Role, as: 'Role', attributes: ['name'] }];
+  const attrs = SESSION_USER_ATTRS;
+
+  if (raw.includes('@')) {
+    return User.scope('withPassword').findOne({
+      where: { email: raw.toLowerCase(), is_active: true },
+      include,
+      attributes: attrs,
+    });
+  }
+
+  const orClauses = [{ login: raw }];
+  if (/^\d+$/.test(raw)) {
+    const num = Number(raw);
+    orClauses.push({ wp_user_id: num }, { id: num });
+  }
+
+  return User.scope('withPassword').findOne({
+    where: { [Op.or]: orClauses, is_active: true },
+    include,
+    attributes: attrs,
   });
+}
+
+async function loginWithPassword({ email, password }) {
+  const user = await findActiveUserByLoginIdentifier(email);
   if (!user) return null;
   const passwordValid = await verifyAndMaybeUpgradePassword(password, user);
   if (!passwordValid) return null;

@@ -115,8 +115,11 @@ async function main() {
     await migrateForumTopics(src, tgt);
     await migrateEnrollments(src, tgt);
     await migrateUserCourses(src, tgt);
+    await migrateBatchEnrollments(src, tgt);
     await migrateCourseAuthors(src, tgt);
     await migrateAffiliateData(src, tgt);
+
+    await applyPostMigrationDataPatches(tgt);
 
     console.log('\n════════════════════════════════════');
     console.log('  ✅ Migration complete!');
@@ -1068,6 +1071,41 @@ async function ensureDefaultRoles(tgt) {
 
 // ──────────── Migration functions ────────────
 
+/** WP-migrated recordings default to visible unless explicitly hidden. */
+function recordingIsVisibleFlag(r) {
+    if (r.is_visible === 1 || r.is_visible === true) return 1;
+    if (r.is_visible === 0 || r.is_visible === false) return 0;
+    return 1;
+}
+
+const ARTICLE_UPSERT_TAIL = `
+ON DUPLICATE KEY UPDATE
+  wp_post_id=VALUES(wp_post_id), title=VALUES(title), slug=VALUES(slug), content=VALUES(content),
+  excerpt=VALUES(excerpt), sub_heading=VALUES(sub_heading), author_id=VALUES(author_id),
+  thumbnail_url=VALUES(thumbnail_url), views=VALUES(views), meta_title=VALUES(meta_title),
+  meta_description=VALUES(meta_description), meta_keywords=VALUES(meta_keywords),
+  case_name=VALUES(case_name), citation=VALUES(citation), appeal_number=VALUES(appeal_number),
+  judgement_date=VALUES(judgement_date), assessment_year=VALUES(assessment_year),
+  court_name=VALUES(court_name), section=VALUES(section), noti_no=VALUES(noti_no),
+  noti_date=VALUES(noti_date), ext_link=VALUES(ext_link), upload_url=VALUES(upload_url),
+  rel_download_url=VALUES(rel_download_url), external_links=VALUES(external_links),
+  status=VALUES(status), blog_access_tier=VALUES(blog_access_tier),
+  published_at=VALUES(published_at), updated_at=VALUES(updated_at)`;
+
+const COURSE_UPSERT_TAIL = `
+ON DUPLICATE KEY UPDATE
+  wp_post_id=VALUES(wp_post_id), title=VALUES(title), short_title=VALUES(short_title), slug=VALUES(slug),
+  brief_description=VALUES(brief_description), description=VALUES(description), curriculum=VALUES(curriculum),
+  learn_outcomes=VALUES(learn_outcomes), requirements=VALUES(requirements), terms_conditions=VALUES(terms_conditions),
+  price=VALUES(price), sale_price=VALUES(sale_price), enrolled_count=VALUES(enrolled_count),
+  ratings=VALUES(ratings), rating_users=VALUES(rating_users), thumbnail_url=VALUES(thumbnail_url),
+  youtube_url=VALUES(youtube_url), language=VALUES(language), course_type=VALUES(course_type),
+  taxable=VALUES(taxable), keywords=VALUES(keywords), faqs=VALUES(faqs), feedback=VALUES(feedback),
+  includes_info=VALUES(includes_info), course_includes=VALUES(course_includes),
+  certifications=VALUES(certifications), gateway=VALUES(gateway),
+  is_published=VALUES(is_published), status=VALUES(status),
+  start_date=VALUES(start_date), end_date=VALUES(end_date), updated_at=VALUES(updated_at)`;
+
 async function migrateUsers(src, tgt) {
     console.log('👤 Migrating users...');
     const total = await src.query(`SELECT COUNT(*) as c FROM \`${_srcUsersTable}\``, { type: QueryTypes.SELECT });
@@ -1093,13 +1131,24 @@ async function migrateUsers(src, tgt) {
     for (let i = 0; i < allUsers.length; i += BATCH) {
         const chunk = allUsers.slice(i, i + BATCH);
         const values = chunk.map(u => {
-            const passHash = passwords[u.wp_user_id] || null;
-            const email = u.email || `wp_${u.wp_user_id || u.id}@placeholder.studycafe.in`;
+            const { id: msId, wpRefSql } = msWpEntityIdExpr(u, 'wp_user_id');
+            const passHash = passwords[msId] || passwords[u.wp_user_id] || null;
+            const email = u.email || `wp_${msId}@placeholder.studycafe.in`;
             const membership = normalizeMembershipSlug(u.membership);
-            return `(${u.id}, ${esc(u.wp_user_id)}, ${esc(email)}, ${esc(passHash)}, ${esc(u.display_name)}, ${esc(u.display_name)}, ${esc(u.login)}, ${esc(u.first_name)}, ${esc(u.last_name)}, ${esc(u.user_nicename)}, ${esc(u.user_url)}, ${esc(u.phone)}, ${esc(u.profession)}, ${esc(u.designation)}, ${esc(u.company)}, ${esc(u.city)}, ${esc(u.state)}, ${esc(u.country)}, ${escUploadUrl(u.profile_pic_url)}, ${esc(membership)}, ${esc(u.plan)}, ${defaultUserRoleId}, 'user', 1, ${esc(u.status)}, ${esc(u.facebook)}, ${esc(u.twitter)}, ${esc(u.linkedin)}, ${esc(u.instagram)}, ${esc(u.youtube)}, ${esc(u.gst)}, ${esc(u.account_status)}, ${esc(u.bio)}, ${escDate(u.created_at)}, ${escDate(u.created_at)})`;
+            return `(${msId}, ${wpRefSql}, ${esc(email)}, ${esc(passHash)}, ${esc(u.display_name)}, ${esc(u.display_name)}, ${esc(u.login)}, ${esc(u.first_name)}, ${esc(u.last_name)}, ${esc(u.user_nicename)}, ${esc(u.user_url)}, ${esc(u.phone)}, ${esc(u.profession)}, ${esc(u.designation)}, ${esc(u.company)}, ${esc(u.city)}, ${esc(u.state)}, ${esc(u.country)}, ${escUploadUrl(u.profile_pic_url)}, ${esc(membership)}, ${esc(u.plan)}, ${defaultUserRoleId}, 'user', 1, ${esc(u.status)}, ${esc(u.facebook)}, ${esc(u.twitter)}, ${esc(u.linkedin)}, ${esc(u.instagram)}, ${esc(u.youtube)}, ${esc(u.gst)}, ${esc(u.account_status)}, ${esc(u.bio)}, ${escDate(u.created_at)}, ${escDate(u.created_at)})`;
         }).join(',');
-        await tgt.query(`INSERT IGNORE INTO users (id, wp_user_id, email, password_hash, name, display_name, login, first_name, last_name, user_nicename, user_url, phone, profession, designation, company, city, state, country, profile_pic_url, membership, plan, role_id, role, is_active, status, facebook, twitter, linkedin, instagram, youtube, gst, account_status, bio, created_at, updated_at) VALUES ${values}`, { raw: true });
+        await tgt.query(`INSERT INTO users (id, wp_user_id, email, password_hash, name, display_name, login, first_name, last_name, user_nicename, user_url, phone, profession, designation, company, city, state, country, profile_pic_url, membership, plan, role_id, role, is_active, status, facebook, twitter, linkedin, instagram, youtube, gst, account_status, bio, created_at, updated_at) VALUES ${values}
+        ON DUPLICATE KEY UPDATE
+          wp_user_id=VALUES(wp_user_id), email=VALUES(email), password_hash=VALUES(password_hash),
+          name=VALUES(name), display_name=VALUES(display_name), login=VALUES(login),
+          first_name=VALUES(first_name), last_name=VALUES(last_name), phone=VALUES(phone),
+          membership=VALUES(membership), plan=VALUES(plan), status=VALUES(status),
+          updated_at=VALUES(updated_at)`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allUsers.length)}/${allUsers.length}\r`);
+    }
+    if (allUsers.length) {
+        const nextAi = await bumpTableAutoIncrement(tgt, 'users');
+        console.log(`   🔢 users AUTO_INCREMENT → ${nextAi} (new rows omit id; wp_user_id NULL)`);
     }
     console.log(`   ✅ ${allUsers.length} users migrated (default role: user)`);
 }
@@ -1112,6 +1161,8 @@ async function migrateUsers(src, tgt) {
  */
 async function migrateUserMemberships(src, tgt) {
     console.log('🎫 Migrating user memberships...');
+    const userIdMap = await buildScUserIdMap(src);
+    const mapUid = (id) => userIdMap[id] ?? id;
     const users = await src.query(
         `SELECT id, membership, plan, created_at FROM \`${_srcUsersTable}\` WHERE (plan IS NOT NULL AND plan != "" AND plan != "null") OR (membership IS NOT NULL AND membership != "" AND membership != "free")`,
         { type: QueryTypes.SELECT }
@@ -1154,7 +1205,7 @@ async function migrateUserMemberships(src, tgt) {
         try {
             await tgt.query(
                 `INSERT INTO user_memberships (user_id, membership_type, order_id, starts_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-                { replacements: [u.id, membershipType, orderId, start, end], raw: true }
+                { replacements: [mapUid(u.id), membershipType, orderId, start, end], raw: true }
             );
             inserted++;
         } catch (err) {
@@ -1483,8 +1534,16 @@ async function migrateCategories(src, tgt) {
     await tgt.query('DELETE FROM article_categories', { raw: true });
     await tgt.query('DELETE FROM categories', { raw: true });
     if (!rows.length) return;
-    const values = rows.map(r => `(${r.id}, ${esc(r.wp_term_id)}, ${esc(r.name)}, ${esc(r.slug)}, ${r.parent_id || 'NULL'})`).join(',');
+    const parentIdMap = await buildScWpPostIdMap(src, 'sc_categories', 'wp_term_id');
+    const mapPid = (id) => (id != null && id !== '' ? (parentIdMap[id] ?? id) : null);
+    const values = rows.map(r => {
+        const { id: msId, wpRefSql } = msWpEntityIdExpr(r, 'wp_term_id');
+        const parentId = mapPid(r.parent_id);
+        return `(${msId}, ${wpRefSql}, ${esc(r.name)}, ${esc(r.slug)}, ${parentId || 'NULL'})`;
+    }).join(',');
     await tgt.query(`INSERT IGNORE INTO categories (id, wp_term_id, name, slug, parent_id) VALUES ${values}`, { raw: true });
+    const nextAi = await bumpTableAutoIncrement(tgt, 'categories');
+    console.log(`   🔢 categories AUTO_INCREMENT → ${nextAi}`);
     console.log(`   ✅ ${rows.length} categories`);
 }
 
@@ -1496,9 +1555,14 @@ async function migrateTags(src, tgt) {
     if (!rows.length) return;
     for (let i = 0; i < rows.length; i += BATCH) {
         const chunk = rows.slice(i, i + BATCH);
-        const values = chunk.map(r => `(${r.id}, ${esc(r.wp_term_id)}, ${esc(r.name)}, ${esc(r.slug)})`).join(',');
+        const values = chunk.map(r => {
+            const { id: msId, wpRefSql } = msWpEntityIdExpr(r, 'wp_term_id');
+            return `(${msId}, ${wpRefSql}, ${esc(r.name)}, ${esc(r.slug)})`;
+        }).join(',');
         await tgt.query(`INSERT IGNORE INTO tags (id, wp_term_id, name, slug) VALUES ${values}`, { raw: true });
     }
+    const nextAi = await bumpTableAutoIncrement(tgt, 'tags');
+    console.log(`   🔢 tags AUTO_INCREMENT → ${nextAi}`);
     console.log(`   ✅ ${rows.length} tags`);
 }
 
@@ -1508,8 +1572,13 @@ async function migrateArticleTypes(src, tgt) {
     await tgt.query('DELETE FROM article_types_map', { raw: true });
     await tgt.query('DELETE FROM article_types', { raw: true });
     if (!rows.length) return;
-    const values = rows.map(r => `(${r.id}, ${esc(r.wp_term_id)}, ${esc(r.name)}, ${esc(r.slug)})`).join(',');
+    const values = rows.map(r => {
+        const { id: msId, wpRefSql } = msWpEntityIdExpr(r, 'wp_term_id');
+        return `(${msId}, ${wpRefSql}, ${esc(r.name)}, ${esc(r.slug)})`;
+    }).join(',');
     await tgt.query(`INSERT IGNORE INTO article_types (id, wp_term_id, name, slug) VALUES ${values}`, { raw: true });
+    const nextAi = await bumpTableAutoIncrement(tgt, 'article_types');
+    console.log(`   🔢 article_types AUTO_INCREMENT → ${nextAi}`);
     console.log(`   ✅ ${rows.length} article types`);
 }
 
@@ -1519,8 +1588,13 @@ async function migrateCourts(src, tgt) {
     await tgt.query('DELETE FROM article_courts', { raw: true });
     await tgt.query('DELETE FROM courts', { raw: true });
     if (!rows.length) return;
-    const values = rows.map(r => `(${r.id}, ${esc(r.wp_term_id)}, ${esc(r.name)}, ${esc(r.slug)})`).join(',');
+    const values = rows.map(r => {
+        const { id: msId, wpRefSql } = msWpEntityIdExpr(r, 'wp_term_id');
+        return `(${msId}, ${wpRefSql}, ${esc(r.name)}, ${esc(r.slug)})`;
+    }).join(',');
     await tgt.query(`INSERT IGNORE INTO courts (id, wp_term_id, name, slug) VALUES ${values}`, { raw: true });
+    const nextAi = await bumpTableAutoIncrement(tgt, 'courts');
+    console.log(`   🔢 courts AUTO_INCREMENT → ${nextAi}`);
     console.log(`   ✅ ${rows.length} courts`);
 }
 
@@ -1530,8 +1604,13 @@ async function migrateCourseCats(src, tgt) {
     await tgt.query('DELETE FROM course_categories', { raw: true });
     await tgt.query('DELETE FROM course_cats', { raw: true });
     if (!rows.length) return;
-    const values = rows.map(r => `(${r.id}, ${esc(r.wp_term_id)}, ${esc(r.name)}, ${esc(r.slug)})`).join(',');
+    const values = rows.map(r => {
+        const { id: msId, wpRefSql } = msWpEntityIdExpr(r, 'wp_term_id');
+        return `(${msId}, ${wpRefSql}, ${esc(r.name)}, ${esc(r.slug)})`;
+    }).join(',');
     await tgt.query(`INSERT IGNORE INTO course_cats (id, wp_term_id, name, slug) VALUES ${values}`, { raw: true });
+    const nextAi = await bumpTableAutoIncrement(tgt, 'course_cats');
+    console.log(`   🔢 course_cats AUTO_INCREMENT → ${nextAi}`);
     console.log(`   ✅ ${rows.length} course cats`);
 }
 
@@ -1542,8 +1621,13 @@ async function migrateFileCats(src, tgt) {
         await tgt.query('DELETE FROM file_categories', { raw: true });
         await tgt.query('DELETE FROM file_cats', { raw: true });
         if (!rows.length) { console.log('   ✅ 0 file cats'); return; }
-        const values = rows.map(r => `(${r.id}, ${esc(r.wp_term_id)}, ${esc(r.name)}, ${esc(r.slug)})`).join(',');
+        const values = rows.map(r => {
+            const { id: msId, wpRefSql } = msWpEntityIdExpr(r, 'wp_term_id');
+            return `(${msId}, ${wpRefSql}, ${esc(r.name)}, ${esc(r.slug)})`;
+        }).join(',');
         await tgt.query(`INSERT IGNORE INTO file_cats (id, wp_term_id, name, slug) VALUES ${values}`, { raw: true });
+        const nextAi = await bumpTableAutoIncrement(tgt, 'file_cats');
+        console.log(`   🔢 file_cats AUTO_INCREMENT → ${nextAi}`);
         console.log(`   ✅ ${rows.length} file cats`);
     } catch (e) {
         if (e.message && e.message.includes("doesn't exist")) { console.log('   ⏭️  sc_file_cats not in source, skip'); return; }
@@ -1552,27 +1636,54 @@ async function migrateFileCats(src, tgt) {
 }
 
 /**
- * Migrated WP articles use articles.id = wp_post_id (WordPress post ID). Snapshot rows without
- * wp_post_id keep sc_articles surrogate id and wp_post_id NULL.
+ * Migrated WP rows use id = wp_* ref (wp_post_id, wp_user_id, wp_term_id, wp_comment_id).
+ * Rows without wp_* ref keep surrogate sc_* id and wp_* NULL; AUTO_INCREMENT continues after MAX(id).
  */
-function msArticleIdAndWpPostExprFromScRow(a) {
-    const wpRaw = a.wp_post_id;
+function msWpEntityIdExpr(row, wpField = 'wp_post_id') {
+    const wpRaw = row[wpField];
     const wp = wpRaw != null && wpRaw !== '' ? Number(wpRaw) : null;
     if (wp != null && Number.isFinite(wp) && wp > 0) {
-        return { id: wp, wpPostIdSql: String(wp) };
+        return { id: wp, wpRefSql: String(wp) };
     }
-    return { id: Number(a.id), wpPostIdSql: 'NULL' };
+    return { id: Number(row.id), wpRefSql: 'NULL' };
+}
+
+function msArticleIdAndWpPostExprFromScRow(a) {
+    const { id, wpRefSql } = msWpEntityIdExpr(a, 'wp_post_id');
+    return { id, wpPostIdSql: wpRefSql };
+}
+
+function msWpCommentIdExpr(c) {
+    const { id, wpRefSql } = msWpEntityIdExpr(c, 'wp_comment_id');
+    return { id, wpCommentIdSql: wpRefSql };
+}
+
+async function bumpTableAutoIncrement(tgt, table) {
+    const [mx] = await tgt.query(`SELECT IFNULL(MAX(id), 0) AS m FROM \`${table}\``, { type: QueryTypes.SELECT });
+    const nextAi = Number(mx.m) + 1;
+    await tgt.query(`ALTER TABLE \`${table}\` AUTO_INCREMENT = ${nextAi}`, { raw: true });
+    return nextAi;
+}
+
+/** sc_*.id (snapshot PK) → production id (WP post/comment id when wp_* column present). */
+async function buildScWpPostIdMap(src, table, wpField = 'wp_post_id') {
+    const rows = await src.query(`SELECT id, \`${wpField}\` AS wp_ref FROM \`${table}\``, { type: QueryTypes.SELECT });
+    const map = Object.create(null);
+    for (const row of rows || []) {
+        const wp = row.wp_ref != null && row.wp_ref !== '' ? Number(row.wp_ref) : null;
+        map[row.id] = wp != null && Number.isFinite(wp) && wp > 0 ? wp : Number(row.id);
+    }
+    return map;
 }
 
 /** sc_articles.id (snapshot PK) → articles.id in target (WP post id when present). */
 async function buildScArticleSurrogateToMsArticleIdMap(src) {
-    const rows = await src.query('SELECT id, wp_post_id FROM sc_articles', { type: QueryTypes.SELECT });
-    const map = Object.create(null);
-    for (const row of rows || []) {
-        const wp = row.wp_post_id != null && row.wp_post_id !== '' ? Number(row.wp_post_id) : null;
-        map[row.id] = wp != null && Number.isFinite(wp) && wp > 0 ? wp : Number(row.id);
-    }
-    return map;
+    return buildScWpPostIdMap(src, 'sc_articles', 'wp_post_id');
+}
+
+/** sc_users.id (snapshot PK) → users.id in target (WP user id when present). */
+async function buildScUserIdMap(src) {
+    return buildScWpPostIdMap(src, _srcUsersTable, 'wp_user_id');
 }
 
 async function migrateArticles(src, tgt) {
@@ -1580,30 +1691,25 @@ async function migrateArticles(src, tgt) {
     const total = await src.query('SELECT COUNT(*) as c FROM sc_articles', { type: QueryTypes.SELECT });
     console.log(`   Source: ${total[0].c} articles`);
 
-    await tgt.query('DELETE FROM comments', { raw: true });
-    await tgt.query('DELETE FROM article_categories', { raw: true });
-    await tgt.query('DELETE FROM article_tags', { raw: true });
-    await tgt.query('DELETE FROM article_types_map', { raw: true });
-    await tgt.query('DELETE FROM article_courts', { raw: true });
-    await tgt.query('DELETE FROM articles', { raw: true });
-
     const allArticles = await src.query('SELECT * FROM sc_articles ORDER BY id', { type: QueryTypes.SELECT });
+    const userIdMap = await buildScUserIdMap(src);
+    const mapUid = (id) => (id != null && id !== '' ? (userIdMap[id] ?? id) : null);
 
     for (let i = 0; i < allArticles.length; i += BATCH) {
         const chunk = allArticles.slice(i, i + BATCH);
         const values = chunk.map(a => {
             const accessTier = esc(a.blog_access_tier || 'free');
             const { id: msId, wpPostIdSql } = msArticleIdAndWpPostExprFromScRow(a);
-            return `(${msId}, ${wpPostIdSql}, ${esc(a.title, 65535)}, ${esc(a.slug)}, ${escUploadContent(a.content, 16000000)}, ${esc(a.excerpt, 65535)}, ${esc(a.sub_heading)}, ${a.author_id || 'NULL'}, ${escUploadUrl(a.thumbnail_url)}, ${a.views || 0}, ${esc(a.meta_title)}, ${esc(a.meta_description)}, ${esc(a.meta_keywords)}, ${esc(a.case_name)}, ${esc(a.citation)}, ${esc(a.appeal_number)}, ${esc(a.judgement_date)}, ${esc(a.assessment_year)}, ${esc(a.court_name)}, ${esc(a.section)}, ${esc(a.noti_no)}, ${esc(a.noti_date)}, ${esc(a.ext_link)}, ${escUploadUrl(a.upload_url)}, ${escUploadUrl(a.rel_download_url)}, ${esc(a.external_links)}, ${esc(a.status)}, ${accessTier}, ${escDate(a.published_at)}, ${escDate(a.created_at)}, ${escDate(a.updated_at)})`;
+            const viewsVal = a.views != null && a.views !== '' ? Number(a.views) || 0 : 0;
+            const authorId = mapUid(a.author_id);
+            return `(${msId}, ${wpPostIdSql}, ${esc(a.title, 65535)}, ${esc(a.slug)}, ${escUploadContent(a.content, 16000000)}, ${esc(a.excerpt, 65535)}, ${esc(a.sub_heading)}, ${authorId || 'NULL'}, ${escUploadUrl(a.thumbnail_url)}, ${viewsVal}, ${esc(a.meta_title)}, ${esc(a.meta_description)}, ${esc(a.meta_keywords)}, ${esc(a.case_name)}, ${esc(a.citation)}, ${esc(a.appeal_number)}, ${esc(a.judgement_date)}, ${esc(a.assessment_year)}, ${esc(a.court_name)}, ${esc(a.section)}, ${esc(a.noti_no)}, ${esc(a.noti_date)}, ${esc(a.ext_link)}, ${escUploadUrl(a.upload_url)}, ${escUploadUrl(a.rel_download_url)}, ${esc(a.external_links)}, ${esc(a.status)}, ${accessTier}, ${escDate(a.published_at)}, ${escDate(a.created_at)}, ${escDate(a.updated_at)})`;
         }).join(',');
-        await tgt.query(`INSERT IGNORE INTO articles (id, wp_post_id, title, slug, content, excerpt, sub_heading, author_id, thumbnail_url, views, meta_title, meta_description, meta_keywords, case_name, citation, appeal_number, judgement_date, assessment_year, court_name, section, noti_no, noti_date, ext_link, upload_url, rel_download_url, external_links, status, blog_access_tier, published_at, created_at, updated_at) VALUES ${values}`, { raw: true });
+        await tgt.query(`INSERT INTO articles (id, wp_post_id, title, slug, content, excerpt, sub_heading, author_id, thumbnail_url, views, meta_title, meta_description, meta_keywords, case_name, citation, appeal_number, judgement_date, assessment_year, court_name, section, noti_no, noti_date, ext_link, upload_url, rel_download_url, external_links, status, blog_access_tier, published_at, created_at, updated_at) VALUES ${values}${ARTICLE_UPSERT_TAIL}`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allArticles.length)}/${allArticles.length}\r`);
     }
 
     if (allArticles.length) {
-        const [mx] = await tgt.query('SELECT IFNULL(MAX(id), 0) AS m FROM articles', { type: QueryTypes.SELECT });
-        const nextAi = Number(mx.m) + 1;
-        await tgt.query(`ALTER TABLE articles AUTO_INCREMENT = ${nextAi}`, { raw: true });
+        const nextAi = await bumpTableAutoIncrement(tgt, 'articles');
         console.log(`   🔢 articles AUTO_INCREMENT → ${nextAi} (new rows omit id; wp_post_id NULL)`);
     }
     console.log(`   ✅ ${allArticles.length} articles`);
@@ -1613,11 +1719,19 @@ async function migrateArticleJunctions(src, tgt) {
     console.log('🔗 Migrating article junctions...');
     const articleIdMap = await buildScArticleSurrogateToMsArticleIdMap(src);
     const mapAid = (surrogateId) => articleIdMap[surrogateId] ?? surrogateId;
+    const categoryIdMap = await buildScWpPostIdMap(src, 'sc_categories', 'wp_term_id');
+    const tagIdMap = await buildScWpPostIdMap(src, 'sc_tags', 'wp_term_id');
+    const typeIdMap = await buildScWpPostIdMap(src, 'sc_article_types', 'wp_term_id');
+    const courtIdMap = await buildScWpPostIdMap(src, 'sc_courts', 'wp_term_id');
+    const mapCat = (id) => categoryIdMap[id] ?? id;
+    const mapTag = (id) => tagIdMap[id] ?? id;
+    const mapType = (id) => typeIdMap[id] ?? id;
+    const mapCourt = (id) => courtIdMap[id] ?? id;
 
     // Categories
     const cats = await src.query('SELECT * FROM sc_article_categories', { type: QueryTypes.SELECT });
     for (let i = 0; i < cats.length; i += BATCH) {
-        const vals = cats.slice(i, i + BATCH).map(r => `(${mapAid(r.article_id)}, ${r.category_id})`).join(',');
+        const vals = cats.slice(i, i + BATCH).map(r => `(${mapAid(r.article_id)}, ${mapCat(r.category_id)})`).join(',');
         await tgt.query(`INSERT IGNORE INTO article_categories (article_id, category_id) VALUES ${vals}`, { raw: true });
     }
     console.log(`   categories: ${cats.length}`);
@@ -1625,7 +1739,7 @@ async function migrateArticleJunctions(src, tgt) {
     // Tags
     const tags = await src.query('SELECT * FROM sc_article_tags', { type: QueryTypes.SELECT });
     for (let i = 0; i < tags.length; i += BATCH) {
-        const vals = tags.slice(i, i + BATCH).map(r => `(${mapAid(r.article_id)}, ${r.tag_id})`).join(',');
+        const vals = tags.slice(i, i + BATCH).map(r => `(${mapAid(r.article_id)}, ${mapTag(r.tag_id)})`).join(',');
         await tgt.query(`INSERT IGNORE INTO article_tags (article_id, tag_id) VALUES ${vals}`, { raw: true });
     }
     console.log(`   tags: ${tags.length}`);
@@ -1633,7 +1747,7 @@ async function migrateArticleJunctions(src, tgt) {
     // Types
     const types = await src.query('SELECT * FROM sc_article_types_map', { type: QueryTypes.SELECT });
     for (let i = 0; i < types.length; i += BATCH) {
-        const vals = types.slice(i, i + BATCH).map(r => `(${mapAid(r.article_id)}, ${r.article_type_id})`).join(',');
+        const vals = types.slice(i, i + BATCH).map(r => `(${mapAid(r.article_id)}, ${mapType(r.article_type_id)})`).join(',');
         await tgt.query(`INSERT IGNORE INTO article_types_map (article_id, article_type_id) VALUES ${vals}`, { raw: true });
     }
     console.log(`   types: ${types.length}`);
@@ -1641,7 +1755,7 @@ async function migrateArticleJunctions(src, tgt) {
     // Courts
     const courts = await src.query('SELECT * FROM sc_article_courts', { type: QueryTypes.SELECT });
     for (let i = 0; i < courts.length; i += BATCH) {
-        const vals = courts.slice(i, i + BATCH).map(r => `(${mapAid(r.article_id)}, ${r.court_id})`).join(',');
+        const vals = courts.slice(i, i + BATCH).map(r => `(${mapAid(r.article_id)}, ${mapCourt(r.court_id)})`).join(',');
         await tgt.query(`INSERT IGNORE INTO article_courts (article_id, court_id) VALUES ${vals}`, { raw: true });
     }
     console.log(`   courts: ${courts.length}`);
@@ -1653,23 +1767,27 @@ async function migrateComments(src, tgt) {
     const rows = await src.query('SELECT * FROM sc_comments ORDER BY id', { type: QueryTypes.SELECT });
     if (!rows.length) { console.log('   ✅ 0 comments'); return; }
     const articleIdMap = await buildScArticleSurrogateToMsArticleIdMap(src);
+    const userIdMap = await buildScUserIdMap(src);
     const mapAid = (surrogateId) => articleIdMap[surrogateId] ?? surrogateId;
+    const mapUid = (id) => (id != null && id !== '' ? (userIdMap[id] ?? id) : null);
     for (let i = 0; i < rows.length; i += BATCH) {
         const chunk = rows.slice(i, i + BATCH);
         const values = chunk.map(c => {
-            return `(${c.id}, ${esc(c.wp_comment_id)}, ${mapAid(c.article_id)}, ${c.user_id || 'NULL'}, ${esc(c.author_name)}, ${esc(c.author_email)}, ${esc(c.content, 65535)}, ${c.approved ? 1 : 0}, ${c.parent_id || 'NULL'}, ${escDate(c.created_at)})`;
+            const { id: msId, wpCommentIdSql } = msWpCommentIdExpr(c);
+            const userId = mapUid(c.user_id);
+            return `(${msId}, ${wpCommentIdSql}, ${mapAid(c.article_id)}, ${userId || 'NULL'}, ${esc(c.author_name)}, ${esc(c.author_email)}, ${esc(c.content, 65535)}, ${c.approved ? 1 : 0}, ${c.parent_id || 'NULL'}, ${escDate(c.created_at)})`;
         }).join(',');
         await tgt.query(`INSERT IGNORE INTO comments (id, wp_comment_id, article_id, user_id, author_name, author_email, content, approved, parent_id, created_at) VALUES ${values}`, { raw: true });
+    }
+    if (rows.length) {
+        const nextAi = await bumpTableAutoIncrement(tgt, 'comments');
+        console.log(`   🔢 comments AUTO_INCREMENT → ${nextAi}`);
     }
     console.log(`   ✅ ${rows.length} comments`);
 }
 
 async function migrateCourses(src, tgt) {
     console.log('🎓 Migrating courses...');
-    await tgt.query('DELETE FROM course_categories', { raw: true });
-    await tgt.query('DELETE FROM course_authors', { raw: true });
-    await tgt.query('DELETE FROM enrollments', { raw: true });
-    await tgt.query('DELETE FROM courses', { raw: true });
 
     const rows = await src.query('SELECT * FROM sc_courses ORDER BY id', { type: QueryTypes.SELECT });
     if (!rows.length) { console.log('   ✅ 0 courses'); return; }
@@ -1677,9 +1795,14 @@ async function migrateCourses(src, tgt) {
     const values = rows.map(c => {
         const isPub = c.status === 'publish' ? 1 : 0;
         const courseIncludes = c.course_includes != null && c.course_includes !== '' ? c.course_includes : null;
-        return `(${c.id}, ${esc(c.wp_post_id)}, ${esc(c.title)}, ${esc(c.short_title)}, ${esc(c.slug)}, ${esc(c.brief_description)}, ${escUploadContent(c.description, 16000000)}, ${escUploadContent(c.curriculum, 16000000)}, ${esc(c.learn_outcomes)}, ${esc(c.requirements)}, ${esc(c.terms_conditions)}, ${c.price || 0}, ${c.sale_price || 'NULL'}, ${c.enrolled_count || 0}, ${c.ratings || 'NULL'}, ${c.rating_users || 0}, ${escUploadUrl(c.thumbnail_url)}, ${esc(c.youtube_url)}, ${esc(c.language)}, ${esc(c.course_type)}, ${c.taxable ? 1 : 0}, ${esc(c.keywords)}, ${esc(c.faqs, 16000000)}, ${esc(c.feedback, 16000000)}, ${esc(c.includes_info, 16000000)}, ${escUploadContent(courseIncludes, 16000000)}, ${esc(c.certifications)}, ${esc(c.gateway)}, ${isPub}, ${esc(c.status)}, ${escDate(c.start_date)}, ${escDate(c.end_date)}, ${escDate(c.created_at)}, ${escDate(c.updated_at)})`;
+        const { id: msId, wpRefSql } = msWpEntityIdExpr(c, 'wp_post_id');
+        return `(${msId}, ${wpRefSql}, ${esc(c.title)}, ${esc(c.short_title)}, ${esc(c.slug)}, ${esc(c.brief_description)}, ${escUploadContent(c.description, 16000000)}, ${escUploadContent(c.curriculum, 16000000)}, ${esc(c.learn_outcomes)}, ${esc(c.requirements)}, ${esc(c.terms_conditions)}, ${c.price || 0}, ${c.sale_price || 'NULL'}, ${c.enrolled_count || 0}, ${c.ratings || 'NULL'}, ${c.rating_users || 0}, ${escUploadUrl(c.thumbnail_url)}, ${esc(c.youtube_url)}, ${esc(c.language)}, ${esc(c.course_type)}, ${c.taxable ? 1 : 0}, ${esc(c.keywords)}, ${esc(c.faqs, 16000000)}, ${esc(c.feedback, 16000000)}, ${esc(c.includes_info, 16000000)}, ${escUploadContent(courseIncludes, 16000000)}, ${esc(c.certifications)}, ${esc(c.gateway)}, ${isPub}, ${esc(c.status)}, ${escDate(c.start_date)}, ${escDate(c.end_date)}, ${escDate(c.created_at)}, ${escDate(c.updated_at)})`;
     }).join(',');
-    await tgt.query(`INSERT IGNORE INTO courses (id, wp_post_id, title, short_title, slug, brief_description, description, curriculum, learn_outcomes, requirements, terms_conditions, price, sale_price, enrolled_count, ratings, rating_users, thumbnail_url, youtube_url, language, course_type, taxable, keywords, faqs, feedback, includes_info, course_includes, certifications, gateway, is_published, status, start_date, end_date, created_at, updated_at) VALUES ${values}`, { raw: true });
+    await tgt.query(`INSERT INTO courses (id, wp_post_id, title, short_title, slug, brief_description, description, curriculum, learn_outcomes, requirements, terms_conditions, price, sale_price, enrolled_count, ratings, rating_users, thumbnail_url, youtube_url, language, course_type, taxable, keywords, faqs, feedback, includes_info, course_includes, certifications, gateway, is_published, status, start_date, end_date, created_at, updated_at) VALUES ${values}${COURSE_UPSERT_TAIL}`, { raw: true });
+    if (rows.length) {
+        const nextAi = await bumpTableAutoIncrement(tgt, 'courses');
+        console.log(`   🔢 courses AUTO_INCREMENT → ${nextAi}`);
+    }
     console.log(`   ✅ ${rows.length} courses`);
 }
 
@@ -1694,12 +1817,14 @@ async function migrateBatches(src, tgt) {
     console.log('📦 Migrating batches (upsert — admin-created batches preserved)...');
     const rows = await src.query(`SELECT * FROM \`${name}\` ORDER BY id`, { type: QueryTypes.SELECT });
     if (!rows.length) { console.log('   ✅ 0 source batches (existing batches preserved)'); return; }
+    const courseIdMap = await buildScWpPostIdMap(src, 'sc_courses', 'wp_post_id');
+    const mapCid = (id) => courseIdMap[id] ?? id;
     const courseIds = await tgt.query('SELECT id FROM courses', { type: QueryTypes.SELECT });
     const validIds = new Set((courseIds || []).map(r => r.id));
-    const filtered = rows.filter(r => validIds.has(r.course_id));
+    const filtered = rows.filter(r => validIds.has(mapCid(r.course_id)));
     for (let i = 0; i < filtered.length; i += BATCH) {
         const chunk = filtered.slice(i, i + BATCH);
-        const values = chunk.map(b => `(${b.id}, ${b.course_id}, ${esc(b.name)}, ${escDate(b.start_date)}, ${escDate(b.end_date)}, ${esc(b.meet_link)})`).join(',');
+        const values = chunk.map(b => `(${b.id}, ${mapCid(b.course_id)}, ${esc(b.name)}, ${escDate(b.start_date)}, ${escDate(b.end_date)}, ${esc(b.meet_link)})`).join(',');
         await tgt.query(`INSERT INTO batches (id, course_id, name, start_date, end_date, meet_link) VALUES ${values} ON DUPLICATE KEY UPDATE course_id=VALUES(course_id), name=VALUES(name), start_date=VALUES(start_date), end_date=VALUES(end_date), meet_link=VALUES(meet_link)`, { raw: true });
     }
     console.log(`   ✅ ${filtered.length} source batches synced (admin-created batches preserved)`);
@@ -1743,7 +1868,7 @@ async function migrateRecordings(src, tgt) {
     if (!filtered.length) { console.log('   ✅ 0 source recordings (existing recordings preserved)'); return; }
     for (let i = 0; i < filtered.length; i += BATCH) {
         const chunk = filtered.slice(i, i + BATCH);
-        const values = chunk.map(r => `(${r.id}, ${r.session_id}, ${esc(r.url)}, ${esc(r.source)}, ${r.is_visible ? 1 : 0})`).join(',');
+        const values = chunk.map(r => `(${r.id}, ${r.session_id}, ${esc(r.url)}, ${esc(r.source)}, ${recordingIsVisibleFlag(r)})`).join(',');
         await tgt.query(`INSERT INTO recordings (id, session_id, url, source, is_visible) VALUES ${values} ON DUPLICATE KEY UPDATE session_id=VALUES(session_id), url=VALUES(url), source=VALUES(source), is_visible=VALUES(is_visible)`, { raw: true });
     }
     console.log(`   ✅ ${filtered.length} source recordings synced (admin-created recordings preserved)`);
@@ -1751,13 +1876,27 @@ async function migrateRecordings(src, tgt) {
 
 async function migrateCourseJunctions(src, tgt) {
     console.log('🔗 Migrating course junctions...');
+    const courseIdMap = await buildScWpPostIdMap(src, 'sc_courses', 'wp_post_id');
+    const courseCatIdMap = await buildScWpPostIdMap(src, 'sc_course_cats', 'wp_term_id');
+    const mapCid = (id) => courseIdMap[id] ?? id;
+    const mapCourseCat = (id) => courseCatIdMap[id] ?? id;
     const cats = await src.query('SELECT * FROM sc_course_categories', { type: QueryTypes.SELECT });
     if (cats.length) {
-        const vals = cats.map(r => `(${r.course_id}, ${r.course_cat_id})`).join(',');
+        const vals = cats.map(r => `(${mapCid(r.course_id)}, ${mapCourseCat(r.course_cat_id)})`).join(',');
         await tgt.query(`INSERT IGNORE INTO course_categories (course_id, course_cat_id) VALUES ${vals}`, { raw: true });
     }
     console.log(`   course-cats: ${cats.length}`);
     console.log('   ✅ course junctions');
+}
+
+/** WP legacy orders used draft/publish as post status; rp_payment_id means captured payment. */
+function normalizeMigratedOrderStatus(o) {
+    const rpPay = o.rp_payment_id && String(o.rp_payment_id).trim();
+    if (rpPay) return 'paid';
+    const raw = String(o.status || '').toLowerCase().trim();
+    if (raw === 'paid') return 'paid';
+    if (raw === 'trash' || raw === 'cancelled' || raw === 'failed') return 'cancelled';
+    return 'pending';
 }
 
 async function migrateOrders(src, tgt) {
@@ -1768,20 +1907,32 @@ async function migrateOrders(src, tgt) {
     console.log(`   Source: ${total[0].c} orders`);
 
     const allOrders = await src.query('SELECT * FROM sc_orders ORDER BY id', { type: QueryTypes.SELECT });
+    const courseIdMap = await buildScWpPostIdMap(src, 'sc_courses', 'wp_post_id');
+    const userIdMap = await buildScUserIdMap(src);
+    const mapCid = (id) => (id != null && id !== '' ? (courseIdMap[id] ?? id) : null);
+    const mapUid = (id) => (id != null && id !== '' ? (userIdMap[id] ?? id) : null);
 
     for (let i = 0; i < allOrders.length; i += BATCH) {
         const chunk = allOrders.slice(i, i + BATCH);
         const values = chunk.map(o => {
-            const orderId = esc(`ORD_${o.id}`);
-            const type = (o.course_id != null && o.course_id !== '') ? 'course' : 'membership';
-            const entityId = o.course_id != null && o.course_id !== '' ? esc(String(o.course_id)) : 'NULL';
+            const { id: msId, wpRefSql } = msWpEntityIdExpr(o, 'wp_post_id');
+            const orderId = esc(`ORD_${msId}`);
+            const courseId = mapCid(o.course_id);
+            const userId = mapUid(o.user_id);
+            const type = courseId != null ? 'course' : 'membership';
+            const entityId = courseId != null ? esc(String(courseId)) : 'NULL';
             const originalAmount = o.original_amount != null ? o.original_amount : (o.amount || 'NULL');
             const couponCode = o.coupon_code ? esc(o.coupon_code) : 'NULL';
             const couponDiscount = o.coupon_discount != null ? o.coupon_discount : 0;
-            return `(${o.id}, ${esc(o.wp_post_id)}, ${orderId}, ${o.user_id || 'NULL'}, ${o.course_id || 'NULL'}, ${esc(type)}, ${entityId}, ${o.amount || 'NULL'}, ${originalAmount}, ${couponCode}, ${couponDiscount}, 'INR', ${esc(o.buyer_name)}, ${esc(o.buyer_email)}, ${esc(o.buyer_mobile)}, ${esc(o.rp_payment_id)}, NULL, ${esc(o.affiliate)}, ${esc(o.certificate_name)}, ${esc(o.certificate_issue_date)}, ${esc(o.status)}, ${esc(o.gateway)}, ${escDate(o.created_at)})`;
+            const status = normalizeMigratedOrderStatus(o);
+            return `(${msId}, ${wpRefSql}, ${orderId}, ${userId || 'NULL'}, ${courseId || 'NULL'}, ${esc(type)}, ${entityId}, ${o.amount || 'NULL'}, ${originalAmount}, ${couponCode}, ${couponDiscount}, 'INR', ${esc(o.buyer_name)}, ${esc(o.buyer_email)}, ${esc(o.buyer_mobile)}, ${esc(o.rp_payment_id)}, NULL, ${esc(o.affiliate)}, ${esc(o.certificate_name)}, ${esc(o.certificate_issue_date)}, ${esc(status)}, ${esc(o.gateway)}, ${escDate(o.created_at)})`;
         }).join(',');
         await tgt.query(`INSERT IGNORE INTO orders (id, wp_post_id, order_id, user_id, course_id, type, entity_id, amount, original_amount, coupon_code, coupon_discount, currency, buyer_name, buyer_email, buyer_mobile, rp_payment_id, razorpay_order_id, affiliate, certificate_name, certificate_issue_date, status, gateway, created_at) VALUES ${values}`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allOrders.length)}/${allOrders.length}\r`);
+    }
+    if (allOrders.length) {
+        const nextAi = await bumpTableAutoIncrement(tgt, 'orders');
+        console.log(`   🔢 orders AUTO_INCREMENT → ${nextAi}`);
     }
     console.log(`   ✅ ${allOrders.length} orders`);
 }
@@ -1795,9 +1946,14 @@ async function migrateCoupons(src, tgt) {
         const visibility = esc(c.visibility || 'public');
         const usageLimit = c.usage_limit != null ? c.usage_limit : 'NULL';
         const perUserLimit = c.per_user_limit != null ? c.per_user_limit : 1;
-        return `(${c.id}, ${esc(c.wp_post_id)}, ${esc(c.code)}, ${esc(c.description)}, ${esc(c.type)}, ${c.value || 'NULL'}, ${c.min_order || 'NULL'}, ${c.max_discount || 'NULL'}, ${esc(c.discount_on)}, ${escDate(c.start_date)}, ${escDate(c.expire_date)}, ${esc(c.status)}, ${visibility}, ${usageLimit}, ${perUserLimit}, ${escDate(c.created_at)})`;
+        const { id: msId, wpRefSql } = msWpEntityIdExpr(c, 'wp_post_id');
+        return `(${msId}, ${wpRefSql}, ${esc(c.code)}, ${esc(c.description)}, ${esc(c.type)}, ${c.value || 'NULL'}, ${c.min_order || 'NULL'}, ${c.max_discount || 'NULL'}, ${esc(c.discount_on)}, ${escDate(c.start_date)}, ${escDate(c.expire_date)}, ${esc(c.status)}, ${visibility}, ${usageLimit}, ${perUserLimit}, ${escDate(c.created_at)})`;
     }).join(',');
     await tgt.query(`INSERT IGNORE INTO coupons (id, wp_post_id, code, description, type, value, min_order, max_discount, discount_on, start_date, expire_date, status, visibility, usage_limit, per_user_limit, created_at) VALUES ${values}`, { raw: true });
+    if (rows.length) {
+        const nextAi = await bumpTableAutoIncrement(tgt, 'coupons');
+        console.log(`   🔢 coupons AUTO_INCREMENT → ${nextAi}`);
+    }
     console.log(`   ✅ ${rows.length} coupons`);
 }
 
@@ -1808,10 +1964,20 @@ async function migrateFiles(src, tgt) {
         await tgt.query('DELETE FROM file_categories', { raw: true });
         await tgt.query('DELETE FROM files', { raw: true });
         if (!rows.length) { console.log('   ✅ 0 files'); return; }
+        const userIdMap = await buildScUserIdMap(src);
+        const mapUid = (id) => (id != null && id !== '' ? (userIdMap[id] ?? id) : null);
         for (let i = 0; i < rows.length; i += BATCH) {
             const chunk = rows.slice(i, i + BATCH);
-            const values = chunk.map(f => `(${f.id}, ${esc(f.wp_post_id)}, ${esc(f.title, 65535)}, ${esc(f.slug)}, ${escUploadUrl(f.file_url)}, ${f.author_id || 'NULL'}, ${f.views || 0}, ${esc(f.status)}, ${esc(f.meta_title)}, ${esc(f.meta_description)}, ${esc(f.meta_keywords)}, ${escDate(f.created_at)})`).join(',');
+            const values = chunk.map(f => {
+                const { id: msId, wpRefSql } = msWpEntityIdExpr(f, 'wp_post_id');
+                const authorId = mapUid(f.author_id);
+                return `(${msId}, ${wpRefSql}, ${esc(f.title, 65535)}, ${esc(f.slug)}, ${escUploadUrl(f.file_url)}, ${authorId || 'NULL'}, ${f.views || 0}, ${esc(f.status)}, ${esc(f.meta_title)}, ${esc(f.meta_description)}, ${esc(f.meta_keywords)}, ${escDate(f.created_at)})`;
+            }).join(',');
             await tgt.query(`INSERT IGNORE INTO files (id, wp_post_id, title, slug, file_url, author_id, views, status, meta_title, meta_description, meta_keywords, created_at) VALUES ${values}`, { raw: true });
+        }
+        if (rows.length) {
+            const nextAi = await bumpTableAutoIncrement(tgt, 'files');
+            console.log(`   🔢 files AUTO_INCREMENT → ${nextAi}`);
         }
         console.log(`   ✅ ${rows.length} files`);
     } catch (e) {
@@ -1823,11 +1989,15 @@ async function migrateFiles(src, tgt) {
 async function migrateFileCategories(src, tgt) {
     console.log('🔗 Migrating file_categories...');
     try {
+        const fileIdMap = await buildScWpPostIdMap(src, 'sc_files', 'wp_post_id');
+        const fileCatIdMap = await buildScWpPostIdMap(src, 'sc_file_cats', 'wp_term_id');
+        const mapFid = (id) => fileIdMap[id] ?? id;
+        const mapFileCat = (id) => fileCatIdMap[id] ?? id;
         const rows = await src.query('SELECT * FROM sc_file_categories', { type: QueryTypes.SELECT });
         if (!rows.length) { console.log('   ✅ 0 file_categories'); return; }
         for (let i = 0; i < rows.length; i += BATCH) {
             const chunk = rows.slice(i, i + BATCH);
-            const values = chunk.map(r => `(${r.file_id}, ${r.file_cat_id})`).join(',');
+            const values = chunk.map(r => `(${mapFid(r.file_id)}, ${mapFileCat(r.file_cat_id)})`).join(',');
             await tgt.query(`INSERT IGNORE INTO file_categories (file_id, file_cat_id) VALUES ${values}`, { raw: true });
         }
         console.log(`   ✅ ${rows.length} file_categories`);
@@ -1847,8 +2017,15 @@ async function migratePages(src, tgt) {
         if (!rows.length) { console.log('   ✅ 0 pages'); return; }
         for (let i = 0; i < rows.length; i += BATCH) {
             const chunk = rows.slice(i, i + BATCH);
-            const values = chunk.map(p => `(${p.id}, ${esc(p.wp_post_id)}, ${esc(p.title)}, ${esc(p.slug)}, ${escUploadContent(p.content, 16000000)}, ${esc(p.template)}, ${esc(p.status)}, ${escDate(p.created_at)}, ${escDate(p.updated_at)})`).join(',');
+            const values = chunk.map(p => {
+                const { id: msId, wpRefSql } = msWpEntityIdExpr(p, 'wp_post_id');
+                return `(${msId}, ${wpRefSql}, ${esc(p.title)}, ${esc(p.slug)}, ${escUploadContent(p.content, 16000000)}, ${esc(p.template)}, ${esc(p.status)}, ${escDate(p.created_at)}, ${escDate(p.updated_at)})`;
+            }).join(',');
             await tgt.query(`INSERT IGNORE INTO pages (id, wp_post_id, title, slug, content, template, status, created_at, updated_at) VALUES ${values}`, { raw: true });
+        }
+        if (rows.length) {
+            const nextAi = await bumpTableAutoIncrement(tgt, 'pages');
+            console.log(`   🔢 pages AUTO_INCREMENT → ${nextAi}`);
         }
         console.log(`   ✅ ${rows.length} pages`);
     } catch (e) {
@@ -2037,12 +2214,19 @@ async function migrateMedia(src, tgt) {
             const valid = rows.filter((m) => m.url && String(m.url).trim());
             skipped += rows.length - valid.length;
             if (valid.length) {
-                const values = valid.map(m => `(${m.id}, ${esc(m.wp_post_id)}, ${esc(m.title)}, ${esc(m.title)}, ${escUploadUrl(m.url)}, ${esc(m.mime_type)}, 'library', ${escDate(m.created_at)})`).join(',');
+                const values = valid.map(m => {
+                    const { id: msId, wpRefSql } = msWpEntityIdExpr(m, 'wp_post_id');
+                    return `(${msId}, ${wpRefSql}, ${esc(m.title)}, ${esc(m.title)}, ${escUploadUrl(m.url)}, ${esc(m.mime_type)}, 'library', ${escDate(m.created_at)})`;
+                }).join(',');
                 await tgt.query(`INSERT IGNORE INTO media (id, wp_post_id, title, label, url, mime_type, category, created_at) VALUES ${values}`, { raw: true });
                 total += valid.length;
             }
             offset += BATCH;
             process.stdout.write(`   ${total} media\r`);
+        }
+        if (total) {
+            const nextAi = await bumpTableAutoIncrement(tgt, 'media');
+            console.log(`   🔢 media AUTO_INCREMENT → ${nextAi}`);
         }
         const skipNote = skipped ? ` (${skipped} without url skipped)` : '';
         console.log(total ? `   ✅ ${total} media${skipNote}` : `   ✅ 0 media${skipNote}`);
@@ -2058,10 +2242,20 @@ async function migrateForumTopics(src, tgt) {
         const rows = await src.query('SELECT * FROM sc_forum_topics ORDER BY id', { type: QueryTypes.SELECT });
         await tgt.query('DELETE FROM forum_topics', { raw: true });
         if (!rows.length) { console.log('   ✅ 0 forum_topics'); return; }
+        const userIdMap = await buildScUserIdMap(src);
+        const mapUid = (id) => (id != null && id !== '' ? (userIdMap[id] ?? id) : null);
         for (let i = 0; i < rows.length; i += BATCH) {
             const chunk = rows.slice(i, i + BATCH);
-            const values = chunk.map(t => `(${t.id}, ${esc(t.wp_post_id)}, ${esc(t.title, 65535)}, ${esc(t.slug)}, ${escUploadContent(t.content, 16000000)}, ${esc(t.forum_name)}, ${t.author_id || 'NULL'}, ${esc(t.status)}, ${escDate(t.created_at)})`).join(',');
+            const values = chunk.map(t => {
+                const { id: msId, wpRefSql } = msWpEntityIdExpr(t, 'wp_post_id');
+                const authorId = mapUid(t.author_id);
+                return `(${msId}, ${wpRefSql}, ${esc(t.title, 65535)}, ${esc(t.slug)}, ${escUploadContent(t.content, 16000000)}, ${esc(t.forum_name)}, ${authorId || 'NULL'}, ${esc(t.status)}, ${escDate(t.created_at)})`;
+            }).join(',');
             await tgt.query(`INSERT IGNORE INTO forum_topics (id, wp_post_id, title, slug, content, forum_name, author_id, status, created_at) VALUES ${values}`, { raw: true });
+        }
+        if (rows.length) {
+            const nextAi = await bumpTableAutoIncrement(tgt, 'forum_topics');
+            console.log(`   🔢 forum_topics AUTO_INCREMENT → ${nextAi}`);
         }
         console.log(`   ✅ ${rows.length} forum_topics`);
     } catch (e) {
@@ -2072,12 +2266,24 @@ async function migrateForumTopics(src, tgt) {
 
 async function migrateEnrollments(src, tgt) {
     console.log('📝 Migrating enrollments...');
+    const courseIdMap = await buildScWpPostIdMap(src, 'sc_courses', 'wp_post_id');
+    const orderIdMap = await buildScWpPostIdMap(src, 'sc_orders', 'wp_post_id');
+    const userIdMap = await buildScUserIdMap(src);
+    const mapCid = (id) => courseIdMap[id] ?? id;
+    const mapOid = (id) => (id != null ? (orderIdMap[id] ?? id) : null);
+    const mapUid = (id) => userIdMap[id] ?? id;
     const rows = await src.query('SELECT * FROM sc_enrollments ORDER BY id', { type: QueryTypes.SELECT });
     if (!rows.length) { console.log('   ✅ 0 enrollments'); return; }
     for (let i = 0; i < rows.length; i += BATCH) {
         const chunk = rows.slice(i, i + BATCH);
-        const values = chunk.map(e => `(${e.id}, ${e.user_id}, ${e.course_id}, ${e.order_id || 'NULL'}, ${escDate(e.enrolled_at)})`).join(',');
-        await tgt.query(`INSERT IGNORE INTO enrollments (id, user_id, course_id, order_id, enrolled_at) VALUES ${values}`, { raw: true });
+        const values = chunk.map(e => {
+            const courseId = mapCid(e.course_id);
+            const orderId = mapOid(e.order_id);
+            const userId = mapUid(e.user_id);
+            return `(${e.id}, ${userId}, ${courseId}, ${orderId || 'NULL'}, ${escDate(e.enrolled_at)})`;
+        }).join(',');
+        await tgt.query(`INSERT INTO enrollments (id, user_id, course_id, order_id, enrolled_at) VALUES ${values}
+        ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), course_id=VALUES(course_id), order_id=VALUES(order_id), enrolled_at=VALUES(enrolled_at)`, { raw: true });
     }
     console.log(`   ✅ ${rows.length} enrollments`);
 }
@@ -2085,28 +2291,129 @@ async function migrateEnrollments(src, tgt) {
 /** Populate user_courses from enrollments so auth-service has user→course access. */
 async function migrateUserCourses(src, tgt) {
     console.log('📚 Migrating user_courses (from enrollments)...');
+    const courseIdMap = await buildScWpPostIdMap(src, 'sc_courses', 'wp_post_id');
+    const orderIdMap = await buildScWpPostIdMap(src, 'sc_orders', 'wp_post_id');
+    const userIdMap = await buildScUserIdMap(src);
+    const mapCid = (id) => courseIdMap[id] ?? id;
+    const mapOid = (id) => (id != null ? (orderIdMap[id] ?? id) : null);
+    const mapUid = (id) => userIdMap[id] ?? id;
     const rows = await src.query('SELECT user_id, course_id, order_id FROM sc_enrollments', { type: QueryTypes.SELECT });
     if (!rows.length) { console.log('   ✅ 0 user_courses'); return; }
     const seen = new Set();
     const pairs = rows.filter(e => {
-        const key = `${e.user_id}-${e.course_id}`;
+        const key = `${mapUid(e.user_id)}-${mapCid(e.course_id)}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
     });
     for (let i = 0; i < pairs.length; i += BATCH) {
         const chunk = pairs.slice(i, i + BATCH);
-        const values = chunk.map(e => `(${e.user_id}, ${e.course_id}, ${e.order_id ? esc(String(e.order_id)) : 'NULL'})`).join(',');
-        await tgt.query(`INSERT IGNORE INTO user_courses (user_id, course_id, order_id) VALUES ${values}`, { raw: true });
+        const values = chunk.map(e => {
+            const courseId = mapCid(e.course_id);
+            const orderId = mapOid(e.order_id);
+            const userId = mapUid(e.user_id);
+            return `(${userId}, ${courseId}, ${orderId ? esc(String(orderId)) : 'NULL'})`;
+        }).join(',');
+        await tgt.query(`INSERT INTO user_courses (user_id, course_id, order_id) VALUES ${values}
+        ON DUPLICATE KEY UPDATE order_id=VALUES(order_id)`, { raw: true });
     }
     console.log(`   ✅ ${pairs.length} user_courses`);
 }
 
+/** Enroll purchased users into the first batch per course so dashboard videos are accessible. */
+/** Correct legacy rows after upsert sync (safe to re-run). */
+async function applyPostMigrationDataPatches(tgt) {
+    console.log('🔧 Applying post-migration data patches...');
+    try {
+        const [c1] = await tgt.query(
+            `UPDATE courses SET is_published = 1 WHERE status = 'publish' AND is_published = 0`,
+            { raw: true }
+        );
+        const [c2] = await tgt.query(
+            `UPDATE recordings SET is_visible = 1 WHERE (source = 'vimeo' OR source IS NULL OR source = '') AND is_visible = 0`,
+            { raw: true }
+        );
+        const [c3] = await tgt.query(
+            `UPDATE orders SET status = 'paid'
+             WHERE rp_payment_id IS NOT NULL AND TRIM(rp_payment_id) != ''
+             AND status NOT IN ('paid', 'refunded', 'refund_initiated')`,
+            { raw: true }
+        );
+        const [c4] = await tgt.query(
+            `UPDATE orders o
+             INNER JOIN users u ON LOWER(TRIM(u.email)) = LOWER(TRIM(o.buyer_email))
+             SET o.user_id = u.id
+             WHERE o.user_id IS NULL AND o.buyer_email IS NOT NULL AND TRIM(o.buyer_email) != ''`,
+            { raw: true }
+        );
+        const [c5] = await tgt.query(
+            `INSERT IGNORE INTO enrollments (user_id, course_id, order_id, enrolled_at)
+             SELECT o.user_id, o.course_id, o.id, COALESCE(o.created_at, NOW())
+             FROM orders o
+             WHERE o.user_id IS NOT NULL AND o.course_id IS NOT NULL AND o.status = 'paid'
+             AND NOT EXISTS (
+               SELECT 1 FROM enrollments e WHERE e.user_id = o.user_id AND e.course_id = o.course_id
+             )`,
+            { raw: true }
+        );
+        const [c6] = await tgt.query(
+            `INSERT IGNORE INTO user_courses (user_id, course_id, order_id)
+             SELECT o.user_id, o.course_id, o.order_id
+             FROM orders o
+             WHERE o.user_id IS NOT NULL AND o.course_id IS NOT NULL AND o.status = 'paid'
+             AND NOT EXISTS (
+               SELECT 1 FROM user_courses uc WHERE uc.user_id = o.user_id AND uc.course_id = o.course_id
+             )`,
+            { raw: true }
+        );
+        console.log(`   courses is_published fixed: ${c1?.affectedRows ?? 0}`);
+        console.log(`   recordings is_visible fixed: ${c2?.affectedRows ?? 0}`);
+        console.log(`   orders marked paid (rp_payment_id): ${c3?.affectedRows ?? 0}`);
+        console.log(`   orders user_id linked by email: ${c4?.affectedRows ?? 0}`);
+        console.log(`   enrollments backfilled: ${c5?.affectedRows ?? 0}`);
+        console.log(`   user_courses backfilled: ${c6?.affectedRows ?? 0}`);
+    } catch (e) {
+        if (e.message && e.message.includes("doesn't exist")) {
+            console.log('   ⏭️  Patch skipped (tables not ready)');
+            return;
+        }
+        throw e;
+    }
+}
+
+async function migrateBatchEnrollments(src, tgt) {
+    console.log('📚 Syncing batch_enrollments from enrollments...');
+    try {
+        const [result] = await tgt.query(
+            `INSERT IGNORE INTO batch_enrollments (batch_id, user_id, enrolled_at)
+             SELECT fb.min_batch_id, e.user_id, COALESCE(e.enrolled_at, NOW())
+             FROM enrollments e
+             INNER JOIN (
+               SELECT course_id, MIN(id) AS min_batch_id FROM batches GROUP BY course_id
+             ) fb ON fb.course_id = e.course_id
+             LEFT JOIN batch_enrollments be ON be.batch_id = fb.min_batch_id AND be.user_id = e.user_id
+             WHERE be.id IS NULL`,
+            { raw: true }
+        );
+        console.log(`   ✅ ${result?.affectedRows ?? 0} batch enrollments synced`);
+    } catch (e) {
+        if (e.message && e.message.includes("doesn't exist")) {
+            console.log('   ⏭️  batch_enrollments/batches not ready, skip');
+            return;
+        }
+        throw e;
+    }
+}
+
 async function migrateCourseAuthors(src, tgt) {
     console.log('✍️  Migrating course authors...');
+    const courseIdMap = await buildScWpPostIdMap(src, 'sc_courses', 'wp_post_id');
+    const userIdMap = await buildScUserIdMap(src);
+    const mapCid = (id) => courseIdMap[id] ?? id;
+    const mapUid = (id) => userIdMap[id] ?? id;
     const rows = await src.query('SELECT * FROM sc_course_authors ORDER BY id', { type: QueryTypes.SELECT });
     if (!rows.length) { console.log('   ✅ 0 course authors'); return; }
-    const values = rows.map(a => `(${a.id}, ${a.course_id}, ${a.user_id}, ${a.sort_order || 0})`).join(',');
+    const values = rows.map(a => `(${a.id}, ${mapCid(a.course_id)}, ${mapUid(a.user_id)}, ${a.sort_order || 0})`).join(',');
     await tgt.query(`INSERT IGNORE INTO course_authors (id, course_id, user_id, sort_order) VALUES ${values}`, { raw: true });
     console.log(`   ✅ ${rows.length} course authors`);
 }
@@ -2127,6 +2434,8 @@ async function migrateAffiliateData(src, tgt) {
         );
         const hasReferral = cols.some(c => c.COLUMN_NAME === 'referral_code');
         if (hasReferral) {
+            const userIdMap = await buildScUserIdMap(src);
+            const mapUid = (id) => (id != null && id !== '' ? (userIdMap[id] ?? id) : null);
             const rows = await src.query(
                 `SELECT id, referral_code, referred_by, referred_at FROM \`${_srcUsersTable}\` WHERE referral_code IS NOT NULL`,
                 { type: QueryTypes.SELECT }
@@ -2136,7 +2445,7 @@ async function migrateAffiliateData(src, tgt) {
                 try {
                     await tgt.query(
                         'UPDATE users SET referral_code = ?, referred_by = ?, referred_at = ? WHERE id = ?',
-                        { replacements: [r.referral_code, r.referred_by || null, r.referred_at || null, r.id], raw: true }
+                        { replacements: [r.referral_code, mapUid(r.referred_by), r.referred_at || null, mapUid(r.id)], raw: true }
                     );
                     updated++;
                 } catch (_) { }
@@ -2154,13 +2463,18 @@ async function migrateAffiliateData(src, tgt) {
         if (tables.length) {
             const rows = await src.query('SELECT * FROM affiliate_history ORDER BY id', { type: QueryTypes.SELECT });
             if (rows.length) {
+                const userIdMap = await buildScUserIdMap(src);
+                const courseIdMap = await buildScWpPostIdMap(src, 'sc_courses', 'wp_post_id');
+                const mapUid = (id) => userIdMap[id] ?? id;
+                const mapCid = (id) => (id != null && id !== '' ? (courseIdMap[id] ?? id) : null);
                 await tgt.query('DELETE FROM affiliate_history', { raw: true });
                 for (let i = 0; i < rows.length; i += BATCH) {
                     const chunk = rows.slice(i, i + BATCH);
                     const values = chunk.map(r => {
                         const entityType = esc(r.entity_type || 'course');
-                        const entityId = r.entity_id ? esc(String(r.entity_id)) : 'NULL';
-                        return `(${r.id}, ${r.course_id || 'NULL'}, ${entityType}, ${entityId}, ${r.user_id}, ${r.affiliate_id}, ${esc(r.order_id)}, ${r.order_amount || 'NULL'}, ${r.commission_amount || 0}, ${esc(r.status || 'confirmed')}, ${escDate(r.created_at)})`;
+                        const courseId = mapCid(r.course_id);
+                        const entityId = r.entity_id ? esc(String(mapCid(r.entity_id) ?? r.entity_id)) : 'NULL';
+                        return `(${r.id}, ${courseId || 'NULL'}, ${entityType}, ${entityId}, ${mapUid(r.user_id)}, ${mapUid(r.affiliate_id)}, ${esc(r.order_id)}, ${r.order_amount || 'NULL'}, ${r.commission_amount || 0}, ${esc(r.status || 'confirmed')}, ${escDate(r.created_at)})`;
                     }).join(',');
                     await tgt.query(
                         `INSERT IGNORE INTO affiliate_history (id, course_id, entity_type, entity_id, user_id, affiliate_id, order_id, order_amount, commission_amount, status, created_at) VALUES ${values}`,
@@ -2187,9 +2501,11 @@ async function migrateAffiliateData(src, tgt) {
         if (tables.length) {
             const rows = await src.query('SELECT * FROM affiliate_balances ORDER BY id', { type: QueryTypes.SELECT });
             if (rows.length) {
+                const userIdMap = await buildScUserIdMap(src);
+                const mapUid = (id) => userIdMap[id] ?? id;
                 await tgt.query('DELETE FROM affiliate_balances', { raw: true });
                 const values = rows.map(r =>
-                    `(${r.id}, ${r.affiliate_id}, ${r.total_earned || 0}, ${r.total_withdrawn || 0}, ${r.current_balance || 0}, ${escDate(r.created_at)})`
+                    `(${r.id}, ${mapUid(r.affiliate_id)}, ${r.total_earned || 0}, ${r.total_withdrawn || 0}, ${r.current_balance || 0}, ${escDate(r.created_at)})`
                 ).join(',');
                 await tgt.query(
                     `INSERT IGNORE INTO affiliate_balances (id, affiliate_id, total_earned, total_withdrawn, current_balance, created_at) VALUES ${values}`,
@@ -2215,9 +2531,11 @@ async function migrateAffiliateData(src, tgt) {
         if (tables.length) {
             const rows = await src.query('SELECT * FROM withdrawal_requests ORDER BY id', { type: QueryTypes.SELECT });
             if (rows.length) {
+                const userIdMap = await buildScUserIdMap(src);
+                const mapUid = (id) => userIdMap[id] ?? id;
                 await tgt.query('DELETE FROM withdrawal_requests', { raw: true });
                 const values = rows.map(r =>
-                    `(${r.id}, ${r.affiliate_id}, ${r.amount}, ${esc(r.status || 'pending')}, ${r.remarks ? esc(r.remarks) : 'NULL'}, ${escDate(r.created_at)})`
+                    `(${r.id}, ${mapUid(r.affiliate_id)}, ${r.amount}, ${esc(r.status || 'pending')}, ${r.remarks ? esc(r.remarks) : 'NULL'}, ${escDate(r.created_at)})`
                 ).join(',');
                 await tgt.query(
                     `INSERT IGNORE INTO withdrawal_requests (id, affiliate_id, amount, status, remarks, created_at) VALUES ${values}`,
