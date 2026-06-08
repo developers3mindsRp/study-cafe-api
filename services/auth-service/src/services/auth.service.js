@@ -130,7 +130,7 @@ function userIsEmailVerified(plain) {
 const SESSION_USER_ATTRS = [
   'id', 'email', 'name', 'bio', 'role_id', 'password_hash', 'permission_overrides',
   'profile_pic_url', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country',
-  'referral_code', 'email_verified_at',
+  'gst', 'referral_code', 'email_verified_at',
 ];
 
 function signAccess(payload) {
@@ -216,6 +216,7 @@ async function sessionFromUserEntity(user) {
       city: plain.city || null,
       state: plain.state || null,
       country: plain.country || null,
+      gst: plain.gst || null,
       referral_code: plain.referral_code || null,
       role,
       permissions,
@@ -238,6 +239,7 @@ async function register({
   city,
   state,
   country,
+  gst,
 }) {
   const userRole = await Role.findOne({
     where: { name: 'user' },
@@ -283,6 +285,7 @@ async function register({
       country != null && String(country).trim() !== ''
         ? String(country).trim()
         : 'India',
+    gst: gst ? String(gst).trim() : null,
     role_id: userRole.id,
     referral_code: newReferralCode,
     referred_by: referredBy,
@@ -309,7 +312,7 @@ async function register({
     include: [{ model: Role, as: 'Role', attributes: ['name'] }],
     attributes: [
       'id', 'email', 'name', 'referral_code', 'phone', 'profession', 'company', 'designation',
-      'city', 'state', 'country', 'email_verified_at',
+      'city', 'state', 'country', 'gst', 'email_verified_at',
     ],
   });
   const r = withRole.get({ plain: true });
@@ -327,6 +330,7 @@ async function register({
     city: r.city,
     state: r.state,
     country: r.country,
+    gst: r.gst || null,
     email_verified: userIsEmailVerified(r),
   };
 }
@@ -437,7 +441,7 @@ async function validateToken(token) {
     include: [{ model: Role, as: 'Role', attributes: ['name'] }],
     attributes: [
       'id', 'email', 'name', 'bio', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country',
-      'permission_overrides', 'referral_code', 'profile_pic_url', 'email_verified_at',
+      'gst', 'permission_overrides', 'referral_code', 'profile_pic_url', 'email_verified_at',
     ],
   });
   if (!user) return null;
@@ -464,6 +468,7 @@ async function validateToken(token) {
     city: r.city || null,
     state: r.state || null,
     country: r.country || null,
+    gst: r.gst || null,
     email_verified,
   };
 }

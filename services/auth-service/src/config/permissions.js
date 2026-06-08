@@ -23,6 +23,8 @@ const ALL_PERMISSIONS = [
   'admin:access',
   'admin_users:list', 'admin_users:view', 'admin_users:create', 'admin_users:edit', 'admin_users:delete',
   'banners:list', 'banners:view', 'banners:create', 'banners:edit', 'banners:delete',
+  'users:course_allotment',
+  'users:membership_allotment',
 ];
 const MODULE_HIERARCHY = {
   articles: [
@@ -144,6 +146,10 @@ const MODULE_HIERARCHY = {
     ['banners:edit'],
     ['banners:create'],
     ['banners:delete'],
+  ],
+  users: [
+    ['users:course_allotment'],
+    ['users:membership_allotment'],
   ],
 };
 
