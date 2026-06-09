@@ -21,8 +21,8 @@ const grantCourse = asyncHandler(async (req, res) => {
 });
 
 const grantMembership = asyncHandler(async (req, res) => {
-  const { userId, membershipType, orderId, startsAt, expiresAt } = req.body;
-  const result = await accessService.grantMembership({ userId, membershipType, orderId, startsAt, expiresAt });
+  const { userId, membershipType, orderId, startsAt, expiresAt, planJson } = req.body;
+  const result = await accessService.grantMembership({ userId, membershipType, orderId, startsAt, expiresAt, planJson });
   sendSuccess(res, result);
 });
 

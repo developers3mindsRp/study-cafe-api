@@ -701,12 +701,25 @@ const affiliateService = {
 
   /**
    * Generate referral links for a user based on available courses, categories, and memberships.
+   * Optional `search` filters course and category link lists (title/name, slug, description).
    */
-  async getReferralLinks(userId, referralCode) {
+  async getReferralLinks(userId, referralCode, { search } = {}) {
     const { CourseCat } = require('../models');
 
+    const term = search && String(search).trim() ? String(search).trim() : '';
+    const likeTerm = term ? `%${term}%` : null;
+
+    const courseWhere = { is_published: true, status: 'publish' };
+    if (likeTerm) {
+      courseWhere[Op.or] = [
+        { title: { [Op.like]: likeTerm } },
+        { slug: { [Op.like]: likeTerm } },
+        { brief_description: { [Op.like]: likeTerm } },
+      ];
+    }
+
     const courses = await Course.findAll({
-      where: { is_published: true, status: 'publish' },
+      where: courseWhere,
       attributes: ['id', 'title', 'slug', 'price', 'sale_price', 'brief_description', 'thumbnail_url'],
       order: [['created_at', 'DESC']],
     });
@@ -720,7 +733,17 @@ const affiliateService = {
     const categoryAttrs = ['id', 'name', 'slug'];
     if (catImageAttr) categoryAttrs.push(catImageAttr);
 
+    const categoryWhere = likeTerm
+      ? {
+        [Op.or]: [
+          { name: { [Op.like]: likeTerm } },
+          { slug: { [Op.like]: likeTerm } },
+        ],
+      }
+      : {};
+
     const categories = await CourseCat.findAll({
+      where: categoryWhere,
       attributes: categoryAttrs,
       order: [['name', 'ASC']],
     });

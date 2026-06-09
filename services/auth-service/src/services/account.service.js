@@ -152,10 +152,18 @@ async function fetchCourseMeta(courseId) {
   }
 }
 
+function courseMatchesSearch(term, { title, slug, category }) {
+  const needle = String(term).trim().toLowerCase();
+  if (!needle) return true;
+  const fields = [title, slug, category].filter((v) => v != null && String(v).trim());
+  return fields.some((v) => String(v).toLowerCase().includes(needle));
+}
+
 /**
  * My enrolled courses (from user_courses) with course title/thumbnail from course-service.
+ * Optional `search` filters by course title, slug, or category (case-insensitive).
  */
-async function myCourses(userId) {
+async function myCourses(userId, { search } = {}) {
   const allRows = await UserCourse.findAll({ where: { user_id: userId } });
   const now = new Date();
   // Exclude rows where expires_at is set and already past — access has ended
@@ -172,6 +180,10 @@ async function myCourses(userId) {
     const title = meta?.title || `Course #${r.course_id}`;
     const thumb = meta?.thumbnail_url ?? meta?.thumbnail ?? null;
     const slug = meta?.slug ?? null;
+    const category = Array.isArray(meta?.categories)
+      ? meta.categories.map((c) => c?.name || c?.slug).filter(Boolean).join(' ')
+      : (meta?.category || '');
+    if (!courseMatchesSearch(search, { title, slug, category })) continue;
     const sum = summary[r.course_id] || summary[String(r.course_id)] || {};
     const progress = Number(sum.progress) || 0;
     const totalLessons = Number(sum.totalLessons) || 0;
@@ -189,7 +201,7 @@ async function myCourses(userId) {
         thumbnail: thumb || '',
         thumbnail_url: thumb,
         price: meta?.price ?? 0,
-        category: meta?.category || '',
+        category,
         totalLessons,
       },
       purchaseDate: new Date().toISOString(),

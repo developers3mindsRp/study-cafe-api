@@ -101,6 +101,13 @@ const grantMembership = {
         orderId: Joi.string().allow('', null),
         startsAt: Joi.date().iso().required(),
         expiresAt: Joi.date().iso().greater(Joi.ref('startsAt')).required(),
+        planJson: Joi.object({
+            price: Joi.string().allow('', null),
+            plan_validity: Joi.string().allow('', null),
+            plan_purchased: Joi.string().allow('', null),
+            plan_expiry: Joi.string().allow('', null),
+            payment_id: Joi.string().allow('', null),
+        }).allow(null),
     }),
 };
 
