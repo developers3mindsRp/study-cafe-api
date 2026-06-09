@@ -11,11 +11,20 @@ async function run() {
     `);
     console.log('Added column email_verified_at to users.');
     await sequelize.query(`
-      UPDATE users SET email_verified_at = created_at WHERE email_verified_at IS NULL
+      UPDATE users
+      SET email_verified_at = COALESCE(created_at, NOW())
+      WHERE email_verified_at IS NULL AND wp_user_id IS NOT NULL
     `);
-    console.log('Backfilled email_verified_at from created_at for existing accounts.');
+    console.log('Backfilled email_verified_at for migrated (wp_user_id) accounts.');
   } else {
-    console.log('Column email_verified_at already exists — skipping backfill.');
+    const [, meta] = await sequelize.query(`
+      UPDATE users
+      SET email_verified_at = COALESCE(created_at, NOW())
+      WHERE email_verified_at IS NULL AND wp_user_id IS NOT NULL
+    `);
+    console.log(
+      `Column email_verified_at already exists — backfilled ${meta?.affectedRows ?? 0} migrated account(s).`
+    );
   }
   process.exit(0);
 }

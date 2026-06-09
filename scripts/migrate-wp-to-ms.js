@@ -194,6 +194,7 @@ async function createAllTables(tgt) {
       referred_by BIGINT UNSIGNED,
       referred_at DATETIME,
       bio TEXT NULL,
+      email_verified_at DATETIME NULL,
       created_at DATETIME,
       updated_at DATETIME,
       UNIQUE KEY idx_email (email)
@@ -1135,14 +1136,16 @@ async function migrateUsers(src, tgt) {
             const passHash = passwords[msId] || passwords[u.wp_user_id] || null;
             const email = u.email || `wp_${msId}@placeholder.studycafe.in`;
             const membership = normalizeMembershipSlug(u.membership);
-            return `(${msId}, ${wpRefSql}, ${esc(email)}, ${esc(passHash)}, ${esc(u.display_name)}, ${esc(u.display_name)}, ${esc(u.login)}, ${esc(u.first_name)}, ${esc(u.last_name)}, ${esc(u.user_nicename)}, ${esc(u.user_url)}, ${esc(u.phone)}, ${esc(u.profession)}, ${esc(u.designation)}, ${esc(u.company)}, ${esc(u.city)}, ${esc(u.state)}, ${esc(u.country)}, ${escUploadUrl(u.profile_pic_url)}, ${esc(membership)}, ${esc(u.plan)}, ${defaultUserRoleId}, 'user', 1, ${esc(u.status)}, ${esc(u.facebook)}, ${esc(u.twitter)}, ${esc(u.linkedin)}, ${esc(u.instagram)}, ${esc(u.youtube)}, ${esc(u.gst)}, ${esc(u.account_status)}, ${esc(u.bio)}, ${escDate(u.created_at)}, ${escDate(u.created_at)})`;
+            const createdAt = escDate(u.created_at);
+            return `(${msId}, ${wpRefSql}, ${esc(email)}, ${esc(passHash)}, ${esc(u.display_name)}, ${esc(u.display_name)}, ${esc(u.login)}, ${esc(u.first_name)}, ${esc(u.last_name)}, ${esc(u.user_nicename)}, ${esc(u.user_url)}, ${esc(u.phone)}, ${esc(u.profession)}, ${esc(u.designation)}, ${esc(u.company)}, ${esc(u.city)}, ${esc(u.state)}, ${esc(u.country)}, ${escUploadUrl(u.profile_pic_url)}, ${esc(membership)}, ${esc(u.plan)}, ${defaultUserRoleId}, 'user', 1, ${esc(u.status)}, ${esc(u.facebook)}, ${esc(u.twitter)}, ${esc(u.linkedin)}, ${esc(u.instagram)}, ${esc(u.youtube)}, ${esc(u.gst)}, ${esc(u.account_status)}, ${esc(u.bio)}, ${createdAt}, ${createdAt}, ${createdAt})`;
         }).join(',');
-        await tgt.query(`INSERT INTO users (id, wp_user_id, email, password_hash, name, display_name, login, first_name, last_name, user_nicename, user_url, phone, profession, designation, company, city, state, country, profile_pic_url, membership, plan, role_id, role, is_active, status, facebook, twitter, linkedin, instagram, youtube, gst, account_status, bio, created_at, updated_at) VALUES ${values}
+        await tgt.query(`INSERT INTO users (id, wp_user_id, email, password_hash, name, display_name, login, first_name, last_name, user_nicename, user_url, phone, profession, designation, company, city, state, country, profile_pic_url, membership, plan, role_id, role, is_active, status, facebook, twitter, linkedin, instagram, youtube, gst, account_status, bio, created_at, updated_at, email_verified_at) VALUES ${values}
         ON DUPLICATE KEY UPDATE
           wp_user_id=VALUES(wp_user_id), email=VALUES(email), password_hash=VALUES(password_hash),
           name=VALUES(name), display_name=VALUES(display_name), login=VALUES(login),
           first_name=VALUES(first_name), last_name=VALUES(last_name), phone=VALUES(phone),
           membership=VALUES(membership), plan=VALUES(plan), status=VALUES(status),
+          email_verified_at=COALESCE(email_verified_at, VALUES(email_verified_at)),
           updated_at=VALUES(updated_at)`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allUsers.length)}/${allUsers.length}\r`);
     }
@@ -1150,7 +1153,12 @@ async function migrateUsers(src, tgt) {
         const nextAi = await bumpTableAutoIncrement(tgt, 'users');
         console.log(`   🔢 users AUTO_INCREMENT → ${nextAi} (new rows omit id; wp_user_id NULL)`);
     }
-    console.log(`   ✅ ${allUsers.length} users migrated (default role: user)`);
+    await tgt.query(
+        `UPDATE users SET email_verified_at = COALESCE(email_verified_at, created_at, NOW())
+         WHERE wp_user_id IS NOT NULL AND email_verified_at IS NULL`,
+        { raw: true }
+    );
+    console.log(`   ✅ ${allUsers.length} users migrated (default role: user, legacy accounts email-verified)`);
 }
 
 /**
