@@ -178,13 +178,6 @@ function register(router) {
   router.post('/admin/platform/newsletter/send', requireAdmin, p.sendNewsletter);
   router.post('/admin/platform/newsletter/sync-members', requireAdmin, p.syncMembershipSubscribers);
 
-  // ── Banners ─────────────────────────────────────────────────────────
-  router.get('/admin/platform/banners', requireAdmin, p.getBanners);
-  router.get('/admin/platform/banners/:id', requireAdmin, p.getBanner);
-  router.post('/admin/platform/banners', requireAdmin, p.postBanner);
-  router.put('/admin/platform/banners/:id', requireAdmin, p.putBanner);
-  router.delete('/admin/platform/banners/:id', requireAdmin, p.deleteBanner);
-
 
   // ── Affiliate routes ───────────────────────────────────────────────
   router.get('/admin/affiliate/history', requireAdmin, controller.getAffiliateHistory);

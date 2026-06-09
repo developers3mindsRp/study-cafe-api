@@ -1006,11 +1006,6 @@ const platform = {
   deleteNewsletterTemplate: platformProxy((c, req) => c.delete(`/internal/platform/newsletter/templates/${req.params.id}`).then(() => ({ status: 204 }))),
   sendNewsletter: platformProxy((c, req) => c.post('/internal/platform/newsletter/send', req.body).then((r) => ({ data: r.data }))),
   syncMembershipSubscribers: platformProxy((c, req) => c.post('/internal/platform/newsletter/sync-members', req.body).then((r) => ({ data: r.data }))),
-  getBanners: platformProxy((c) => c.get('/internal/platform/banners').then((r) => ({ data: r.data }))),
-  getBanner: platformProxy((c, req) => c.get(`/internal/platform/banners/${req.params.id}`).then((r) => ({ data: r.data }))),
-  postBanner: platformProxy((c, req) => c.post('/internal/platform/banners', req.body).then((r) => ({ data: r.data, status: 201 }))),
-  putBanner: platformProxy((c, req) => c.put(`/internal/platform/banners/${req.params.id}`, req.body).then((r) => ({ data: r.data }))),
-  deleteBanner: platformProxy((c, req) => c.delete(`/internal/platform/banners/${req.params.id}`).then(() => ({ status: 204 }))),
 };
 
 const uploadImage = asyncHandler(async (req, res) => {

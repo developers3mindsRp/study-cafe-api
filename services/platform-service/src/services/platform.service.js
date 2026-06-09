@@ -125,7 +125,6 @@ const {
   PlanComparisonFeature,
   PlanFeatureAvailability,
   NewsletterTemplate,
-  Banner,
   Faq,
   Article,
   ArticleCategoryMap,
@@ -3225,15 +3224,6 @@ module.exports = {
     createMediaAsset,
     deleteMediaAsset,
   },
-  banners: {
-    getBannersPublic,
-    getBannerByIdentifierPublic,
-    getBannersInternal,
-    getBannerByIdInternal,
-    createBanner,
-    updateBanner,
-    deleteBanner,
-  },
 };
 
 // ── CMS pages ───────────────────────────────────────────────────────
@@ -3403,53 +3393,7 @@ async function createMediaAsset({ url, label, category = 'library', mime_type = 
 async function deleteMediaAsset(id) {
   const row = await Media.findByPk(id);
   if (!row) return null;
-  // Only remove registry row; never delete files on disk (articles/banners keep working)
-  await row.destroy();
-  return { id };
-}
-
-// ── Banners ─────────────────────────────────────────────────────────
-
-async function getBannersPublic() {
-  const rows = await Banner.findAll({
-    where: { is_active: true },
-    order: [["created_at", "DESC"]],
-  });
-  return rows.map((r) => r.get({ plain: true }));
-}
-
-async function getBannerByIdentifierPublic(identifier) {
-  const row = await Banner.findOne({
-    where: { identifier, is_active: true },
-  });
-  return row ? row.get({ plain: true }) : null;
-}
-
-async function getBannersInternal() {
-  const rows = await Banner.findAll({ order: [["created_at", "DESC"]] });
-  return rows.map((r) => r.get({ plain: true }));
-}
-
-async function getBannerByIdInternal(id) {
-  const row = await Banner.findByPk(id);
-  return row ? row.get({ plain: true }) : null;
-}
-
-async function createBanner(data) {
-  const row = await Banner.create(data);
-  return row.get({ plain: true });
-}
-
-async function updateBanner(id, data) {
-  const row = await Banner.findByPk(id);
-  if (!row) return null;
-  await row.update(data);
-  return row.get({ plain: true });
-}
-
-async function deleteBanner(id) {
-  const row = await Banner.findByPk(id);
-  if (!row) return null;
+  // Only remove registry row; never delete files on disk (articles keep working)
   await row.destroy();
   return { id };
 }

@@ -40,8 +40,6 @@ function register(router) {
   router.get('/platform/seo-metadata/slug/:slug', validate(schemas.slugParam), controller.getSeoMetadataBySlugPublic);
   router.get('/platform/cms-pages/:slug', validate(schemas.slugParam), controller.getCmsPageBySlug);
   router.post('/platform/contact-us', validate(schemas.createContactInquiry), controller.createContactInquiry);
-  router.get('/platform/banners', controller.getBanners);
-  router.get('/platform/banners/:identifier', controller.getBannerByIdentifier);
 
   // ── Internal routes (admin proxy) ────────────────────────────────
   router.get('/internal/platform/home', internalAuth, controller.getHomeInternal);
@@ -142,13 +140,6 @@ function register(router) {
   router.get('/internal/platform/media-assets', internalAuth, validate(schemas.mediaAssetsListQuery), controller.getMediaAssets);
   router.post('/internal/platform/media-assets', internalAuth, validate(schemas.createMediaAsset), controller.createMediaAsset);
   router.delete('/internal/platform/media-assets/:id', internalAuth, controller.deleteMediaAsset);
-
-  // ── Banners ─────────────────────────────────────────────────────────
-  router.get('/internal/platform/banners', internalAuth, controller.getBannersInternal);
-  router.get('/internal/platform/banners/:id', internalAuth, validate(schemas.idParam), controller.getBannerInternal);
-  router.post('/internal/platform/banners', internalAuth, validate(schemas.createBanner), controller.createBanner);
-  router.put('/internal/platform/banners/:id', internalAuth, validate(schemas.updateBanner), controller.updateBanner);
-  router.delete('/internal/platform/banners/:id', internalAuth, validate(schemas.idParam), controller.deleteBanner);
 }
 
 module.exports = { register };
