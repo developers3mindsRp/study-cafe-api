@@ -2,7 +2,14 @@ const { User, Role, sequelize } = require('../models');
 const { Op, Sequelize } = require('sequelize');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const { AppError, logger } = require('../../../../shared');
+const { AppError, logger, parseTrashedMode, trashedSequelizeOptions, withTrashedWhere } = require('../../../../shared');
+
+/** Admin list role filter values → roles.name (and users.role legacy column). */
+const ROLE_FILTER_ALIASES = {
+    student: ['user', 'student'],
+    instructor: ['instructor'],
+    admin: ['admin'],
+};
 
 async function list(query = {}) {
     const {
@@ -52,7 +59,16 @@ async function list(query = {}) {
         );
     }
 
-    if (status) andConditions.push({ status });
+    if (status != null && String(status).trim() !== '') {
+        const s = String(status).trim().toLowerCase();
+        if (s === 'active') {
+            andConditions.push({ is_active: true });
+        } else if (s === 'inactive') {
+            andConditions.push({ is_active: false });
+        } else {
+            andConditions.push({ status: s });
+        }
+    }
 
     /**
      * Membership filter — canonical source is `user_memberships` (active rows).
@@ -114,21 +130,35 @@ async function list(query = {}) {
         andConditions.push({ created_at: createdRange });
     }
 
-    // Role filter: join only when filtering by role name, otherwise use role_id column directly.
-    let roleInclude = null;
-    if (role != null && String(role).trim() !== '') {
-        roleInclude = {
-            model: Role,
-            as: 'Role',
-            attributes: [],
-            where: { name: String(role).trim() },
-            required: true,
-        };
-    } else if (role_id) {
+    if (role_id) {
         andConditions.push({ role_id: parseInt(role_id, 10) });
+    } else if (role != null && String(role).trim() !== '') {
+        const key = String(role).trim().toLowerCase();
+        const names = ROLE_FILTER_ALIASES[key] || [key];
+        const lowered = names.map((n) => n.toLowerCase());
+        const roleRows = await Role.findAll({
+            where: Sequelize.where(
+                Sequelize.fn('LOWER', Sequelize.col('name')),
+                { [Op.in]: lowered },
+            ),
+            attributes: ['id'],
+            raw: true,
+        });
+        const roleIds = roleRows.map((r) => Number(r.id)).filter((id) => Number.isFinite(id) && id > 0);
+        const orClauses = [];
+        if (roleIds.length) orClauses.push({ role_id: { [Op.in]: roleIds } });
+        orClauses.push(
+            Sequelize.where(
+                Sequelize.fn('LOWER', Sequelize.col('role')),
+                { [Op.in]: lowered },
+            ),
+        );
+        andConditions.push({ [Op.or]: orClauses });
     }
 
-    const where = andConditions.length > 0 ? { [Op.and]: andConditions } : {};
+    const trashMode = parseTrashedMode(query);
+    const baseWhere = andConditions.length > 0 ? { [Op.and]: andConditions } : {};
+    const where = withTrashedWhere(baseWhere, trashMode);
 
     const orderDir = ['ASC', 'DESC'].includes(String(sortOrder).toUpperCase())
         ? String(sortOrder).toUpperCase()
@@ -141,26 +171,23 @@ async function list(query = {}) {
     // Only select columns needed by the admin table — avoids transferring bio, social links, etc.
     const TABLE_COLUMNS = [
         'id', 'name', 'display_name', 'email', 'phone',
-        'designation', 'profession', 'state', 'city', 'country',
+        'designation', 'profession', 'company', 'state', 'city', 'country',
         'membership', 'plan', 'role_id', 'status', 'is_active',
-        'created_at',
+        'created_at', 'gst',
     ];
     const attributes = (lean === 'true' || lean === true)
         ? ['id', 'name', 'display_name', 'email', 'role_id', 'designation', 'profession', 'plan']
         : TABLE_COLUMNS;
 
-    const include = roleInclude ? [roleInclude] : [];
-
     const { count, rows } = await User.findAndCountAll({
         where,
-        include,
         attributes,
         offset,
         limit: parseInt(limit, 10),
         order,
-        distinct: include.length > 0,
         raw: true,
         nest: true,
+        ...trashedSequelizeOptions(trashMode),
     });
 
     const data = rows.map((u) => {
@@ -243,7 +270,15 @@ async function remove(id) {
     if (!user) return false;
 
     await user.destroy();
-    logger.info('User deleted', { id });
+    logger.info('User moved to trash', { id });
+    return true;
+}
+
+async function restore(id) {
+    const user = await User.findByPk(id, { paranoid: false });
+    if (!user || !user.deleted_at) return false;
+    await user.restore();
+    logger.info('User restored from trash', { id });
     return true;
 }
 

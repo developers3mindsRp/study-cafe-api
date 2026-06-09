@@ -15,7 +15,14 @@ const {
 const { QueryTypes, Op } = require("sequelize");
 const axios = require("axios");
 const config = require("../config");
-const { logger, AppError } = require("../../../../shared");
+const {
+  logger,
+  AppError,
+  sqlDeletedAtIsNull,
+  parseTrashedMode,
+  trashedSequelizeOptions,
+  withTrashedWhere,
+} = require("../../../../shared");
 const { checkCourseAccess } = require("./accessClient");
 const { resolvePreviewToken } = require("./previewToken.service");
 
@@ -338,7 +345,7 @@ const coursesService = {
     const users = await Course.sequelize.query(
       `SELECT id, name, designation, profession, profile_pic_url
        FROM users
-       WHERE id IN (:userIds)`,
+       WHERE id IN (:userIds) AND ${sqlDeletedAtIsNull()}`,
       {
         replacements: { userIds },
         type: QueryTypes.SELECT,
@@ -537,8 +544,11 @@ const coursesService = {
     });
   },
 
-  async listAll() {
+  async listAll({ trashed } = {}) {
+    const trashMode = parseTrashedMode({ trashed });
     const rows = await Course.findAll({
+      ...trashedSequelizeOptions(trashMode),
+      where: withTrashedWhere({}, trashMode),
       order: [
         ["is_published", "DESC"],
         ["id", "DESC"],
@@ -553,6 +563,7 @@ const coursesService = {
         "thumbnail_url",
         "is_published",
         "hide_from_public",
+        "certificate_enabled",
         "created_at",
         "updated_at",
         "enrolled_count",
@@ -1038,6 +1049,7 @@ const coursesService = {
       gateway: data.gateway || null,
       is_published: !!data.is_published,
       hide_from_public: !!data.hide_from_public,
+      certificate_enabled: data.certificate_enabled !== false,
       start_date: data.start_date || null,
       end_date: data.end_date || null,
       affiliate_commission: Number.isFinite(affiliatePct) ? affiliatePct : 0,
@@ -1100,6 +1112,7 @@ const coursesService = {
       "gateway",
       "is_published",
       "hide_from_public",
+      "certificate_enabled",
       "start_date",
       "end_date",
       "affiliate_commission",
@@ -2181,5 +2194,21 @@ function mapCoursePageSettingsDbError(err) {
     503,
   );
 }
+
+coursesService.deleteCourse = async function deleteCourse(id) {
+  const course = await Course.findByPk(id);
+  if (!course) return false;
+  await course.destroy();
+  logger.info("[course-service] course moved to trash", { id });
+  return true;
+};
+
+coursesService.restoreCourse = async function restoreCourse(id) {
+  const course = await Course.findByPk(id, { paranoid: false });
+  if (!course || !course.deleted_at) return false;
+  await course.restore();
+  logger.info("[course-service] course restored from trash", { id });
+  return true;
+};
 
 module.exports = coursesService;

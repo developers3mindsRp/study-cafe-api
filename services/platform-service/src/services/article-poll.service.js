@@ -41,6 +41,7 @@
 const { Op } = require('sequelize');
 const { logger } = require('../../../../shared');
 const config = require('../config');
+const { activeRowWhere } = require('../../../../shared');
 const { atomicPublishArticle } = require('./article-scheduling.service');
 const { Article } = require('../models');
 
@@ -62,6 +63,7 @@ async function pollAndPublishDue() {
       where: {
         status: 'scheduled',
         scheduled_publish_at: { [Op.lte]: now },
+        ...activeRowWhere(),
       },
       attributes: ['id', 'scheduled_publish_at'],
     });

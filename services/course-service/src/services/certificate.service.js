@@ -3,6 +3,11 @@ const { sequelize } = require('../models');
 const coursesService = require('./courses.service');
 const { checkCourseAccess } = require('./accessClient');
 
+function courseProvidesCertificate(course) {
+  if (!course) return false;
+  return course.certificate_enabled !== false && course.certificate_enabled !== 0;
+}
+
 async function getLearnerDisplayName(userId) {
   const rows = await sequelize.query('SELECT name FROM users WHERE id = :id LIMIT 1', {
     replacements: { id: userId },
@@ -46,6 +51,8 @@ async function getCertificateData(userId, courseId, authHeader) {
   if (!allowed) return null;
 
   const course = await coursesService.getByIdInternal(cid);
+  if (!courseProvidesCertificate(course)) return null;
+
   const courseTitle = course?.title?.trim() || 'Course';
 
   let completionDateMs = await getCompletionMoment(userId, cid);
@@ -81,6 +88,8 @@ async function getCertificateDataInternal(userId, courseId) {
   }
 
   const course = await coursesService.getByIdInternal(cid);
+  if (!courseProvidesCertificate(course)) return null;
+
   const courseTitle = course?.title?.trim() || 'Course';
 
   let completionDateMs = await getCompletionMoment(userId, cid);

@@ -350,8 +350,22 @@ const addMaterial = asyncHandler(async (req, res) => {
 });
 
 const getCourses = asyncHandler(async (req, res) => {
-  const { data } = await courseClient.get('/internal/courses');
+  const { data } = await courseClient.get('/internal/courses', { params: req.query });
   sendSuccess(res, Array.isArray(data) ? data : data || []);
+});
+
+const deleteCourse = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  await courseClient.delete(`/internal/courses/${req.params.id}`);
+  await adminLogsService.logAction(adminId, 'DELETE_COURSE', 'course', req.params.id, {}, req.ip);
+  sendNoContent(res);
+});
+
+const restoreCourse = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  await courseClient.post(`/internal/courses/${req.params.id}/restore`);
+  await adminLogsService.logAction(adminId, 'RESTORE_COURSE', 'course', req.params.id, {}, req.ip);
+  sendNoContent(res);
 });
 
 const getCourse = asyncHandler(async (req, res) => {
@@ -582,7 +596,7 @@ const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
                 buyer_name: user.name || null,
                 buyer_mobile: user.phone || null,
                 status: 'paid',
-                rp_payment_id: paymentId || undefined,
+                payment_id: paymentId || undefined,
               });
             } catch (orderErr) {
               console.error('[bulkEnroll] order creation failed:', orderErr?.response?.data ?? orderErr?.message ?? orderErr);
@@ -792,6 +806,13 @@ const deleteOrder = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+const restoreOrder = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await orderClient.post(`/internal/orders/${req.params.id}/restore`);
+  await adminLogsService.logAction(adminId, 'RESTORE_ORDER', 'order', req.params.id, {}, req.ip);
+  sendSuccess(res, data);
+});
+
 const refundOrder = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
   const { data } = await orderClient.post(`/internal/orders/${req.params.id}/refund`, req.body);
@@ -962,6 +983,7 @@ const platform = {
     return c.put(`/internal/platform/articles/${req.params.id}`, body).then((r) => ({ data: r.data }));
   }),
   deleteArticle: platformProxy((c, req) => c.delete(`/internal/platform/articles/${req.params.id}`).then(() => ({ status: 204 }))),
+  restoreArticle: platformProxy((c, req) => c.post(`/internal/platform/articles/${req.params.id}/restore`).then(() => ({ status: 204 }))),
   getArticleCategories: platformProxy((c) => c.get('/internal/platform/article-categories').then((r) => ({ data: r.data }))),
   getArticleCategory: platformProxy((c, req) => c.get(`/internal/platform/article-categories/${req.params.id}`).then((r) => ({ data: r.data }))),
   createArticleCategory: platformProxy((c, req) => c.post('/internal/platform/article-categories', req.body).then((r) => ({ data: r.data, status: 201 }))),
@@ -1240,6 +1262,8 @@ module.exports = {
   getBatches,
   addMaterial,
   getCourses,
+  deleteCourse,
+  restoreCourse,
   getCourse,
   getCourseSessions,
   listBatches,
@@ -1261,6 +1285,7 @@ module.exports = {
   updateOrder,
   refundOrder,
   deleteOrder,
+  restoreOrder,
   getCouponUsages,
   getCouponUsageSummary,
   getCoupons,

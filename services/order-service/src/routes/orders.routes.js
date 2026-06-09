@@ -30,6 +30,7 @@ function register(router) {
   router.post('/internal/orders', internalAuth, ordersController.createManualOrder);
   router.put('/internal/orders/:id', internalAuth, ordersController.updateOrder);
   router.post('/internal/orders/:id/refund', internalAuth, ordersController.refundOrder);
+  router.post('/internal/orders/:id/restore', internalAuth, ordersController.restoreOrder);
   router.delete('/internal/orders/:id', internalAuth, ordersController.deleteOrder);
   router.get('/internal/users/:userId/purchases', internalAuth, ordersController.getUserPurchasesInternal);
 

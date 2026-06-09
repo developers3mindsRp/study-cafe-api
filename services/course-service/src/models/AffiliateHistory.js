@@ -14,7 +14,7 @@ module.exports = (sequelize) => {
       order_amount: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
       commission_amount: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
       status: {
-        type: DataTypes.ENUM('pending', 'confirmed'),
+        type: DataTypes.ENUM('pending', 'confirmed', 'expired'),
         defaultValue: 'confirmed',
       },
     },

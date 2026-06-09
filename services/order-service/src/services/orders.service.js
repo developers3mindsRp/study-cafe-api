@@ -5,7 +5,15 @@ const { Op, QueryTypes } = require('sequelize');
 const { getRedis } = require('../config/redis');
 const config = require('../config');
 const { getRazorpayInstance, getRazorpayConfig } = require('./payment.service');
-const { AppError, logger, computeMembershipUpgradeCredit } = require('../../../../shared');
+const {
+  AppError,
+  logger,
+  computeMembershipUpgradeCredit,
+  parseTrashedMode,
+  sqlDeletedAtIsNull,
+  trashedSequelizeOptions,
+  withTrashedWhere,
+} = require('../../../../shared');
 
 // GST rate applied on top of the post-discount price before charging via Razorpay
 const GST_RATE = 0.18;
@@ -456,11 +464,81 @@ async function syncCouponUsageForReusedOrder(orderPublicId, userId, previousCoup
   }
 }
 
+const PAID_ORDER_STATUSES = ['paid', 'completed'];
+
+/** Outer row ref — Sequelize aliases Order model as `Order`, not table name `orders`. */
+function orderCol(col) {
+  return `\`Order\`.\`${col}\``;
+}
+
+/** SQL subquery: course validity for the current orders row (defaults to 1year). */
+function courseValiditySqlForOrderRow() {
+  return `COALESCE((
+    SELECT c.validity FROM courses c
+    WHERE c.id = CAST(${orderCol('entity_id')} AS UNSIGNED)
+      AND ${sqlDeletedAtIsNull('c')}
+    LIMIT 1
+  ), '1year')`;
+}
+
+/** Paid course orders past the 1-year access window (non-lifetime courses only). */
+function buildExpiredCourseAccessWhere() {
+  const validity = courseValiditySqlForOrderRow();
+  return {
+    [Op.and]: [
+      { type: 'course' },
+      { status: { [Op.in]: PAID_ORDER_STATUSES } },
+      sequelize.literal(`(${validity}) <> 'lifetime'`),
+      sequelize.literal(`${orderCol('created_at')} <= DATE_SUB(NOW(), INTERVAL 1 YEAR)`),
+    ],
+  };
+}
+
+function mergeCourseAccessFilter(baseWhere, courseAccess) {
+  const mode = courseAccess && String(courseAccess).toLowerCase().trim();
+  if (mode !== 'active' && mode !== 'expired') return baseWhere;
+  const expired = buildExpiredCourseAccessWhere();
+  const clause = mode === 'expired' ? expired : { [Op.not]: expired };
+  if (!baseWhere || Object.keys(baseWhere).length === 0) return clause;
+  return { [Op.and]: [baseWhere, clause] };
+}
+
+function computeCourseAccessLabel(order, validityByCourseId) {
+  if (order.type !== 'course') return null;
+  const status = String(order.status || '').toLowerCase();
+  if (!PAID_ORDER_STATUSES.includes(status)) return null;
+  const cid = Number(order.entity_id);
+  const validity =
+    Number.isFinite(cid) && validityByCourseId.has(cid)
+      ? validityByCourseId.get(cid)
+      : '1year';
+  if (validity === 'lifetime') return 'lifetime';
+  const created = order.created_at ? new Date(order.created_at) : null;
+  if (!created || Number.isNaN(created.getTime())) return 'active';
+  const expiresAt = new Date(created);
+  expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+  return new Date() > expiresAt ? 'expired' : 'active';
+}
+
+async function fetchCourseValiditiesMap(courseIds) {
+  const ids = [...new Set(courseIds.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+  const map = new Map();
+  if (!ids.length) return map;
+  const rows = await sequelize.query(
+    `SELECT id, validity FROM courses WHERE id IN (:ids) AND ${sqlDeletedAtIsNull()}`,
+    { replacements: { ids }, type: QueryTypes.SELECT },
+  );
+  for (const r of rows) {
+    map.set(Number(r.id), r.validity === 'lifetime' ? 'lifetime' : '1year');
+  }
+  return map;
+}
+
 /** Fetch the validity setting ('1year' | 'lifetime') for a course from the shared DB. */
 async function fetchCourseValidity(courseId) {
   try {
     const rows = await sequelize.query(
-      'SELECT validity FROM courses WHERE id = ? LIMIT 1',
+      `SELECT validity FROM courses WHERE id = ? AND ${sqlDeletedAtIsNull()} LIMIT 1`,
       { replacements: [Number(courseId)], type: QueryTypes.SELECT }
     );
     return rows[0]?.validity ?? '1year';
@@ -1584,16 +1662,52 @@ function parseAmountFilter(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-async function listAllOrders({ limit = 100, offset = 0, search = '', sortBy = 'created_at', sortOrder = 'DESC', dateFrom, dateTo, courseId, type, amountMin, amountMax }) {
-  const where = {};
+async function listAllOrders({
+  limit = 100,
+  offset = 0,
+  search = '',
+  sortBy = 'created_at',
+  sortOrder = 'DESC',
+  dateFrom,
+  dateTo,
+  courseId,
+  type,
+  amountMin,
+  amountMax,
+  status,
+  trashed,
+  courseAccess,
+}) {
+  const trashMode = parseTrashedMode({ trashed });
+  let where = {};
 
   if (search) {
-    where[Op.or] = [
-      { order_id: { [Op.like]: `%${search}%` } },
-      { buyer_email: { [Op.like]: `%${search}%` } },
-      { buyer_name: { [Op.like]: `%${search}%` } },
-      { type: { [Op.like]: `%${search}%` } },
+    const term = String(search).trim();
+    const paymentRows = await Payment.findAll({
+      where: { razorpay_payment_id: { [Op.like]: `%${term}%` } },
+      attributes: ['order_id'],
+      raw: true,
+    });
+    const orderIdsFromPayments = [...new Set(paymentRows.map((p) => p.order_id))];
+    const orClauses = [
+      { order_id: { [Op.like]: `%${term}%` } },
+      { buyer_email: { [Op.like]: `%${term}%` } },
+      { buyer_name: { [Op.like]: `%${term}%` } },
+      { buyer_mobile: { [Op.like]: `%${term}%` } },
     ];
+    if (orderIdsFromPayments.length) {
+      orClauses.push({ id: { [Op.in]: orderIdsFromPayments } });
+    }
+    where[Op.or] = orClauses;
+  }
+
+  if (status) {
+    const s = String(status).toLowerCase().trim();
+    if (s === 'completed') {
+      where.status = { [Op.in]: ['paid', 'completed'] };
+    } else {
+      where.status = s;
+    }
   }
 
   if (dateFrom || dateTo) {
@@ -1628,8 +1742,11 @@ async function listAllOrders({ limit = 100, offset = 0, search = '', sortBy = 'c
     if (maxAmount != null) where.amount[Op.lte] = maxAmount;
   }
 
+  const listWhere = mergeCourseAccessFilter(withTrashedWhere(where, trashMode), courseAccess);
+
   const { rows, count } = await Order.findAndCountAll({
-    where,
+    where: listWhere,
+    ...trashedSequelizeOptions(trashMode),
     order: [[sortBy, sortOrder]],
     attributes: [
       'id',
@@ -1691,6 +1808,8 @@ async function listAllOrders({ limit = 100, offset = 0, search = '', sortBy = 'c
   const courseIds = [...new Set(orders.filter(o => o.type === 'course').map(o => o.entity_id).filter(Boolean))];
   const planIds = [...new Set(orders.filter(o => o.type === 'membership').map(o => o.entity_id).filter(Boolean))];
 
+  const validityByCourseId = await fetchCourseValiditiesMap(courseIds);
+
   let entityNameMap = {};
 
   // Bulk fetch courses if any
@@ -1736,6 +1855,7 @@ async function listAllOrders({ limit = 100, offset = 0, search = '', sortBy = 'c
       buyer_email: o.buyer_email || (user ? user.email : null),
       buyer_mobile: o.buyer_mobile || (user ? user.phone : null),
       entity_name: entityNameMap[`${o.type}_${o.entity_id}`] || (o.type === 'membership' ? 'Plan' : 'Course'),
+      course_access: computeCourseAccessLabel(o, validityByCourseId),
     };
   });
 
@@ -2399,6 +2519,52 @@ async function applyCoupon(userId, { couponCode, type, id }) {
 
 // ─── Admin Order Management ───────────────────────────────────────────────────
 
+function normalizeAdminPaymentId(value) {
+  if (value == null) return '';
+  return String(value).trim();
+}
+
+/** Create or update a captured payment row for admin manual completion. */
+async function ensurePaymentCaptured(orderRow, razorpayPaymentId, { signature = null, source = 'manual', transaction }) {
+  const ref = normalizeAdminPaymentId(razorpayPaymentId);
+  if (!ref) throw new AppError('Payment ID is required when marking order as paid', 400);
+
+  const existingPay = await Payment.findOne({
+    where: { razorpay_payment_id: ref },
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+  });
+  if (!existingPay) {
+    await Payment.create(
+      {
+        order_id: orderRow.id,
+        razorpay_payment_id: ref,
+        razorpay_signature: signature,
+        amount: orderRow.amount,
+        status: 'captured',
+        source,
+      },
+      { transaction }
+    );
+    return ref;
+  }
+  if (String(existingPay.order_id) !== String(orderRow.id)) {
+    throw new AppError('Payment ID is already linked to another order', 409);
+  }
+  if (existingPay.status !== 'captured') {
+    await existingPay.update(
+      {
+        status: 'captured',
+        razorpay_signature: signature ?? existingPay.razorpay_signature,
+        amount: orderRow.amount,
+        source,
+      },
+      { transaction }
+    );
+  }
+  return ref;
+}
+
 async function createManualOrder(data) {
   const {
     user_id,
@@ -2413,7 +2579,8 @@ async function createManualOrder(data) {
     buyer_gst,
     affiliate,
     coupon_code,
-    rp_payment_id,
+    payment_id,
+    razorpay_payment_id,
   } = data;
 
   const typeUpper = normalizeOrderType(type);
@@ -2457,7 +2624,6 @@ async function createManualOrder(data) {
         status: status,
         affiliate: normalizeReferralForOrder(affiliate),
         gateway: 'manual',
-        rp_payment_id: rp_payment_id || null,
         coupon_code: couponResult ? couponResult.coupon.code : (coupon_code || null),
         coupon_discount: couponResult ? couponResult.discountAmount : 0,
         original_amount: originalAmount,
@@ -2473,20 +2639,11 @@ async function createManualOrder(data) {
     });
 
     if (status === 'paid') {
-      const manualRef = rp_payment_id || `manual:${orderId}`;
-      await Payment.create(
-        {
-          order_id: locked.id,
-          razorpay_payment_id: manualRef,
-          razorpay_signature: null,
-          amount: locked.amount,
-          status: 'captured',
-          source: 'manual',
-        },
-        { transaction: t }
-      );
+      const adminPaymentRef =
+        normalizeAdminPaymentId(payment_id || razorpay_payment_id) || `manual:${orderId}`;
+      await ensurePaymentCaptured(locked, adminPaymentRef, { source: 'manual', transaction: t });
       await emitPurchaseOutbox(locked, t);
-      await emitPaymentEmailOutbox(locked, manualRef, 'success', t);
+      await emitPaymentEmailOutbox(locked, adminPaymentRef, 'success', t);
       if (couponResult) {
         await recordCouponUsage(couponResult.coupon.id, user_id, orderId, t);
       }
@@ -2619,27 +2776,31 @@ async function updateOrder(id, data) {
       newStatus !== 'failed' &&
       newStatus !== 'cancelled';
 
+    const adminPaymentRef = normalizeAdminPaymentId(data.payment_id || data.razorpay_payment_id);
+
     // First transition to paid (manual fulfillment path).
     if (
       newStatus === 'paid' &&
       oldStatus !== 'paid' &&
       oldStatus !== 'completed'
     ) {
-      const manualRef = `manual:${reloaded.order_id}`;
-      await Payment.findOrCreate({
-        where: { order_id: reloaded.id, source: 'manual' },
-        defaults: {
-          order_id: reloaded.id,
-          razorpay_payment_id: manualRef,
-          razorpay_signature: null,
-          amount: reloaded.amount,
-          status: 'captured',
-          source: 'manual',
-        },
-        transaction: t,
-      });
+      if (!adminPaymentRef && oldStatus === 'failed') {
+        throw new AppError(
+          'Razorpay Payment ID is required when marking a failed order as paid',
+          400
+        );
+      }
+      const paymentRef = adminPaymentRef || `manual:${reloaded.order_id}`;
+      await ensurePaymentCaptured(reloaded, paymentRef, { source: 'manual', transaction: t });
       await emitPurchaseOutbox(reloaded, t);
-      await emitPaymentEmailOutbox(reloaded, manualRef, 'success', t);
+      await emitPaymentEmailOutbox(reloaded, paymentRef, 'success', t);
+    } else if (
+      adminPaymentRef &&
+      (newStatus === 'paid' || newStatus === 'completed') &&
+      (oldStatus === 'paid' || oldStatus === 'completed')
+    ) {
+      // Update payment reference on an already-paid order without re-fulfilling.
+      await ensurePaymentCaptured(reloaded, adminPaymentRef, { source: 'manual', transaction: t });
     }
 
     // Paid/completed order had item swapped: grant new course/plan without duplicate affiliate commission.
@@ -2707,21 +2868,19 @@ async function updateOrder(id, data) {
 }
 
 async function deleteOrder(id) {
-  return await sequelize.transaction(async (t) => {
-    const order = await Order.findByPk(id, { transaction: t });
-    if (!order) return null;
+  const order = await Order.findByPk(id);
+  if (!order) return null;
+  await order.destroy();
+  logger.info(`[orders] moved to trash id=${id} order_id=${order.order_id}`);
+  return { id };
+}
 
-    // Revoke access before deleting the order record
-    await revokeAccessForOrder(order);
-
-    // Delete associated payments
-    await Payment.destroy({ where: { order_id: order.id }, transaction: t });
-
-    // Delete the order itself
-    await order.destroy({ transaction: t });
-
-    return { id };
-  });
+async function restoreOrder(id) {
+  const order = await Order.findByPk(id, { paranoid: false });
+  if (!order || !order.deleted_at) return null;
+  await order.restore();
+  logger.info(`[orders] restored from trash id=${id} order_id=${order.order_id}`);
+  return { id };
 }
 
 // ─── Admin coupon CRUD ────────────────────────────────────────────────────────
@@ -2774,6 +2933,7 @@ module.exports = {
   createManualOrder,
   updateOrder,
   deleteOrder,
+  restoreOrder,
   refundOrder,
   validateCouponForPreview,
   getOrderStats,

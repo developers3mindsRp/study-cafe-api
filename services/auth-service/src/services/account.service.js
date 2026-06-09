@@ -21,6 +21,7 @@ function mapUserToProfile(userRow) {
     state: u.state || undefined,
     country: u.country || undefined,
     bio: u.bio != null && String(u.bio).trim() !== '' ? String(u.bio) : undefined,
+    gst: u.gst || undefined,
     createdAt: u.created_at,
     updatedAt: u.updated_at,
   };
@@ -51,6 +52,7 @@ async function updateProfile(userId, body) {
     'country',
     'profile_pic_url',
     'bio',
+    'gst',
   ];
   const patch = {};
   for (const k of allowed) {

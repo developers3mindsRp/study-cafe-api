@@ -49,6 +49,8 @@ module.exports = (sequelize) => {
       timestamps: true,
       createdAt: 'created_at',
       updatedAt: 'updated_at',
+      paranoid: true,
+      deletedAt: 'deleted_at',
       defaultScope: { attributes: { exclude: ['password_hash'] } },
       scopes: {
         withPassword: { attributes: {} },

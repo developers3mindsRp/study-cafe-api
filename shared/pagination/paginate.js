@@ -26,6 +26,7 @@ async function paginate(model, options = {}) {
     distinct,
     col,
     subQuery,
+    paranoid,
   } = options;
 
   const safePage = Math.max(1, parseInt(String(page), 10) || 1);
@@ -49,6 +50,7 @@ async function paginate(model, options = {}) {
     ...(typeof distinct === 'boolean' && { distinct }),
     ...(col && { col }),
     ...(typeof subQuery === 'boolean' && { subQuery }),
+    ...(paranoid !== undefined && { paranoid }),
   };
 
   const { count, rows } = await model.findAndCountAll(findOptions);

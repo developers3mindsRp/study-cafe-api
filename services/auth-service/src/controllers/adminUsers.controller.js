@@ -32,6 +32,11 @@ const getOne = asyncHandler(async (req, res) => {
   sendSuccess(res, user);
 });
 
+const lookup = asyncHandler(async (req, res) => {
+  const result = await adminUsersService.lookupUserForAdminGrant(req.query.email);
+  sendSuccess(res, result);
+});
+
 const create = asyncHandler(async (req, res) => {
   const { email, password, name, role_id, permission_overrides } = req.body;
   const user = await adminUsersService.createAdminUser({
@@ -74,4 +79,4 @@ const remove = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
-module.exports = { listRoles, list, getOne, create, update, remove, createRole };
+module.exports = { listRoles, list, getOne, lookup, create, update, remove, createRole };

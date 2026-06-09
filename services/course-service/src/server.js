@@ -11,13 +11,15 @@ try {
 
 const config = require('./config');
 const { createApp } = require('./app');
-const { connect } = require('./models');
+const { connect, sequelize } = require('./models');
 const { logger } = require('../../../shared');
+const { ensureAffiliateExpirySchema } = require('./bootstrap/ensureAffiliateExpirySchema');
 
 const app = createApp();
 
 connect()
-  .then(() => {
+  .then(async () => {
+    await ensureAffiliateExpirySchema(sequelize);
     app.listen(config.port, () =>
       logger.info(`${config.serviceName} listening on port ${config.port}`)
     );

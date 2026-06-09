@@ -1,5 +1,6 @@
 const { UserCourse, UserMembership, User, sequelize } = require('../models');
 const { QueryTypes, Op } = require('sequelize');
+const { sqlDeletedAtIsNull } = require('../../../../shared');
 const authService = require('./auth.service');
 const config = require('../config');
 
@@ -19,15 +20,22 @@ async function checkMembershipAccess(userId, courseId) {
     where: { user_id: userId },
     attributes: ['membership_type'],
   });
-
+ 
   const activeSlugs = activeMemberships
     .map((m) => m.membership_type)
     .filter(Boolean);
 
   if (activeSlugs.length === 0) return false;
 
-  // Step 2: Filter to only non-expired memberships
-  const now_str = now.toISOString().slice(0, 19).replace('T', ' ');
+  // Course must be active (not in trash) for membership-based access on public APIs.
+  const [activeCourse] = await sequelize.query(
+    `SELECT 1 AS ok FROM courses WHERE id = :courseId AND ${sqlDeletedAtIsNull()} LIMIT 1`,
+    {
+      replacements: { courseId: Number(courseId) },
+      type: QueryTypes.SELECT,
+    },
+  );
+  if (!activeCourse) return false;
 
   // Step 3: Check if any active plan includes this course (via direct ID or category)
   const [result] = await sequelize.query(

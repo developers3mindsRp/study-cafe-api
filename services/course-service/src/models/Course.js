@@ -44,6 +44,8 @@ module.exports = (sequelize) => {
       is_published: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       /** When true, course is excluded from public listings and marketing pages unless the viewer has course access. */
       hide_from_public: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+      /** When true, learners who complete the course may download a completion certificate. */
+      certificate_enabled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
       status: { type: DataTypes.STRING(20), defaultValue: 'draft' },
       start_date: { type: DataTypes.DATE, allowNull: true },
       end_date: { type: DataTypes.DATE, allowNull: true },
@@ -60,6 +62,8 @@ module.exports = (sequelize) => {
       timestamps: true,
       createdAt: 'created_at',
       updatedAt: 'updated_at',
+      paranoid: true,
+      deletedAt: 'deleted_at',
     }
   );
   Course.associate = (models) => {

@@ -34,7 +34,9 @@
     "dev:kill-ports": "for p in 3000 4001 4002 4003 4004 4005; do lsof -ti:$p 2>/dev/null | xargs kill -9 2>/dev/null; done; echo Done. Ports freed.",
     "migrate:wp-to-ms": "node scripts/migrate-wp-to-ms.js",
     "sync": "bash scripts/run-full-migration.sh",
-    "seed:admin": "cross-env PORT=4001 npm run seed:admin --prefix services/auth-service"
+    "seed:admin": "cross-env PORT=4001 npm run seed:admin --prefix services/auth-service",
+    "migrate:gst": "node scripts/check-gst-column.js",
+    "check:gst": "node scripts/check-gst-column.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

@@ -5,7 +5,16 @@ const { Op } = require('sequelize');
 const { User, Role, UserMembership } = require('../models');
 const { getRedis } = require('../config/redis');
 const config = require('../config');
-const { getEffectivePermissions } = require('../config/permissions');
+const { getEffectivePermissions, parseRolePermissions } = require('../config/permissions');
+const { isDynamicRoleSchemaReady } = require('./rolesSchema');
+
+function roleIncludeForSession() {
+  return {
+    model: Role,
+    as: 'Role',
+    attributes: isDynamicRoleSchemaReady() ? ['name', 'permissions'] : ['name'],
+  };
+}
 const { AppError, logger } = require('../../../../shared');
 const phpass = require('../utils/phpass');
 const emailService = require('./email.service');
@@ -130,7 +139,7 @@ function userIsEmailVerified(plain) {
 const SESSION_USER_ATTRS = [
   'id', 'email', 'name', 'bio', 'role_id', 'password_hash', 'permission_overrides',
   'profile_pic_url', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country',
-  'referral_code', 'email_verified_at',
+  'gst', 'referral_code', 'email_verified_at',
 ];
 
 function signAccess(payload) {
@@ -197,7 +206,11 @@ async function sessionFromUserEntity(user) {
     await redis.setEx(`token:${plain.id}`, config.cacheTtl, accessToken);
   } catch (_) { }
   // Note: Redis caching failure is non-critical; auth proceeds without cache
-  const permissions = getEffectivePermissions(role, plain.permission_overrides);
+  const permissions = getEffectivePermissions(
+    role,
+    plain.permission_overrides,
+    parseRolePermissions(plain.Role)
+  );
   const has_active_membership = await hasActiveMembershipForUserId(plain.id);
   return {
     token: accessToken,
@@ -216,6 +229,7 @@ async function sessionFromUserEntity(user) {
       city: plain.city || null,
       state: plain.state || null,
       country: plain.country || null,
+      gst: plain.gst || null,
       referral_code: plain.referral_code || null,
       role,
       permissions,
@@ -238,6 +252,7 @@ async function register({
   city,
   state,
   country,
+  gst,
 }) {
   const userRole = await Role.findOne({
     where: { name: 'user' },
@@ -283,6 +298,7 @@ async function register({
       country != null && String(country).trim() !== ''
         ? String(country).trim()
         : 'India',
+    gst: gst ? String(gst).trim() : null,
     role_id: userRole.id,
     referral_code: newReferralCode,
     referred_by: referredBy,
@@ -306,10 +322,10 @@ async function register({
   });
 
   const withRole = await User.findByPk(user.id, {
-    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+    include: [roleIncludeForSession()],
     attributes: [
       'id', 'email', 'name', 'referral_code', 'phone', 'profession', 'company', 'designation',
-      'city', 'state', 'country', 'email_verified_at',
+      'city', 'state', 'country', 'gst', 'email_verified_at',
     ],
   });
   const r = withRole.get({ plain: true });
@@ -327,17 +343,41 @@ async function register({
     city: r.city,
     state: r.state,
     country: r.country,
+    gst: r.gst || null,
     email_verified: userIsEmailVerified(r),
   };
 }
 
-async function loginWithPassword({ email, password }) {
-  const norm = String(email).trim().toLowerCase();
-  const user = await User.scope('withPassword').findOne({
-    where: { email: norm, is_active: true },
-    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
-    attributes: SESSION_USER_ATTRS,
+async function findActiveUserByLoginIdentifier(identifier) {
+  const raw = String(identifier || '').trim();
+  if (!raw) return null;
+
+  const include = [{ model: Role, as: 'Role', attributes: ['name'] }];
+  const attrs = SESSION_USER_ATTRS;
+
+  if (raw.includes('@')) {
+    return User.scope('withPassword').findOne({
+      where: { email: raw.toLowerCase(), is_active: true },
+      include,
+      attributes: attrs,
+    });
+  }
+
+  const orClauses = [{ login: raw }];
+  if (/^\d+$/.test(raw)) {
+    const num = Number(raw);
+    orClauses.push({ wp_user_id: num }, { id: num });
+  }
+
+  return User.scope('withPassword').findOne({
+    where: { [Op.or]: orClauses, is_active: true },
+    include,
+    attributes: attrs,
   });
+}
+
+async function loginWithPassword({ email, password }) {
+  const user = await findActiveUserByLoginIdentifier(email);
   if (!user) return null;
   const passwordValid = await verifyAndMaybeUpgradePassword(password, user);
   if (!passwordValid) return null;
@@ -351,7 +391,7 @@ async function loginWithEmailOtp({ email, otp }) {
 
   const user = await User.findOne({
     where: { email: norm, is_active: true },
-    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+    include: [roleIncludeForSession()],
     attributes: SESSION_USER_ATTRS.filter((a) => a !== 'password_hash'),
   });
   return sessionFromUserEntity(user);
@@ -393,7 +433,7 @@ async function verifyEmailWithToken(accessToken, otp) {
   const userId = decoded.userId;
   const row = await User.findByPk(userId, {
     where: { is_active: true },
-    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+    include: [roleIncludeForSession()],
     attributes: SESSION_USER_ATTRS.filter((a) => a !== 'password_hash'),
   });
   if (!row) throw new AppError('User not found or inactive', 401);
@@ -404,7 +444,7 @@ async function verifyEmailWithToken(accessToken, otp) {
   const ok = await verifyOtp('verify_email', String(userId), otp, { consume: true });
   if (!ok) throw new AppError('Invalid or expired verification code', 400);
   await row.update({ email_verified_at: new Date() });
-  await row.reload({ include: [{ model: Role, as: 'Role', attributes: ['name'] }] });
+  await row.reload({ include: [roleIncludeForSession()] });
   return sessionFromUserEntity(row);
 }
 
@@ -434,16 +474,20 @@ async function validateToken(token) {
   const decoded = verifyAccess(token);
   const user = await User.findByPk(decoded.userId, {
     where: { is_active: true },
-    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+    include: [roleIncludeForSession()],
     attributes: [
       'id', 'email', 'name', 'bio', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country',
-      'permission_overrides', 'referral_code', 'profile_pic_url', 'email_verified_at',
+      'gst', 'permission_overrides', 'referral_code', 'profile_pic_url', 'email_verified_at',
     ],
   });
   if (!user) return null;
   const r = user.get({ plain: true });
   const role = r.Role?.name || 'user';
-  const permissions = getEffectivePermissions(role, r.permission_overrides);
+  const permissions = getEffectivePermissions(
+    role,
+    r.permission_overrides,
+    parseRolePermissions(r.Role)
+  );
   const has_active_membership = await hasActiveMembershipForUserId(r.id);
   const email_verified = userIsEmailVerified(r);
   return {
@@ -464,6 +508,7 @@ async function validateToken(token) {
     city: r.city || null,
     state: r.state || null,
     country: r.country || null,
+    gst: r.gst || null,
     email_verified,
   };
 }
@@ -557,7 +602,7 @@ async function refreshTokens(refreshToken) {
   const decoded = verifyRefresh(refreshToken);
   const user = await User.findByPk(decoded.userId, {
     where: { is_active: true },
-    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+    include: [roleIncludeForSession()],
     attributes: ['id', 'email', 'role_id', 'email_verified_at'],
   });
   if (!user) return null;
