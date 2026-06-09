@@ -2413,6 +2413,7 @@ async function createManualOrder(data) {
     buyer_gst,
     affiliate,
     coupon_code,
+    rp_payment_id,
   } = data;
 
   const typeUpper = normalizeOrderType(type);
@@ -2456,6 +2457,7 @@ async function createManualOrder(data) {
         status: status,
         affiliate: normalizeReferralForOrder(affiliate),
         gateway: 'manual',
+        rp_payment_id: rp_payment_id || null,
         coupon_code: couponResult ? couponResult.coupon.code : (coupon_code || null),
         coupon_discount: couponResult ? couponResult.discountAmount : 0,
         original_amount: originalAmount,
@@ -2471,7 +2473,7 @@ async function createManualOrder(data) {
     });
 
     if (status === 'paid') {
-      const manualRef = `manual:${orderId}`;
+      const manualRef = rp_payment_id || `manual:${orderId}`;
       await Payment.create(
         {
           order_id: locked.id,

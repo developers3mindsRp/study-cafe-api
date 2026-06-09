@@ -501,18 +501,28 @@ const getUserMemberships = asyncHandler(async (req, res) => {
 
 const grantUserMembership = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
-  const { membershipType, startsAt, expiresAt } = req.body;
+  const { membershipType, startsAt, expiresAt, price, paymentId, planValidity, planPurchasedFormatted, planExpiryFormatted } = req.body;
   if (!membershipType || !startsAt || !expiresAt) {
     throw new AppError('membershipType, startsAt, and expiresAt are required', 400);
   }
+  const planJson = (price || paymentId || planValidity || planPurchasedFormatted)
+    ? {
+        price: price ? String(price) : undefined,
+        plan_validity: planValidity ? String(planValidity) : undefined,
+        plan_purchased: planPurchasedFormatted || startsAt,
+        plan_expiry: planExpiryFormatted || expiresAt,
+        payment_id: paymentId ? String(paymentId) : undefined,
+      }
+    : null;
   await authClient.post('/access/grant-membership', {
     userId: req.params.id,
     membershipType,
     startsAt,
     expiresAt,
     orderId: null,
+    ...(planJson ? { planJson } : {}),
   });
-  await adminLogsService.logAction(adminId, 'GRANT_MEMBERSHIP', 'user_membership', String(req.params.id), { membershipType, startsAt, expiresAt }, req.ip);
+  await adminLogsService.logAction(adminId, 'GRANT_MEMBERSHIP', 'user_membership', String(req.params.id), { membershipType, startsAt, expiresAt, paymentId }, req.ip);
   sendSuccess(res, { granted: true });
 });
 
@@ -536,7 +546,8 @@ const addBatchEnrollment = asyncHandler(async (req, res) => {
 const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
   const batchId = req.params.id;
-  const emails = Array.isArray(req.body.emails) ? req.body.emails : [];
+  const { emails: rawEmails, price, paymentId, courseId } = req.body;
+  const emails = Array.isArray(rawEmails) ? rawEmails : [];
 
   if (emails.length === 0) {
     return sendSuccess(res, []);
@@ -558,6 +569,25 @@ const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
         const status = data.created === false ? 'already_enrolled' : 'enrolled';
         if (status === 'enrolled') {
           await adminLogsService.logAction(adminId, 'ADD_BATCH_ENROLLMENT', 'batch_enrollment', String(data.id), { batchId, userId: user.id }, req.ip);
+
+          // Create a manual order record when price or paymentId is provided
+          if ((price || paymentId) && courseId) {
+            try {
+              await orderClient.post('/internal/orders', {
+                user_id: user.id,
+                type: 'course',
+                entity_id: String(courseId),
+                amount: price ? Number(price) : 0,
+                buyer_email: user.email,
+                buyer_name: user.name || null,
+                buyer_mobile: user.phone || null,
+                status: 'paid',
+                rp_payment_id: paymentId || undefined,
+              });
+            } catch (orderErr) {
+              console.error('[bulkEnroll] order creation failed:', orderErr?.response?.data ?? orderErr?.message ?? orderErr);
+            }
+          }
         }
         return { email: normalized, status };
       } catch (err) {
@@ -571,7 +601,7 @@ const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
 
 const bulkGrantMembershipByEmails = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
-  const { emails, membershipType, startsAt, expiresAt } = req.body;
+  const { emails, membershipType, startsAt, expiresAt, price, paymentId, planValidity, planPurchasedFormatted, planExpiryFormatted } = req.body;
 
   if (!Array.isArray(emails) || emails.length === 0) {
     return sendSuccess(res, []);
@@ -579,6 +609,17 @@ const bulkGrantMembershipByEmails = asyncHandler(async (req, res) => {
   if (!membershipType || !startsAt || !expiresAt) {
     throw new AppError('membershipType, startsAt and expiresAt are required', 400);
   }
+
+  // Build the plan JSON object to store on users.plan when any payment detail is provided.
+  const planJson = (price || paymentId || planValidity || planPurchasedFormatted)
+    ? {
+        price: price ? String(price) : undefined,
+        plan_validity: planValidity ? String(planValidity) : undefined,
+        plan_purchased: planPurchasedFormatted || startsAt,
+        plan_expiry: planExpiryFormatted || expiresAt,
+        payment_id: paymentId ? String(paymentId) : undefined,
+      }
+    : null;
 
   // Resolve emails → user ids
   const { data: users } = await authClient.post('/internal/users/by-emails', { emails });
@@ -598,8 +639,9 @@ const bulkGrantMembershipByEmails = asyncHandler(async (req, res) => {
           startsAt,
           expiresAt,
           orderId: null,
+          ...(planJson ? { planJson } : {}),
         });
-        await adminLogsService.logAction(adminId, 'BULK_GRANT_MEMBERSHIP', 'user_membership', String(user.id), { membershipType, startsAt, expiresAt }, req.ip);
+        await adminLogsService.logAction(adminId, 'BULK_GRANT_MEMBERSHIP', 'user_membership', String(user.id), { membershipType, startsAt, expiresAt, paymentId }, req.ip);
         return { email: normalized, status: 'granted' };
       } catch (err) {
         return { email: normalized, status: 'error', message: err?.response?.data?.error || err.message };
