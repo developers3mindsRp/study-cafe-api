@@ -550,17 +550,30 @@ const affiliateService = {
    * Generate referral links for a user based on available courses, categories, and memberships.
    */
   async getReferralLinks(userId, referralCode) {
+    const { CourseCat } = require('../models');
+
     const courses = await Course.findAll({
       where: { is_published: true, status: 'publish' },
-      attributes: ['id', 'title', 'slug', 'price', 'sale_price', 'brief_description'],
+      attributes: ['id', 'title', 'slug', 'price', 'sale_price', 'brief_description', 'thumbnail_url'],
       order: [['created_at', 'DESC']],
     });
 
-    const { CourseCat } = require('../models');
+    const catAttrs = CourseCat.rawAttributes || {};
+    const catImageAttr = catAttrs.image_url
+      ? 'image_url'
+      : catAttrs.thumbnail_url
+        ? 'thumbnail_url'
+        : null;
+    const categoryAttrs = ['id', 'name', 'slug'];
+    if (catImageAttr) categoryAttrs.push(catImageAttr);
+
     const categories = await CourseCat.findAll({
-      attributes: ['id', 'name', 'slug'],
+      attributes: categoryAttrs,
       order: [['name', 'ASC']],
     });
+
+    const resolveImageUrl = (value) =>
+      typeof value === 'string' && value.trim() ? value.trim() : null;
 
     return {
       referralCode,
@@ -570,12 +583,14 @@ const affiliateService = {
         id: c.id,
         title: c.name,
         description: '',
+        imageUrl: catImageAttr ? resolveImageUrl(c[catImageAttr]) : null,
         url: `/courses?category=${c.slug}&ref=${referralCode}`,
       })),
       courses: courses.map(c => ({
         id: c.id,
         title: c.title,
         description: c.brief_description || '',
+        imageUrl: resolveImageUrl(c.thumbnail_url),
         originalPrice: parseFloat(c.price) || 0,
         discountedPrice: parseFloat(c.sale_price || c.price) || 0,
         url: `/course/${c.slug}?ref=${referralCode}`,
