@@ -137,10 +137,20 @@ function userIsEmailVerified(plain) {
 }
 
 const SESSION_USER_ATTRS = [
-  'id', 'email', 'name', 'bio', 'role_id', 'password_hash', 'permission_overrides',
+  'id', 'wp_user_id', 'email', 'name', 'bio', 'role_id', 'password_hash', 'permission_overrides',
   'profile_pic_url', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country',
-  'gst', 'referral_code', 'email_verified_at',
+  'gst', 'referral_code', 'email_verified_at', 'created_at',
 ];
+
+/** Migrated WP accounts are treated as already verified; new signups keep email_verified_at null until OTP. */
+async function ensureMigratedUserEmailVerified(user) {
+  if (!user) return;
+  const plain = user.get({ plain: true });
+  if (userIsEmailVerified(plain) || plain.wp_user_id == null) return;
+  const verifiedAt = plain.created_at || new Date();
+  await user.update({ email_verified_at: verifiedAt });
+  user.set('email_verified_at', verifiedAt);
+}
 
 function signAccess(payload) {
   return jwt.sign(payload, config.jwt.secret, { expiresIn: config.jwt.expiry });
@@ -381,6 +391,7 @@ async function loginWithPassword({ email, password }) {
   if (!user) return null;
   const passwordValid = await verifyAndMaybeUpgradePassword(password, user);
   if (!passwordValid) return null;
+  await ensureMigratedUserEmailVerified(user);
   return sessionFromUserEntity(user);
 }
 
@@ -394,6 +405,8 @@ async function loginWithEmailOtp({ email, otp }) {
     include: [roleIncludeForSession()],
     attributes: SESSION_USER_ATTRS.filter((a) => a !== 'password_hash'),
   });
+  if (!user) return null;
+  await ensureMigratedUserEmailVerified(user);
   return sessionFromUserEntity(user);
 }
 

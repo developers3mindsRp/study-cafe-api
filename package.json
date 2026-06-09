@@ -35,6 +35,7 @@
     "migrate:wp-to-ms": "node scripts/migrate-wp-to-ms.js",
     "sync": "bash scripts/run-full-migration.sh",
     "seed:admin": "cross-env PORT=4001 npm run seed:admin --prefix services/auth-service",
+    "migrate:email-verified": "cross-env PORT=4001 npm run migrate:email-verified --prefix services/auth-service",
     "migrate:gst": "node scripts/check-gst-column.js",
     "check:gst": "node scripts/check-gst-column.js"
   },
