@@ -24,7 +24,8 @@ const dashboardStats = asyncHandler(async (req, res) => {
 });
 
 const myCourses = asyncHandler(async (req, res) => {
-  const data = await accountService.myCourses(req.user.userId);
+  const search = req.query.search ? String(req.query.search).trim() : undefined;
+  const data = await accountService.myCourses(req.user.userId, { search });
   sendSuccess(res, data);
 });
 
