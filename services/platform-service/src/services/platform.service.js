@@ -154,14 +154,20 @@ function buildAuthorLabel(r) {
     || null;
 }
 
-/** Get display_name for one author from users table (same DB). */
+/** Get display label for one author from users table (same DB). */
 async function getAuthorDisplayName(authorId) {
   if (authorId == null) return null;
   const rows = await sequelize.query(
-    `SELECT first_name, last_name, display_name FROM users WHERE id = ? AND ${sqlDeletedAtIsNull()} LIMIT 1`,
+    `SELECT first_name, last_name, display_name, name, email FROM users WHERE id = ? AND ${sqlDeletedAtIsNull()} LIMIT 1`,
     { replacements: [authorId], type: QueryTypes.SELECT }
   );
-  return rows[0] ? buildAuthorLabel(rows[0]) : null;
+  if (rows[0]) return buildAuthorLabel(rows[0]);
+  // Legacy articles may store wp_user_id in author_id while users.id differs.
+  const byWp = await sequelize.query(
+    `SELECT first_name, last_name, display_name, name, email FROM users WHERE wp_user_id = ? AND ${sqlDeletedAtIsNull()} LIMIT 1`,
+    { replacements: [authorId], type: QueryTypes.SELECT }
+  );
+  return byWp[0] ? buildAuthorLabel(byWp[0]) : null;
 }
 
 /** Get display label for many author ids; returns Map<authorId, label>. */
@@ -169,12 +175,17 @@ async function getAuthorDisplayNamesBatch(authorIds) {
   const uniq = [...new Set(authorIds)].filter((id) => id != null);
   if (uniq.length === 0) return new Map();
   const rows = await sequelize.query(
-    `SELECT id, first_name, last_name, display_name, name, email FROM users WHERE id IN (?) AND ${sqlDeletedAtIsNull()}`,
-    { replacements: [uniq], type: QueryTypes.SELECT }
+    `SELECT id, wp_user_id, first_name, last_name, display_name, name, email
+     FROM users
+     WHERE (id IN (?) OR wp_user_id IN (?)) AND ${sqlDeletedAtIsNull()}`,
+    { replacements: [uniq, uniq], type: QueryTypes.SELECT }
   );
   const map = new Map();
   rows.forEach((r) => {
-    map.set(Number(r.id), buildAuthorLabel(r));
+    const label = buildAuthorLabel(r);
+    if (!label) return;
+    map.set(Number(r.id), label);
+    if (r.wp_user_id != null) map.set(Number(r.wp_user_id), label);
   });
   return map;
 }
@@ -1076,7 +1087,7 @@ async function getArticlesPublic(options = {}) {
     out.data = out.data.map((p) => ({
       ...p,
       cover_image_url: p.thumbnail_url,
-      author_name: authorNames.get(p.author_id) ?? p.author_id,
+      author_name: authorNames.get(p.author_id) ?? null,
       categories: articleCats.get(Number(p.id)) || [],
     }));
   }
@@ -1839,7 +1850,7 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     toc: tocItems,
     citation: buildArticleCitationFromRow(p),
     cover_image_url: p.thumbnail_url,
-    author_name: authorName ?? p.author_id,
+    author_name: authorName ?? null,
     download_url: p.rel_download_url || p.upload_url || null,
     whatsapp_link,
     telegram_link,
@@ -2099,7 +2110,7 @@ async function getArticlesInternal(options = {}) {
 
     result.data = result.data.map((r) => ({
       ...r,
-      author_name: authorNames.get(r.author_id) ?? r.author_id,
+      author_name: authorNames.get(r.author_id) ?? null,
       categories: catsByArticle.get(Number(r.id)) ?? [],
       tags: tagsByArticle.get(Number(r.id)) ?? [],
     }));
@@ -2164,7 +2175,7 @@ async function getArticleByIdInternal(id) {
     tags,
     article_type_ids: typeRows.map((r) => Number(r.article_type_id)),
     court_ids: courtRows.map((r) => Number(r.court_id)),
-    author_name: authorName ?? p.author_id,
+    author_name: authorName ?? null,
   };
   if (relatedArticles.length) result.related_articles = relatedArticles;
   return result;
@@ -2307,7 +2318,7 @@ async function updateArticle(id, data) {
   if (data.thumbnail_alt !== undefined) updates.thumbnail_alt = data.thumbnail_alt || null;
   if (data.thumbnail_link_url !== undefined) updates.thumbnail_link_url = data.thumbnail_link_url || null;
   if (data.thumbnail_caption !== undefined) updates.thumbnail_caption = data.thumbnail_caption || null;
-  if (data.author_id !== undefined) updates.author_id = data.author_id;
+  // author_id is set only on create; never overwrite on update.
   if (data.sub_heading !== undefined) updates.sub_heading = data.sub_heading;
   if (data.status !== undefined) updates.status = nextStatus;
   if (data.meta_title !== undefined) updates.meta_title = data.meta_title;

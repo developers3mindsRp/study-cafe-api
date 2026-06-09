@@ -935,11 +935,9 @@ const platform = {
     const body = adminId && !req.body.author_id ? { ...req.body, author_id: adminId } : req.body;
     return c.post('/internal/platform/articles', body).then((r) => ({ data: r.data, status: 201 }));
   }),
-  putArticle: platformProxy((c, req) => {
-    const adminId = getAdminId(req);
-    const body = adminId && !req.body.author_id ? { ...req.body, author_id: adminId } : req.body;
-    return c.put(`/internal/platform/articles/${req.params.id}`, body).then((r) => ({ data: r.data }));
-  }),
+  putArticle: platformProxy((c, req) =>
+    c.put(`/internal/platform/articles/${req.params.id}`, req.body).then((r) => ({ data: r.data }))
+  ),
   deleteArticle: platformProxy((c, req) => c.delete(`/internal/platform/articles/${req.params.id}`).then(() => ({ status: 204 }))),
   restoreArticle: platformProxy((c, req) => c.post(`/internal/platform/articles/${req.params.id}/restore`).then(() => ({ status: 204 }))),
   getArticleCategories: platformProxy((c) => c.get('/internal/platform/article-categories').then((r) => ({ data: r.data }))),
