@@ -747,7 +747,7 @@ async function createAllTables(tgt) {
       order_id VARCHAR(128) UNIQUE,
       order_amount DECIMAL(10,2),
       commission_amount DECIMAL(10,2) NOT NULL,
-      status ENUM('pending','confirmed') NOT NULL DEFAULT 'confirmed',
+      status ENUM('pending','confirmed','expired') NOT NULL DEFAULT 'confirmed',
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       KEY idx_ah_affiliate (affiliate_id),
       KEY idx_ah_user (user_id),
