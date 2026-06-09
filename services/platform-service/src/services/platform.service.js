@@ -2118,6 +2118,26 @@ async function getArticlesInternal(options = {}) {
   return result;
 }
 
+async function getArticleStatusCounts() {
+  const rows = await sequelize.query(
+    `SELECT status, COUNT(*) AS n FROM articles WHERE deleted_at IS NULL GROUP BY status`,
+    { type: QueryTypes.SELECT }
+  );
+  const map = {};
+  for (const r of rows) map[r.status] = Number(r.n);
+  return {
+    all: Object.values(map).reduce((s, n) => s + n, 0),
+    published: map['publish'] ?? 0,
+    draft: map['draft'] ?? 0,
+    scheduled: map['scheduled'] ?? 0,
+    pending: map['pending'] ?? 0,
+    trash: await sequelize.query(
+      `SELECT COUNT(*) AS n FROM articles WHERE deleted_at IS NOT NULL`,
+      { type: QueryTypes.SELECT }
+    ).then((r) => Number(r[0]?.n ?? 0)),
+  };
+}
+
 async function getArticleByIdInternal(id) {
   const row = await Article.findByPk(id, { paranoid: false });
   if (!row) return null;
@@ -3199,6 +3219,7 @@ module.exports = {
     getUpNextArticlesBySlugPublic,
     getArticlesInternal,
     getArticleByIdInternal,
+    getArticleStatusCounts,
     createArticle,
     updateArticle,
     deleteArticle,

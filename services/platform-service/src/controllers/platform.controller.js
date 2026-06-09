@@ -343,6 +343,11 @@ const getArticleByIdInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+const getArticleStatusCounts = asyncHandler(async (req, res) => {
+  const data = await platformService.articles.getArticleStatusCounts();
+  sendSuccess(res, data);
+});
+
 const createArticle = asyncHandler(async (req, res) => {
   const data = await platformService.articles.createArticle(req.body);
   sendCreated(res, data);
@@ -719,6 +724,7 @@ module.exports = {
   getArticleUpNext,
   getArticlesInternal,
   getArticleByIdInternal,
+  getArticleStatusCounts,
   createArticle,
   updateArticle,
   deleteArticle,
