@@ -100,7 +100,16 @@ function coerceSqlBoolean(value) {
   return false;
 }
 
-const { paginate, AppError, logger } = require('../../../../shared');
+const {
+  paginate,
+  AppError,
+  logger,
+  sqlDeletedAtIsNull,
+  activeRowWhere,
+  parseTrashedMode,
+  trashedSequelizeOptions,
+  withTrashedWhere,
+} = require('../../../../shared');
 const articleScheduling = require('./article-scheduling.service');
 const {
   sequelize,
@@ -149,7 +158,7 @@ function buildAuthorLabel(r) {
 async function getAuthorDisplayName(authorId) {
   if (authorId == null) return null;
   const rows = await sequelize.query(
-    'SELECT first_name, last_name, display_name FROM users WHERE id = ? LIMIT 1',
+    `SELECT first_name, last_name, display_name FROM users WHERE id = ? AND ${sqlDeletedAtIsNull()} LIMIT 1`,
     { replacements: [authorId], type: QueryTypes.SELECT }
   );
   return rows[0] ? buildAuthorLabel(rows[0]) : null;
@@ -160,7 +169,7 @@ async function getAuthorDisplayNamesBatch(authorIds) {
   const uniq = [...new Set(authorIds)].filter((id) => id != null);
   if (uniq.length === 0) return new Map();
   const rows = await sequelize.query(
-    'SELECT id, first_name, last_name, display_name, name, email FROM users WHERE id IN (?)',
+    `SELECT id, first_name, last_name, display_name, name, email FROM users WHERE id IN (?) AND ${sqlDeletedAtIsNull()}`,
     { replacements: [uniq], type: QueryTypes.SELECT }
   );
   const map = new Map();
@@ -974,54 +983,73 @@ async function getPlanLinkedCoursesInternal(id) {
   };
 }
 
+/** Merge non-trashed filter into Sequelize article where (public + active admin lists). */
+function withActiveArticleWhere(baseWhere = {}) {
+  const active = activeRowWhere();
+  if (!baseWhere || Object.keys(baseWhere).length === 0) return active;
+  return { [Op.and]: [baseWhere, active] };
+}
+
+/** Published, non-trashed articles only (public site). */
+function publishedActiveArticleWhere(extra = {}) {
+  return withActiveArticleWhere({ status: 'publish', ...extra });
+}
+
 async function getArticlesPublic(options = {}) {
   const { page = 1, limit = 20, search, category } = options;
   const normalizedCategory = category && String(category).trim()
     ? String(category).trim().toLowerCase()
     : undefined;
 
-  const where = { status: 'publish' };
-  if (search && String(search).trim()) {
-    const term = `%${String(search).trim()}%`;
-    where[Op.or] = [
-      { title: { [Op.like]: term } },
-      { excerpt: { [Op.like]: term } },
-    ];
-  }
-
-  // If category slug provided (except "all"), find category id and filter via mapping table.
-  if (normalizedCategory && normalizedCategory !== 'all') {
-    const catRow = await Category.findOne({ where: { slug: normalizedCategory }, attributes: ['id'] });
-    if (!catRow) {
-      return { data: [], total: 0, page, limit, totalPages: 0 };
-    }
-    const mapRows = await ArticleCategoryMap.findAll({ where: { category_id: catRow.id }, attributes: ['article_id'] });
-    const articleIds = mapRows.map((r) => r.article_id);
-    if (!articleIds.length) {
-      return { data: [], total: 0, page, limit, totalPages: 0 };
-    }
-    where.id = { [Op.in]: articleIds };
-  }
-
   const safePage = Math.max(1, Number(page) || 1);
   const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
   const offset = (safePage - 1) * safeLimit;
 
-  const { count, rows } = await Article.findAndCountAll({
-    where,
-    limit: safeLimit,
-    offset,
-    // Keep newest records first (latest created / last inserted)
-    order: [['created_at', 'DESC'], ['id', 'DESC']],
-    attributes: ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'published_at', 'created_at'],
-  });
+  const conditions = ["a.status = 'publish'", sqlDeletedAtIsNull('a')];
+  const replacements = { limit: safeLimit, offset };
 
-  const total = typeof count === 'number' ? count : count.length;
+  if (search && String(search).trim()) {
+    conditions.push('(a.title LIKE :search OR a.excerpt LIKE :search)');
+    replacements.search = `%${String(search).trim()}%`;
+  }
+
+  if (normalizedCategory && normalizedCategory !== 'all') {
+    const catRows = await sequelize.query(
+      'SELECT id FROM categories WHERE LOWER(slug) = :slug LIMIT 1',
+      { replacements: { slug: normalizedCategory }, type: QueryTypes.SELECT },
+    );
+    if (!catRows.length) {
+      return { data: [], total: 0, page: safePage, limit: safeLimit, totalPages: 0 };
+    }
+    conditions.push(`EXISTS (
+      SELECT 1 FROM article_categories ac
+      WHERE ac.article_id = a.id AND ac.category_id = :categoryId
+    )`);
+    replacements.categoryId = Number(catRows[0].id);
+  }
+
+  const whereSql = conditions.join(' AND ');
+
+  const [countRow] = await sequelize.query(
+    `SELECT COUNT(*) AS total FROM articles a WHERE ${whereSql}`,
+    { replacements, type: QueryTypes.SELECT },
+  );
+  const total = Number(countRow?.total || 0);
   const totalPages = Math.ceil(total / safeLimit) || 0;
 
-  // Flatten { data, meta } into { data, total, page, limit, totalPages }
+  const rows = total > 0
+    ? await sequelize.query(
+      `SELECT a.id, a.title, a.slug, a.excerpt, a.thumbnail_url, a.author_id, a.published_at, a.created_at
+       FROM articles a
+       WHERE ${whereSql}
+       ORDER BY a.created_at DESC, a.id DESC
+       LIMIT :limit OFFSET :offset`,
+      { replacements, type: QueryTypes.SELECT },
+    )
+    : [];
+
   const out = {
-    data: rows.map((r) => (typeof r.get === 'function' ? r.get({ plain: true }) : r)),
+    data: rows,
     total,
     page: safePage,
     limit: safeLimit,
@@ -1060,7 +1088,7 @@ async function getAuthorPublicProfile(authorId) {
   if (authorId == null) return null;
   const rows = await sequelize.query(
     `SELECT id, first_name, last_name, display_name, name, profession, designation, company, city, state, country, profile_pic_url
-     FROM users WHERE id = ? LIMIT 1`,
+     FROM users WHERE id = ? AND ${sqlDeletedAtIsNull()} LIMIT 1`,
     { replacements: [authorId], type: QueryTypes.SELECT },
   );
   const r = rows[0];
@@ -1082,7 +1110,7 @@ async function getAuthorPublicProfile(authorId) {
 async function getPublishedArticleCountForAuthor(authorId) {
   if (authorId == null) return 0;
   const rows = await sequelize.query(
-    'SELECT COUNT(*) AS n FROM articles WHERE author_id = ? AND status = ?',
+    `SELECT COUNT(*) AS n FROM articles WHERE author_id = ? AND status = ? AND ${sqlDeletedAtIsNull()}`,
     { replacements: [authorId, 'publish'], type: QueryTypes.SELECT },
   );
   return Number(rows[0]?.n || 0);
@@ -1094,7 +1122,7 @@ async function getPopularArticleTags(limit = 12) {
     `SELECT t.id, t.name, t.slug, COUNT(*) AS cnt
      FROM article_tags at
      INNER JOIN tags t ON t.id = at.tag_id
-     INNER JOIN articles a ON a.id = at.article_id AND a.status = 'publish'
+     INNER JOIN articles a ON a.id = at.article_id AND a.status = 'publish' AND ${sqlDeletedAtIsNull('a')}
      GROUP BY t.id, t.name, t.slug
      ORDER BY cnt DESC
      LIMIT ${lim}`,
@@ -1189,7 +1217,7 @@ async function getBlogSpotlightFeed(viewer, options = {}) {
     const focusId = Number(focus.id);
 
     const moreRows = await Article.findAll({
-      where: { status: 'publish', id: { [Op.ne]: focusId } },
+      where: publishedActiveArticleWhere({ id: { [Op.ne]: focusId } }),
       attributes: [
         'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
         'published_at', 'created_at', 'updated_at', 'blog_access_tier',
@@ -1204,11 +1232,10 @@ async function getBlogSpotlightFeed(viewer, options = {}) {
 
     const authorRecentRows = focus.author_id
       ? await Article.findAll({
-        where: {
-          status: 'publish',
+        where: publishedActiveArticleWhere({
           author_id: focus.author_id,
           id: { [Op.ne]: focusId },
-        },
+        }),
         attributes: [
           'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
           'published_at', 'created_at', 'updated_at', 'blog_access_tier',
@@ -1247,7 +1274,7 @@ async function getBlogSpotlightFeed(viewer, options = {}) {
   }
 
   const heroRow = await Article.findOne({
-    where: { status: 'publish' },
+    where: publishedActiveArticleWhere(),
     attributes: [
       'id', 'title', 'slug', 'excerpt', 'content', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
       'published_at', 'created_at', 'updated_at', 'blog_access_tier',
@@ -1273,7 +1300,7 @@ async function getBlogSpotlightFeed(viewer, options = {}) {
   const heroId = Number(hero.id);
 
   const moreRows = await Article.findAll({
-    where: { status: 'publish', id: { [Op.ne]: heroId } },
+    where: publishedActiveArticleWhere({ id: { [Op.ne]: heroId } }),
     attributes: [
       'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
       'published_at', 'created_at', 'updated_at', 'blog_access_tier',
@@ -1292,11 +1319,10 @@ async function getBlogSpotlightFeed(viewer, options = {}) {
 
   const authorRecentRows = hero.author_id
     ? await Article.findAll({
-      where: {
-        status: 'publish',
+      where: publishedActiveArticleWhere({
         author_id: hero.author_id,
         id: { [Op.ne]: heroId },
-      },
+      }),
       attributes: [
         'id', 'title', 'slug', 'excerpt', 'sub_heading', 'meta_description', 'thumbnail_url', 'author_id',
         'published_at', 'created_at', 'updated_at', 'blog_access_tier',
@@ -1445,6 +1471,7 @@ async function findPublishedArticlesSharingCategories(excludeArticleId, catIds, 
   const idRows = await sequelize.query(
     `SELECT a.id FROM articles a
      WHERE a.status = 'publish'
+       AND ${sqlDeletedAtIsNull('a')}
        AND a.id != ?
        AND EXISTS (
          SELECT 1 FROM article_categories ac
@@ -1489,7 +1516,7 @@ async function getRelatedArticlesForArticle(articleId, limit = 4) {
   // Fallback: latest published articles (excluding current)
   if (!rows.length) {
     rows = await Article.findAll({
-      where: { status: 'publish', id: { [Op.ne]: articleId } },
+      where: publishedActiveArticleWhere({ id: { [Op.ne]: articleId } }),
       attributes: RELATED_ATTRS,
       order: [['published_at', 'DESC'], ['id', 'DESC']],
       limit,
@@ -1534,9 +1561,11 @@ async function embedRelatedArticles(content) {
   const relatedIds = extractRelatedIds(content);
   if (!relatedIds.length) return content;
 
-  // Fetch all referenced articles in one query
+  // Fetch all referenced articles in one query (published, non-trashed only)
   const rows = await Article.findAll({
-    where: { [Op.or]: [{ wp_post_id: relatedIds }, { id: relatedIds }] },
+    where: publishedActiveArticleWhere({
+      [Op.or]: [{ wp_post_id: relatedIds }, { id: relatedIds }],
+    }),
     attributes: ['id', 'wp_post_id', 'title', 'slug', 'thumbnail_url'],
   });
   const byWpId = new Map();
@@ -1655,7 +1684,7 @@ async function findPublishedArticleRowByPublicPathKey(raw) {
   const { slugOnly, articleId } = parsePublicArticlePathKey(raw);
   if (articleId != null && Number.isFinite(articleId) && articleId > 0) {
     const row = await Article.findOne({
-      where: { id: articleId, status: 'publish' },
+      where: publishedActiveArticleWhere({ id: articleId }),
     });
     if (!row) return null;
     if (slugOnly) {
@@ -1666,7 +1695,7 @@ async function findPublishedArticleRowByPublicPathKey(raw) {
   }
   if (!slugOnly) return null;
   return Article.findOne({
-    where: { slug: slugOnly, status: 'publish' },
+    where: publishedActiveArticleWhere({ slug: slugOnly }),
   });
 }
 
@@ -1677,10 +1706,11 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
 
   let row = null;
   if (isPreview) {
-    row = await Article.findOne({ where: { id: previewArticleId } });
+    row = await Article.findOne({ where: { id: previewArticleId }, paranoid: false });
   }
   if (!row) row = await findPublishedArticleRowByPublicPathKey(slug);
   if (!row) return null;
+  if (!isPreview && row.deleted_at) return null;
   const p = row.get({ plain: true });
   
   // Extract TOC and inject anchor IDs into the content
@@ -1840,11 +1870,10 @@ async function getUpNextArticlesBySlugPublic(slug, viewer = null, rawLimit) {
 
   if (picked.length < limit && authorId != null) {
     const rows = await Article.findAll({
-      where: {
-        status: 'publish',
+      where: publishedActiveArticleWhere({
         author_id: authorId,
         id: { [Op.notIn]: [...pickedIds] },
-      },
+      }),
       attributes: UP_NEXT_LIST_ATTRS,
       order: [['published_at', 'DESC'], ['id', 'DESC']],
       limit: Math.max(limit * 3, 15),
@@ -1854,10 +1883,9 @@ async function getUpNextArticlesBySlugPublic(slug, viewer = null, rawLimit) {
 
   if (picked.length < limit) {
     const rows = await Article.findAll({
-      where: {
-        status: 'publish',
+      where: publishedActiveArticleWhere({
         id: { [Op.notIn]: [...pickedIds] },
-      },
+      }),
       attributes: UP_NEXT_LIST_ATTRS,
       order: [['published_at', 'DESC'], ['id', 'DESC']],
       limit: Math.max(limit * 4, 24),
@@ -1972,9 +2000,14 @@ async function getArticlesInternal(options = {}) {
     blog_access_tier,
     date_from,
     date_to,
+    trashed,
   } = options;
 
-  const where = buildArticlesWhere({ status, search, blog_access_tier, date_from, date_to });
+  const trashMode = parseTrashedMode({ trashed });
+  const baseWhere = buildArticlesWhere({ status, search, blog_access_tier, date_from, date_to });
+  const where = trashMode === 'only'
+    ? withTrashedWhere(baseWhere, trashMode)
+    : withActiveArticleWhere(baseWhere);
   const orderColumn = normalizeSortColumn(sortBy);
   const orderDir = String(sortOrder).toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
@@ -1994,6 +2027,7 @@ async function getArticlesInternal(options = {}) {
     sortBy: orderColumn,
     sortOrder: orderDir,
     attributes: ARTICLE_LIST_ATTRS,
+    ...trashedSequelizeOptions(trashMode),
   });
 
   if (result.data && result.data.length > 0) {
@@ -2042,7 +2076,7 @@ async function getArticlesInternal(options = {}) {
 }
 
 async function getArticleByIdInternal(id) {
-  const row = await Article.findByPk(id);
+  const row = await Article.findByPk(id, { paranoid: false });
   if (!row) return null;
   const p = row.get({ plain: true });
 
@@ -2050,7 +2084,9 @@ async function getArticleByIdInternal(id) {
   const relatedIds = extractRelatedIds(p.content);
   const relatedRows = relatedIds.length
     ? await Article.findAll({
-      where: { [Op.or]: [{ wp_post_id: relatedIds }, { id: relatedIds }] },
+      where: withActiveArticleWhere({
+        [Op.or]: [{ wp_post_id: relatedIds }, { id: relatedIds }],
+      }),
       attributes: ['id', 'wp_post_id', 'title', 'slug'],
     })
     : [];
@@ -2332,14 +2368,22 @@ async function updateArticle(id, data) {
 async function deleteArticle(id) {
   const row = await Article.findByPk(id, {
     attributes: ['id', 'slug'],
-    raw: true,
   });
-  if (row?.slug) {
-    await deleteSeoMetadataByPaths(articleDetailSeoPaths(row)).catch(() => {});
+  if (!row) return false;
+  if (row.slug) {
+    await deleteSeoMetadataByPaths(articleDetailSeoPaths(row.get({ plain: true }))).catch(() => {});
   }
   await articleScheduling.removeScheduledPublishJob(id).catch(() => {});
-  const deleted = await Article.destroy({ where: { id } });
-  return deleted > 0;
+  await row.destroy();
+  return true;
+}
+
+async function restoreArticle(id) {
+  const row = await Article.findByPk(id, { paranoid: false });
+  if (!row || !row.deleted_at) return false;
+  await row.restore();
+  logger.info('[restoreArticle] restored from trash', { id });
+  return true;
 }
 
 async function getArticleCategories() {
@@ -2681,7 +2725,7 @@ async function buildSeoFromCoursePath(path) {
   const courseRows = await sequelize.query(
     `SELECT id, title, slug, meta_title, meta_description, meta_keywords,
             canonical_url, robots, og_title, og_description, og_image_url
-     FROM courses WHERE slug IN (:slugs) LIMIT 1`,
+     FROM courses WHERE slug IN (:slugs) AND ${sqlDeletedAtIsNull()} LIMIT 1`,
     { replacements: { slugs: candidates.length ? candidates : [slugSegment] }, type: QueryTypes.SELECT }
   );
   const row = courseRows?.[0];
@@ -2825,13 +2869,14 @@ async function checkSlugNotUsedByModule(slug) {
     where: { slug: { [Op.in]: candidates } },
     attributes: ['slug'],
     raw: true,
+    paranoid: false,
   });
   if (articleMatch?.slug) {
     return { conflict: true, type: 'article', slug: articleMatch.slug };
   }
 
   const courseRows = await sequelize.query(
-    'SELECT slug FROM courses WHERE slug IN (:slugs) LIMIT 1',
+    `SELECT slug FROM courses WHERE slug IN (:slugs) AND ${sqlDeletedAtIsNull()} LIMIT 1`,
     {
       replacements: { slugs: candidates },
       type: QueryTypes.SELECT,
@@ -3114,6 +3159,7 @@ module.exports = {
     createArticle,
     updateArticle,
     deleteArticle,
+    restoreArticle,
   },
   articleCategories: {
     getArticleCategories,

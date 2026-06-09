@@ -45,6 +45,7 @@ module.exports = (sequelize) => {
       scheduled_publish_at: { type: DataTypes.DATE, allowNull: true },
       /** `free` = full content for everyone; `premium` = full content only for members (or admins). */
       blog_access_tier: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'free' },
+      deleted_at: { type: DataTypes.DATE, allowNull: true },
     },
     {
       tableName: 'articles',
@@ -52,6 +53,8 @@ module.exports = (sequelize) => {
       timestamps: true,
       createdAt: 'created_at',
       updatedAt: 'updated_at',
+      paranoid: true,
+      deletedAt: 'deleted_at',
     }
   );
   Article.associate = (models) => {

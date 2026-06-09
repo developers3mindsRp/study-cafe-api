@@ -1,6 +1,7 @@
 const authService = require('../services/auth.service');
 const { User, Role } = require('../models');
-const { getEffectivePermissions } = require('../config/permissions');
+const { getEffectivePermissions, parseRolePermissions } = require('../config/permissions');
+const { isDynamicRoleSchemaReady } = require('../services/rolesSchema');
 
 const ADMIN_ROLES = ['super_admin'];
 
@@ -14,13 +15,20 @@ async function requireAdmin(req, res, next) {
     const decoded = authService.verifyAccess(token);
     const user = await User.findByPk(decoded.userId, {
       where: { is_active: true },
-      include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+      include: [{
+        model: Role,
+        as: 'Role',
+        attributes: isDynamicRoleSchemaReady() ? ['name', 'permissions'] : ['name'],
+      }],
       attributes: ['id', 'email', 'name', 'role_id', 'permission_overrides'],
     });
     if (!user) return res.status(401).json({ error: 'User not found or inactive' });
     const roleName = user.Role?.name || 'user';
-    // Use same logic as login: super_admin/admin → ALL_PERMISSIONS, others → their overrides
-    const permissions = getEffectivePermissions(roleName, user.permission_overrides ?? []);
+    const permissions = getEffectivePermissions(
+      roleName,
+      user.permission_overrides ?? [],
+      parseRolePermissions(user.Role)
+    );
     const hasAdminAccess = permissions.includes('admin:access');
     if (!hasAdminAccess) {
       return res.status(403).json({ error: 'Admin access required' });

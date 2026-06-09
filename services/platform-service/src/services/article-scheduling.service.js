@@ -41,6 +41,7 @@
 
 const { QueryTypes } = require('sequelize');
 const { logger }     = require('../../../../shared');
+const { activeRowWhere } = require('../../../../shared');
 const { sequelize, Article } = require('../models');
 const { getArticlePublishQueue, publishJobId, queueName } = require('../queues/articlePublish.queue');
 
@@ -65,7 +66,8 @@ async function atomicPublishArticle(articleId, publishedAt) {
             published_at = :publishedAt,
             scheduled_publish_at = NULL
       WHERE id = :id
-        AND status = 'scheduled'`,
+        AND status = 'scheduled'
+        AND deleted_at IS NULL`,
     {
       replacements: { id: articleId, publishedAt },
       type: QueryTypes.UPDATE,
@@ -192,7 +194,7 @@ async function syncArticlePublishJob(row) {
  */
 async function reconcileScheduledArticleJobs() {
   const rows = await Article.findAll({
-    where: { status: 'scheduled' },
+    where: { status: 'scheduled', ...activeRowWhere() },
     attributes: ['id', 'status', 'scheduled_publish_at'],
   });
 

@@ -11,6 +11,7 @@ router.get('/distinct-states', internalAuth, usersController.distinctStates);
 router.get('/:id', usersController.getOne);
 router.put('/:id', usersController.update);
 router.delete('/:id', usersController.remove);
+router.post('/:id/restore', usersController.restore);
 router.post('/internal/list-by-ids', internalAuth, usersController.listByIds);
 
 const register = (rootRouter) => {

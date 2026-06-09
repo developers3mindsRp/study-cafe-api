@@ -16,7 +16,7 @@ const getCertificatePayload = asyncHandler(async (req, res) => {
   const userId = userIdFromReq(req);
   const auth = req.headers.authorization;
   const payload = await certificateService.getCertificateData(userId, req.params.courseId, auth);
-  if (!payload) throw new AppError('Certificate not available', 404);
+  if (!payload) throw new AppError('Certificate is not provided for this course', 404);
 
   // Fire-and-forget: send "certificate ready" email to the learner.
   // This endpoint is called when user opens/downloads the certificate in the UI.
@@ -130,7 +130,7 @@ const getCertificatePdfInternal = asyncHandler(async (req, res) => {
   if (!Number.isFinite(courseId) || courseId <= 0) throw new AppError('courseId is invalid', 400);
 
   const payload = await certificateService.getCertificateDataInternal(userId, courseId);
-  if (!payload) throw new AppError('Certificate not available', 404);
+  if (!payload) throw new AppError('Certificate is not provided for this course', 404);
 
   const pdf = await buildCertificatePdfBuffer(payload);
   res.setHeader('Content-Type', 'application/pdf');

@@ -22,6 +22,8 @@ const ALL_PERMISSIONS = [
   'global_settings:list', 'global_settings:view', 'global_settings:edit',
   'admin:access',
   'admin_users:list', 'admin_users:view', 'admin_users:create', 'admin_users:edit', 'admin_users:delete',
+  'roles:list', 'roles:view', 'roles:create', 'roles:edit', 'roles:delete',
+  'users:course_allotment',
   'banners:list', 'banners:view', 'banners:create', 'banners:edit', 'banners:delete',
 ];
 const MODULE_HIERARCHY = {
@@ -139,6 +141,12 @@ const MODULE_HIERARCHY = {
     ['admin_users:create'],
     ['admin_users:delete'],
   ],
+  roles: [
+    ['roles:list', 'roles:view'],
+    ['roles:edit'],
+    ['roles:create'],
+    ['roles:delete'],
+  ],
   banners: [
     ['banners:list', 'banners:view'],
     ['banners:edit'],
@@ -209,11 +217,26 @@ function mergePermissions(roleName, permissionOverrides) {
   return [...new Set([...rolePerms, ...overrides])];
 }
 
-function getEffectivePermissions(roleName, permissionOverrides) {
+/**
+ * Effective permissions = role template (DB or static fallback) ∪ user overrides, then hierarchy expansion.
+ * @param {string} roleName
+ * @param {string[]|null|undefined} permissionOverrides Per-user extras / overrides
+ * @param {string[]|null|undefined} rolePermissionsFromDb Permissions JSON from roles.permissions
+ */
+function getEffectivePermissions(roleName, permissionOverrides, rolePermissionsFromDb = null) {
   if (roleName === 'super_admin') return ALL_PERMISSIONS;
-  const list = Array.isArray(permissionOverrides) ? permissionOverrides : [];
-  // admin (and other roles) use only what is stored; expand module ladders for consistency
-  return expandPermissionHierarchy(list);
+
+  const overrides = Array.isArray(permissionOverrides) ? permissionOverrides : [];
+  const fromDb = Array.isArray(rolePermissionsFromDb) ? rolePermissionsFromDb : null;
+  const roleTemplate = fromDb ?? getPermissionsForRole(roleName);
+  const merged = [...new Set([...roleTemplate, ...overrides])];
+  return expandPermissionHierarchy(merged);
+}
+
+function parseRolePermissions(roleRow) {
+  if (!roleRow) return null;
+  const raw = roleRow.permissions ?? roleRow.get?.('permissions');
+  return Array.isArray(raw) ? raw : null;
 }
 
 function isAdminRole(roleName) {
@@ -225,7 +248,9 @@ module.exports = {
   mergePermissions,
   getEffectivePermissions,
   expandPermissionHierarchy,
+  parseRolePermissions,
   isAdminRole,
   ALL_PERMISSIONS,
   MODULE_HIERARCHY,
+  ROLE_PERMISSIONS,
 };

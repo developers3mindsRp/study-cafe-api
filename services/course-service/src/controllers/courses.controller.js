@@ -1,6 +1,6 @@
 const coursesService = require('../services/courses.service');
 const previewTokenService = require('../services/previewToken.service');
-const { asyncHandler, AppError, sendSuccess, sendCreated, sendPaginated } = require('../../../../shared');
+const { asyncHandler, AppError, sendSuccess, sendCreated, sendPaginated, sendNoContent } = require('../../../../shared');
 
 const list = asyncHandler(async (req, res) => {
   const rows = await coursesService.listPublished();
@@ -137,8 +137,20 @@ const addMaterial = asyncHandler(async (req, res) => {
 });
 
 const listAllInternal = asyncHandler(async (req, res) => {
-  const rows = await coursesService.listAll();
+  const rows = await coursesService.listAll({ trashed: req.query.trashed });
   sendSuccess(res, rows);
+});
+
+const deleteCourseInternal = asyncHandler(async (req, res) => {
+  const ok = await coursesService.deleteCourse(req.params.id);
+  if (!ok) throw new AppError('Course not found', 404);
+  sendNoContent(res);
+});
+
+const restoreCourseInternal = asyncHandler(async (req, res) => {
+  const ok = await coursesService.restoreCourse(req.params.id);
+  if (!ok) throw new AppError('Course not found in trash', 404);
+  sendNoContent(res);
 });
 
 const listByIdsOrCatIds = asyncHandler(async (req, res) => {
@@ -352,6 +364,8 @@ module.exports = {
   selectPurchaseBatch,
   addMaterial,
   listAllInternal,
+  deleteCourseInternal,
+  restoreCourseInternal,
   listCourseCatsInternal,
   createCourseCat,
   updateCourseCat,

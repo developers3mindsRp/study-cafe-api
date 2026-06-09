@@ -3,6 +3,7 @@ const healthRoutes = require('./health.routes');
 const authRoutes = require('./auth.routes');
 const accessRoutes = require('./access.routes');
 const adminUsersRoutes = require('./adminUsers.routes');
+const rolesRoutes = require('./roles.routes');
 const usersRoutes = require('./users.routes');
 const accountRoutes = require('./account.routes');
 
@@ -12,6 +13,7 @@ healthRoutes.register(router);
 authRoutes.register(router);
 accessRoutes.register(router);
 adminUsersRoutes.register(router);
+rolesRoutes.register(router);
 usersRoutes.register(router);
 accountRoutes.register(router);
 

@@ -18,6 +18,8 @@ function register(router) {
   router.delete('/admin/payment-gateways/:id', requireAdmin, controller.deletePaymentGateway);
 
   router.get('/admin/courses', requireAdmin, controller.getCourses);
+  router.delete('/admin/courses/:id', requireAdmin, controller.deleteCourse);
+  router.post('/admin/courses/:id/restore', requireAdmin, controller.restoreCourse);
   router.get('/admin/courses/:id', requireAdmin, controller.getCourse);
   router.get('/admin/courses/:id/sessions', requireAdmin, controller.getCourseSessions);
   router.post('/admin/courses/:id/preview-token', requireAdmin, controller.createCoursePreviewToken);
@@ -33,6 +35,7 @@ function register(router) {
   router.put('/admin/orders/:id', requireAdmin, controller.updateOrder);
   router.post('/admin/orders/:id/refund', requireAdmin, controller.refundOrder);
   router.delete('/admin/orders/:id', requireAdmin, controller.deleteOrder);
+  router.post('/admin/orders/:id/restore', requireAdmin, controller.restoreOrder);
 
   // Coupon management
   router.get('/admin/coupons', requireAdmin, controller.getCoupons);
@@ -143,6 +146,7 @@ function register(router) {
   router.post('/admin/platform/articles', requireAdmin, p.postArticle);
   router.put('/admin/platform/articles/:id', requireAdmin, p.putArticle);
   router.delete('/admin/platform/articles/:id', requireAdmin, p.deleteArticle);
+  router.post('/admin/platform/articles/:id/restore', requireAdmin, p.restoreArticle);
   router.get('/admin/platform/article-categories', requireAdmin, p.getArticleCategories);
   router.get('/admin/platform/article-categories/:id', requireAdmin, p.getArticleCategory);
   router.post('/admin/platform/article-categories', requireAdmin, p.createArticleCategory);

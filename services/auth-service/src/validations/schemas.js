@@ -108,10 +108,16 @@ const grantMembership = {
 const createAdminUser = {
     body: Joi.object({
         email: Joi.string().email().required(),
-        password: Joi.string().min(6).max(128).required(),
+        password: Joi.string().min(6).max(128).allow('', null).optional(),
         name: Joi.string().max(255).allow('', null),
         role_id: Joi.number().integer().positive().required(),
         permission_overrides: Joi.array().items(Joi.string()).default([]),
+    }),
+};
+
+const lookupAdminUser = {
+    query: Joi.object({
+        email: Joi.string().email().required(),
     }),
 };
 
@@ -126,6 +132,27 @@ const updateAdminUser = {
         password: Joi.string().min(6).max(128),
         permission_overrides: Joi.array().items(Joi.string()),
     }),
+};
+
+const createRole = {
+    body: Joi.object({
+        name: Joi.string().trim().min(2).max(64).required(),
+        description: Joi.string().max(255).allow('', null),
+        permissions: Joi.array().items(Joi.string()).default([]),
+        is_admin_panel: Joi.boolean().default(true),
+    }),
+};
+
+const updateRole = {
+    params: Joi.object({
+        id: Joi.number().integer().positive().required(),
+    }),
+    body: Joi.object({
+        name: Joi.string().trim().min(2).max(64),
+        description: Joi.string().max(255).allow('', null),
+        permissions: Joi.array().items(Joi.string()),
+        is_admin_panel: Joi.boolean(),
+    }).min(1),
 };
 
 const idParam = {
@@ -165,6 +192,9 @@ module.exports = {
     grantMembership,
     revokeMembership,
     createAdminUser,
+    lookupAdminUser,
     updateAdminUser,
+    createRole,
+    updateRole,
     idParam,
 };

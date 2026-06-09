@@ -5,7 +5,16 @@ const { Op } = require('sequelize');
 const { User, Role, UserMembership } = require('../models');
 const { getRedis } = require('../config/redis');
 const config = require('../config');
-const { getEffectivePermissions } = require('../config/permissions');
+const { getEffectivePermissions, parseRolePermissions } = require('../config/permissions');
+const { isDynamicRoleSchemaReady } = require('./rolesSchema');
+
+function roleIncludeForSession() {
+  return {
+    model: Role,
+    as: 'Role',
+    attributes: isDynamicRoleSchemaReady() ? ['name', 'permissions'] : ['name'],
+  };
+}
 const { AppError, logger } = require('../../../../shared');
 const phpass = require('../utils/phpass');
 const emailService = require('./email.service');
@@ -197,7 +206,11 @@ async function sessionFromUserEntity(user) {
     await redis.setEx(`token:${plain.id}`, config.cacheTtl, accessToken);
   } catch (_) { }
   // Note: Redis caching failure is non-critical; auth proceeds without cache
-  const permissions = getEffectivePermissions(role, plain.permission_overrides);
+  const permissions = getEffectivePermissions(
+    role,
+    plain.permission_overrides,
+    parseRolePermissions(plain.Role)
+  );
   const has_active_membership = await hasActiveMembershipForUserId(plain.id);
   return {
     token: accessToken,
@@ -306,7 +319,7 @@ async function register({
   });
 
   const withRole = await User.findByPk(user.id, {
-    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+    include: [roleIncludeForSession()],
     attributes: [
       'id', 'email', 'name', 'referral_code', 'phone', 'profession', 'company', 'designation',
       'city', 'state', 'country', 'email_verified_at',
@@ -335,7 +348,7 @@ async function loginWithPassword({ email, password }) {
   const norm = String(email).trim().toLowerCase();
   const user = await User.scope('withPassword').findOne({
     where: { email: norm, is_active: true },
-    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+    include: [roleIncludeForSession()],
     attributes: SESSION_USER_ATTRS,
   });
   if (!user) return null;
@@ -351,7 +364,7 @@ async function loginWithEmailOtp({ email, otp }) {
 
   const user = await User.findOne({
     where: { email: norm, is_active: true },
-    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+    include: [roleIncludeForSession()],
     attributes: SESSION_USER_ATTRS.filter((a) => a !== 'password_hash'),
   });
   return sessionFromUserEntity(user);
@@ -393,7 +406,7 @@ async function verifyEmailWithToken(accessToken, otp) {
   const userId = decoded.userId;
   const row = await User.findByPk(userId, {
     where: { is_active: true },
-    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+    include: [roleIncludeForSession()],
     attributes: SESSION_USER_ATTRS.filter((a) => a !== 'password_hash'),
   });
   if (!row) throw new AppError('User not found or inactive', 401);
@@ -404,7 +417,7 @@ async function verifyEmailWithToken(accessToken, otp) {
   const ok = await verifyOtp('verify_email', String(userId), otp, { consume: true });
   if (!ok) throw new AppError('Invalid or expired verification code', 400);
   await row.update({ email_verified_at: new Date() });
-  await row.reload({ include: [{ model: Role, as: 'Role', attributes: ['name'] }] });
+  await row.reload({ include: [roleIncludeForSession()] });
   return sessionFromUserEntity(row);
 }
 
@@ -434,7 +447,7 @@ async function validateToken(token) {
   const decoded = verifyAccess(token);
   const user = await User.findByPk(decoded.userId, {
     where: { is_active: true },
-    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+    include: [roleIncludeForSession()],
     attributes: [
       'id', 'email', 'name', 'bio', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country',
       'permission_overrides', 'referral_code', 'profile_pic_url', 'email_verified_at',
@@ -443,7 +456,11 @@ async function validateToken(token) {
   if (!user) return null;
   const r = user.get({ plain: true });
   const role = r.Role?.name || 'user';
-  const permissions = getEffectivePermissions(role, r.permission_overrides);
+  const permissions = getEffectivePermissions(
+    role,
+    r.permission_overrides,
+    parseRolePermissions(r.Role)
+  );
   const has_active_membership = await hasActiveMembershipForUserId(r.id);
   const email_verified = userIsEmailVerified(r);
   return {
@@ -557,7 +574,7 @@ async function refreshTokens(refreshToken) {
   const decoded = verifyRefresh(refreshToken);
   const user = await User.findByPk(decoded.userId, {
     where: { is_active: true },
-    include: [{ model: Role, as: 'Role', attributes: ['name'] }],
+    include: [roleIncludeForSession()],
     attributes: ['id', 'email', 'role_id', 'email_verified_at'],
   });
   if (!user) return null;

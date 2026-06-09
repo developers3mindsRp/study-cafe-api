@@ -29,6 +29,8 @@ function register(router) {
   router.delete('/internal/course-cats/:id', internalAuth, coursesController.deleteCourseCat);
   router.post('/internal/courses', internalAuth, validate(schemas.createCourse), coursesController.createCourse);
   router.put('/internal/courses/:id', internalAuth, validate(schemas.updateCourse), coursesController.updateCourse);
+  router.post('/internal/courses/:id/restore', internalAuth, validate(schemas.idParam), coursesController.restoreCourseInternal);
+  router.delete('/internal/courses/:id', internalAuth, validate(schemas.idParam), coursesController.deleteCourseInternal);
   router.post('/internal/courses/:id/batches', internalAuth, validate(schemas.createBatch), coursesController.createBatch);
   // List batches (paginated) — must be registered before /internal/batches/:id routes
   router.get('/internal/batches', internalAuth, validate(schemas.listBatchesQuery), coursesController.listBatchesAdmin);

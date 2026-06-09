@@ -286,6 +286,7 @@ const articleListQuery = {
         blog_access_tier: Joi.string().valid('free', 'premium').allow('', null),
         date_from: Joi.string().isoDate().allow('', null),
         date_to: Joi.string().isoDate().allow('', null),
+        trashed: Joi.string().valid('1', 'true', 'only').allow('', null),
     }),
 };
 

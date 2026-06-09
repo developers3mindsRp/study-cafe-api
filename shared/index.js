@@ -19,6 +19,13 @@ const {
     publicMediaUrl,
 } = require('./mediaUrl');
 const { computeMembershipUpgradeCredit } = require('./membershipUpgradeProration');
+const {
+  sqlDeletedAtIsNull,
+  activeRowWhere,
+  parseTrashedMode,
+  trashedSequelizeOptions,
+  withTrashedWhere,
+} = require('./softDelete');
 
 module.exports = {
     logger,
@@ -36,4 +43,9 @@ module.exports = {
     relativePathFromFile,
     publicMediaUrl,
     computeMembershipUpgradeCredit,
+    sqlDeletedAtIsNull,
+    activeRowWhere,
+    parseTrashedMode,
+    trashedSequelizeOptions,
+    withTrashedWhere,
 };

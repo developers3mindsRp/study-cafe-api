@@ -331,6 +331,7 @@ const getArticlesInternal = asyncHandler(async (req, res) => {
     blog_access_tier,
     date_from,
     date_to,
+    trashed: req.query.trashed,
   });
 
   sendSuccess(res, result);
@@ -356,6 +357,12 @@ const updateArticle = asyncHandler(async (req, res) => {
 const deleteArticle = asyncHandler(async (req, res) => {
   const ok = await platformService.articles.deleteArticle(req.params.id);
   if (!ok) throw new AppError('Article not found', 404);
+  sendNoContent(res);
+});
+
+const restoreArticle = asyncHandler(async (req, res) => {
+  const ok = await platformService.articles.restoreArticle(req.params.id);
+  if (!ok) throw new AppError('Article not found in trash', 404);
   sendNoContent(res);
 });
 
@@ -756,6 +763,7 @@ module.exports = {
   createArticle,
   updateArticle,
   deleteArticle,
+  restoreArticle,
   getArticleCategories,
   getArticleCategoriesInternal,
   getArticleCategoryByIdInternal,

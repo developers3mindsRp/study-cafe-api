@@ -8,10 +8,12 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 const config = require('./config');
 const { createApp } = require('./app');
 const { connect } = require('./models');
+const { ensureCoreRolesAndUserAssignments } = require('./services/rolesBootstrap.service');
 const { logger } = require('../../../shared');
 
 const app = createApp();
 connect()
+  .then(() => ensureCoreRolesAndUserAssignments())
   .then(() => {
     app.listen(config.port, () => {
       logger.info(`${config.serviceName} listening on port ${config.port}`);

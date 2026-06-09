@@ -40,6 +40,8 @@ module.exports = (sequelize) => {
       timestamps: true,
       createdAt: 'created_at',
       updatedAt: false,
+      paranoid: true,
+      deletedAt: 'deleted_at',
     }
   );
   Order.associate = (models) => {

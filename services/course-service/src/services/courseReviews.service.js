@@ -1,4 +1,5 @@
 const { QueryTypes } = require('sequelize');
+const { sqlDeletedAtIsNull } = require('../../../../shared');
 const { CourseReview, sequelize, Course } = require('../models');
 const { checkCourseAccess } = require('./accessClient');
 
@@ -76,7 +77,8 @@ async function listReviewsForCourse(courseId, { limit = 50 } = {}) {
            cr.created_at, cr.updated_at,
            COALESCE(TRIM(u.name), '') AS user_name_full
     FROM course_reviews cr
-    INNER JOIN users u ON u.id = cr.user_id
+    INNER JOIN users u ON u.id = cr.user_id AND ${sqlDeletedAtIsNull('u')}
+    INNER JOIN courses c ON c.id = cr.course_id AND ${sqlDeletedAtIsNull('c')}
     WHERE cr.course_id = :cid
     ORDER BY cr.created_at DESC
     LIMIT :limit

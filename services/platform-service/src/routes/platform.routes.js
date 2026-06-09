@@ -122,6 +122,7 @@ function register(router) {
   router.get('/internal/platform/articles/:id', internalAuth, validate(schemas.idParam), controller.getArticleByIdInternal);
   router.post('/internal/platform/articles', internalAuth, validate(schemas.createArticle), controller.createArticle);
   router.put('/internal/platform/articles/:id', internalAuth, validate(schemas.updateArticle), controller.updateArticle);
+  router.post('/internal/platform/articles/:id/restore', internalAuth, validate(schemas.idParam), controller.restoreArticle);
   router.delete('/internal/platform/articles/:id', internalAuth, validate(schemas.idParam), controller.deleteArticle);
   router.get('/internal/platform/article-categories', internalAuth, controller.getArticleCategoriesInternal);
   router.get('/internal/platform/article-categories/:id', internalAuth, validate(schemas.idParam), controller.getArticleCategoryByIdInternal);
