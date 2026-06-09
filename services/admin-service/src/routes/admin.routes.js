@@ -141,6 +141,7 @@ function register(router) {
   router.post('/admin/platform/coupons', requireAdmin, p.postCoupon);
   router.put('/admin/platform/coupons/:id', requireAdmin, p.putCoupon);
   router.delete('/admin/platform/coupons/:id', requireAdmin, p.deleteCoupon);
+  router.get('/admin/platform/articles/counts', requireAdmin, p.getArticleStatusCounts);
   router.get('/admin/platform/articles', requireAdmin, p.getArticles);
   router.post('/admin/platform/articles/:id/preview-token', requireAdmin, controller.createArticlePreviewToken);
   router.get('/admin/platform/articles/:id', requireAdmin, p.getArticle);

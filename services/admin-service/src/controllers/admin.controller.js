@@ -536,6 +536,27 @@ const grantUserMembership = asyncHandler(async (req, res) => {
     orderId: null,
     ...(planJson ? { planJson } : {}),
   });
+
+  // Create a manual order record when price or paymentId is provided
+  if (price || paymentId) {
+    try {
+      const { data: contact } = await authClient.get(`/internal/users/${req.params.id}/contact`);
+      await orderClient.post('/internal/orders', {
+        user_id: req.params.id,
+        type: 'membership',
+        entity_id: membershipType,
+        amount: price ? Number(price) : 0,
+        buyer_email: contact?.email || null,
+        buyer_name: contact?.name || null,
+        buyer_mobile: contact?.phone || null,
+        status: 'paid',
+        payment_id: paymentId || undefined,
+      });
+    } catch (orderErr) {
+      console.error('[grantUserMembership] order creation failed:', orderErr?.response?.data ?? orderErr?.message ?? orderErr);
+    }
+  }
+
   await adminLogsService.logAction(adminId, 'GRANT_MEMBERSHIP', 'user_membership', String(req.params.id), { membershipType, startsAt, expiresAt, paymentId }, req.ip);
   sendSuccess(res, { granted: true });
 });
@@ -655,6 +676,26 @@ const bulkGrantMembershipByEmails = asyncHandler(async (req, res) => {
           orderId: null,
           ...(planJson ? { planJson } : {}),
         });
+
+        // Create a manual order record when price or paymentId is provided
+        if (price || paymentId) {
+          try {
+            await orderClient.post('/internal/orders', {
+              user_id: user.id,
+              type: 'membership',
+              entity_id: membershipType,
+              amount: price ? Number(price) : 0,
+              buyer_email: user.email,
+              buyer_name: user.name || null,
+              buyer_mobile: user.phone || null,
+              status: 'paid',
+              payment_id: paymentId || undefined,
+            });
+          } catch (orderErr) {
+            console.error('[bulkGrantMembership] order creation failed:', orderErr?.response?.data ?? orderErr?.message ?? orderErr);
+          }
+        }
+
         await adminLogsService.logAction(adminId, 'BULK_GRANT_MEMBERSHIP', 'user_membership', String(user.id), { membershipType, startsAt, expiresAt, paymentId }, req.ip);
         return { email: normalized, status: 'granted' };
       } catch (err) {
@@ -970,6 +1011,7 @@ const platform = {
   putCoupon,
   deleteCoupon,
   checkCouponCodeExists,
+  getArticleStatusCounts: platformProxy((c) => c.get('/internal/platform/articles/counts').then((r) => ({ data: r.data }))),
   getArticles: platformProxy((c, req) => c.get('/internal/platform/articles', { params: req.query }).then((r) => ({ data: r.data }))),
   getArticle: platformProxy((c, req) => c.get(`/internal/platform/articles/${req.params.id}`).then((r) => ({ data: r.data }))),
   postArticle: platformProxy((c, req) => {
@@ -977,9 +1019,10 @@ const platform = {
     const body = adminId && !req.body.author_id ? { ...req.body, author_id: adminId } : req.body;
     return c.post('/internal/platform/articles', body).then((r) => ({ data: r.data, status: 201 }));
   }),
-  putArticle: platformProxy((c, req) =>
-    c.put(`/internal/platform/articles/${req.params.id}`, req.body).then((r) => ({ data: r.data }))
-  ),
+  putArticle: platformProxy((c, req) => {
+    const { author_id, ...rest } = req.body;
+    return c.put(`/internal/platform/articles/${req.params.id}`, rest).then((r) => ({ data: r.data }));
+  }),
   deleteArticle: platformProxy((c, req) => c.delete(`/internal/platform/articles/${req.params.id}`).then(() => ({ status: 204 }))),
   restoreArticle: platformProxy((c, req) => c.post(`/internal/platform/articles/${req.params.id}/restore`).then(() => ({ status: 204 }))),
   getArticleCategories: platformProxy((c) => c.get('/internal/platform/article-categories').then((r) => ({ data: r.data }))),

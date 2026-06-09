@@ -117,6 +117,7 @@ function register(router) {
   router.delete('/internal/platform/comparison-features/:id', internalAuth, validate(schemas.idParam), controller.deleteComparisonFeature);
   router.put('/internal/platform/comparison-features/:featureId/availability/:planId', internalAuth, controller.setFeatureAvailability);
 
+  router.get('/internal/platform/articles/counts', internalAuth, controller.getArticleStatusCounts);
   router.get('/internal/platform/articles', internalAuth, validate(schemas.articleListQuery), controller.getArticlesInternal);
   router.post('/internal/platform/articles/:id/preview-token', internalAuth, validate(schemas.idParam), controller.createArticlePreviewToken);
   router.get('/internal/platform/articles/:id', internalAuth, validate(schemas.idParam), controller.getArticleByIdInternal);
