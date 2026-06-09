@@ -55,7 +55,8 @@ const getMyReferralLinks = asyncHandler(async (req, res) => {
   // Use header code if present, otherwise look it up / auto-generate
   const headerCode = req.headers['x-referral-code'] || req.query.code;
   const referralCode = await affiliateService.resolveReferralCode(userId, headerCode);
-  const data = await affiliateService.getReferralLinks(userId, referralCode);
+  const search = req.query.search ? String(req.query.search).trim() : undefined;
+  const data = await affiliateService.getReferralLinks(userId, referralCode, { search });
   sendSuccess(res, data);
 });
 

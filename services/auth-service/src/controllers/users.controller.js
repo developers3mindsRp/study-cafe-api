@@ -27,4 +27,4 @@ const countUsers = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
-module.exports = { ...controller, listByIds, distinctStates, countUsers };
+module.exports = { ...controller, restore, listByIds, distinctStates, countUsers };
