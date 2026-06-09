@@ -1651,6 +1651,39 @@ function parseArticleCitation(citationRaw) {
   }
 }
 
+/** Build frontend citation object from migrated article columns (WP case-law fields). */
+function buildArticleCitationFromRow(row) {
+  if (!row) return null;
+  const parsed = parseArticleCitation(row.citation);
+  const fromColumns = {
+    case_name: row.case_name || null,
+    case_citation: row.citation || null,
+    appeal_number: row.appeal_number || null,
+    judgement_date: row.judgement_date || null,
+    assessment_year: row.assessment_year || null,
+    court: row.court_name || null,
+    section: row.section || null,
+    noti_no: row.noti_no || null,
+    noti_date: row.noti_date || null,
+  };
+  const hasColumnData = Object.values(fromColumns).some((v) => v != null && String(v).trim() !== '');
+  if (!parsed && !hasColumnData) return null;
+  if (parsed && typeof parsed === 'object') {
+    return {
+      case_name: parsed.case_name || fromColumns.case_name,
+      case_citation: parsed.case_citation || parsed.citation || fromColumns.case_citation,
+      appeal_number: parsed.appeal_number || fromColumns.appeal_number,
+      judgement_date: parsed.judgement_date || fromColumns.judgement_date,
+      assessment_year: parsed.assessment_year || fromColumns.assessment_year,
+      court: parsed.court || parsed.court_name || fromColumns.court,
+      section: parsed.section || fromColumns.section,
+      noti_no: parsed.noti_no || fromColumns.noti_no,
+      noti_date: parsed.noti_date || fromColumns.noti_date,
+    };
+  }
+  return fromColumns;
+}
+
 /**
  * Public article URL keys: optional trailing .html; optional trailing -{numericId} (WordPress style).
  * Example: "itat-...-421249.html" → slugOnly "itat-...", articleId 421249
@@ -1804,7 +1837,7 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     },
     body,
     toc: tocItems,
-    citation: parseArticleCitation(p.citation),
+    citation: buildArticleCitationFromRow(p),
     cover_image_url: p.thumbnail_url,
     author_name: authorName ?? p.author_id,
     download_url: p.rel_download_url || p.upload_url || null,
@@ -2125,7 +2158,7 @@ async function getArticleByIdInternal(id) {
 
   const result = {
     ...p,
-    citation: parseArticleCitation(p.citation),
+    citation: buildArticleCitationFromRow(p),
     category_ids: catRows.map((r) => Number(r.category_id)),
     tag_ids: tagIds,
     tags,

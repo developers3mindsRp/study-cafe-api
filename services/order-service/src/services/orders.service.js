@@ -2936,7 +2936,103 @@ module.exports = {
   restoreOrder,
   refundOrder,
   validateCouponForPreview,
+  getOrderStats,
+  getRevenueTimeSeries,
 };
+
+/**
+ * Returns revenue + enrollment counts grouped by time bucket.
+ * bucket: 'day' → one row per calendar day (7d view)
+ *         'week' → one row per ISO week (30d view)
+ *         'month' → one row per calendar month (90d view)
+ */
+async function getRevenueTimeSeries({ dateFrom, dateTo, bucket = 'day' } = {}) {
+  const groupExpr =
+    bucket === 'month'
+      ? "DATE_FORMAT(created_at, '%Y-%m')"
+      : bucket === 'week'
+      ? "DATE_FORMAT(created_at, '%Y-%u')"
+      : 'DATE(created_at)';
+
+  const labelExpr =
+    bucket === 'month'
+      ? "DATE_FORMAT(created_at, '%b')"
+      : bucket === 'week'
+      ? "CONCAT('Week ', WEEK(created_at, 3) - WEEK(MIN(created_at) OVER(), 3) + 1)"
+      : "DATE_FORMAT(created_at, '%a')";
+
+  const start = dateFrom ? new Date(dateFrom) : null;
+  const end = dateTo ? new Date(dateTo) : null;
+  if (end) end.setHours(23, 59, 59, 999);
+
+  const replacements = [];
+  let whereSql = "WHERE status = 'paid'";
+  if (start && !Number.isNaN(start.getTime())) {
+    whereSql += ' AND created_at >= ?';
+    replacements.push(start);
+  }
+  if (end && !Number.isNaN(end.getTime())) {
+    whereSql += ' AND created_at <= ?';
+    replacements.push(end);
+  }
+
+  const rows = await sequelize.query(
+    `SELECT
+       ${groupExpr} AS bucket,
+       DATE_FORMAT(MIN(created_at), '%b %d') AS label,
+       COALESCE(SUM(amount), 0) AS revenue,
+       COUNT(*) AS enrollments
+     FROM orders
+     ${whereSql}
+     GROUP BY ${groupExpr}
+     ORDER BY MIN(created_at) ASC`,
+    { replacements, type: QueryTypes.SELECT }
+  );
+
+  return rows.map((r, i) => ({
+    label: bucket === 'day'
+      ? new Date(r.bucket).toLocaleDateString('en-IN', { weekday: 'short' })
+      : bucket === 'week'
+      ? `Week ${i + 1}`
+      : new Date(r.bucket + '-01').toLocaleDateString('en-IN', { month: 'short' }),
+    revenue: parseFloat(r.revenue),
+    enrollments: parseInt(r.enrollments, 10),
+  }));
+}
+
+/**
+ * Returns aggregated order stats (count + revenue) for a date range.
+ * Only counts orders with status = 'paid'.
+ */
+async function getOrderStats({ dateFrom, dateTo } = {}) {
+  const where = { status: 'paid' };
+  if (dateFrom || dateTo) {
+    where.created_at = {};
+    if (dateFrom) {
+      const start = new Date(dateFrom);
+      if (!Number.isNaN(start.getTime())) where.created_at[Op.gte] = start;
+    }
+    if (dateTo) {
+      const end = new Date(dateTo);
+      if (!Number.isNaN(end.getTime())) {
+        end.setHours(23, 59, 59, 999);
+        where.created_at[Op.lte] = end;
+      }
+    }
+  }
+  const result = await Order.findOne({
+    where,
+    attributes: [
+      [sequelize.fn('COUNT', sequelize.col('id')), 'total_orders'],
+      [sequelize.fn('SUM', sequelize.col('amount')), 'total_revenue'],
+    ],
+    raw: true,
+  });
+  return {
+    total_orders: parseInt(result?.total_orders || 0, 10),
+    total_revenue: parseFloat(result?.total_revenue || 0),
+  };
+}
 
 /**
  * Validate a coupon for preview / summary purposes only — no usage recorded.

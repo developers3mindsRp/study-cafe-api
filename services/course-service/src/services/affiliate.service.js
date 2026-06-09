@@ -8,6 +8,7 @@ const {
 const { QueryTypes, Op } = require("sequelize");
 const { logger } = require("../../../../shared");
 const { notifyWithdrawalEmail } = require("./withdrawalEmail.service");
+const affiliateSettingsService = require("./affiliateSettings.service");
 
 /** Match order-service normalization: trim + uppercase (referral hex codes are stored uppercase). */
 function normalizeReferralCodeInput(code) {
@@ -24,7 +25,126 @@ async function sumPendingWithdrawals(affiliateNumericId) {
   return Math.round((parseFloat(raw || 0) || 0) * 100) / 100;
 }
 
+function computeExpiresAt(createdAt, expiryDays) {
+  if (!expiryDays || expiryDays <= 0 || !createdAt) return null;
+  const d = new Date(createdAt);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + expiryDays);
+  return d.toISOString();
+}
+
+function enrichHistoryRow(record, expiryDays) {
+  const expiryDate = computeExpiresAt(record.created_at, expiryDays);
+  return {
+    ...record,
+    expires_at:
+      record.status === 'confirmed' || record.status === 'expired'
+        ? expiryDate
+        : null,
+  };
+}
+
+function summarizeCommissionHistory(enriched) {
+  let expiredCommissionTotal = 0;
+  let activeCommissionTotal = 0;
+  let nextExpiryAt = null;
+
+  for (const row of enriched) {
+    const amt = parseFloat(row.commission_amount) || 0;
+    if (row.status === 'expired') {
+      expiredCommissionTotal += amt;
+      continue;
+    }
+    if (row.status !== 'confirmed') continue;
+    activeCommissionTotal += amt;
+    if (!row.expires_at) continue;
+    const expMs = new Date(row.expires_at).getTime();
+    if (Number.isNaN(expMs)) continue;
+    if (nextExpiryAt == null || expMs < nextExpiryAt) nextExpiryAt = expMs;
+  }
+
+  return {
+    expired_commission_total: Math.round(expiredCommissionTotal * 100) / 100,
+    active_commission_total: Math.round(activeCommissionTotal * 100) / 100,
+    next_expiry_at: nextExpiryAt != null ? new Date(nextExpiryAt).toISOString() : null,
+  };
+}
+
+function isExpiredStatusEnumError(err) {
+  const msg = String(err?.parent?.sqlMessage || err?.message || '');
+  return /expired/i.test(msg) && /enum|Data truncated|incorrect/i.test(msg);
+}
+
 const affiliateService = {
+  /**
+   * Expire confirmed commissions older than the configured validity window.
+   */
+  async expireStaleEarnings(affiliateId) {
+    const uid = Number(affiliateId);
+    if (!Number.isFinite(uid)) return { expiredCount: 0, expiredAmount: 0 };
+
+    const expiryDays = await affiliateSettingsService.getEarningsExpiryDays();
+    if (!expiryDays || expiryDays <= 0) return { expiredCount: 0, expiredAmount: 0 };
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - expiryDays);
+
+    const t = await sequelize.transaction();
+    try {
+      const stale = await AffiliateHistory.findAll({
+        where: {
+          affiliate_id: uid,
+          status: 'confirmed',
+          created_at: { [Op.lt]: cutoff },
+        },
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+      if (!stale.length) {
+        await t.commit();
+        return { expiredCount: 0, expiredAmount: 0 };
+      }
+
+      let totalExpired = 0;
+      for (const row of stale) {
+        const amt = parseFloat(row.commission_amount) || 0;
+        await row.update({ status: 'expired' }, { transaction: t });
+        if (amt > 0) totalExpired += amt;
+      }
+      totalExpired = Math.round(totalExpired * 100) / 100;
+
+      if (totalExpired > 0) {
+        const [balance] = await AffiliateBalance.findOrCreate({
+          where: { affiliate_id: uid },
+          defaults: { affiliate_id: uid, total_earned: 0, total_withdrawn: 0, current_balance: 0 },
+          transaction: t,
+        });
+        const newBal = Math.max(
+          0,
+          Math.round((parseFloat(balance.current_balance) - totalExpired) * 100) / 100,
+        );
+        await balance.update({ current_balance: newBal }, { transaction: t });
+      }
+
+      await t.commit();
+      if (totalExpired > 0) {
+        logger.info(
+          `[expireStaleEarnings] affiliateId=${uid} expiredAmount=${totalExpired} rows=${stale.length}`,
+        );
+      }
+      return { expiredCount: stale.length, expiredAmount: totalExpired };
+    } catch (err) {
+      await t.rollback();
+      if (isExpiredStatusEnumError(err)) {
+        logger.warn(
+          '[expireStaleEarnings] affiliate_history.status missing expired — restart course-service after schema ensure',
+        );
+        return { expiredCount: 0, expiredAmount: 0 };
+      }
+      throw err;
+    }
+  },
+
   /**
    * Fetch affiliate history with details.
    */
@@ -118,6 +238,7 @@ const affiliateService = {
       err.statusCode = 400;
       throw err;
     }
+    await this.expireStaleEarnings(id);
     const [balance] = await AffiliateBalance.findOrCreate({
       where: { affiliate_id: id },
       defaults: { affiliate_id: id, total_earned: 0, total_withdrawn: 0, current_balance: 0 }
@@ -129,7 +250,7 @@ const affiliateService = {
    * Create a withdrawal request (user or admin).
    * Reserves against pending requests so available = current_balance − sum(pending).
    */
-  async createWithdrawal(data) {
+  async createWithdrawal(data, options = {}) {
     const affiliate_id = Number(data.affiliate_id);
     const amount = parseFloat(data.amount);
     if (!Number.isFinite(affiliate_id)) {
@@ -143,7 +264,21 @@ const affiliateService = {
       throw err;
     }
 
-    const balance = await this.getBalance(affiliate_id);
+    if (options.enforceMinWithdrawal) {
+      const minWithdrawal = await affiliateSettingsService.getMinWithdrawal();
+      if (amount + 1e-6 < minWithdrawal) {
+        const err = new Error(`Minimum withdrawal amount is ₹${minWithdrawal.toFixed(2)}`);
+        err.statusCode = 400;
+        throw err;
+      }
+    }
+
+    await this.expireStaleEarnings(affiliate_id);
+
+    const balance = await AffiliateBalance.findOrCreate({
+      where: { affiliate_id },
+      defaults: { affiliate_id, total_earned: 0, total_withdrawn: 0, current_balance: 0 },
+    }).then(([row]) => row);
     const pendingTotal = await sumPendingWithdrawals(affiliate_id);
     const current = parseFloat(balance.current_balance);
     const available = Math.round((current - pendingTotal) * 100) / 100;
@@ -377,18 +512,25 @@ const affiliateService = {
    */
   async getMyAffiliateData(userId) {
     const uid = Number(userId);
+    const settings = await affiliateSettingsService.getSettings();
     if (!Number.isFinite(uid)) {
       logger.warn(`[getMyAffiliateData] invalid userId=${userId}`);
       return {
         balance: { affiliate_id: null, total_earned: 0, total_withdrawn: 0, current_balance: 0 },
         pending_withdrawal_total: 0,
         available_for_withdrawal: 0,
+        expired_commission_total: 0,
+        active_commission_total: 0,
+        next_expiry_at: null,
         totalOrders: 0,
         totalOrderValue: 0,
         totalCommission: 0,
         history: [],
+        settings,
       };
     }
+
+    await this.expireStaleEarnings(uid);
 
     const [balance] = await AffiliateBalance.findOrCreate({
       where: { affiliate_id: uid },
@@ -413,10 +555,14 @@ const affiliateService = {
         balance: balPlain,
         pending_withdrawal_total: pendingWithdrawalTotal,
         available_for_withdrawal: availableForWithdrawal,
+        expired_commission_total: 0,
+        active_commission_total: 0,
+        next_expiry_at: null,
         totalOrders: 0,
         totalOrderValue: 0,
         totalCommission: parseFloat(balance.total_earned),
         history: [],
+        settings,
       };
     }
 
@@ -441,7 +587,7 @@ const affiliateService = {
     const enriched = history.map(h => {
       const r = h.get({ plain: true });
       const buyer = userMap.get(Number(r.user_id)) || {};
-      return {
+      return enrichHistoryRow({
         ...r,
         buyer_name: buyer.name || 'Unknown',
         buyer_email: buyer.email ? buyer.email.replace(/(.{2}).*(@.*)/, '$1***$2') : '',
@@ -449,19 +595,23 @@ const affiliateService = {
         item_title: r.entity_type === 'course'
           ? (courseMap.get(Number(r.course_id)) || 'Course')
           : 'Membership Plan',
-      };
+      }, settings.earningsExpiryDays);
     });
 
-    const totalOrderValue = enriched.reduce((s, h) => s + parseFloat(h.order_amount || 0), 0);
+    const activeHistory = enriched.filter((h) => h.status !== 'expired');
+    const totalOrderValue = activeHistory.reduce((s, h) => s + parseFloat(h.order_amount || 0), 0);
+    const summary = summarizeCommissionHistory(enriched);
 
     return {
       balance: balPlain,
       pending_withdrawal_total: pendingWithdrawalTotal,
       available_for_withdrawal: availableForWithdrawal,
-      totalOrders: enriched.length,
+      ...summary,
+      totalOrders: activeHistory.length,
       totalOrderValue: Math.round(totalOrderValue * 100) / 100,
       totalCommission: parseFloat(balance.total_earned),
       history: enriched,
+      settings,
     };
   },
 
@@ -471,6 +621,9 @@ const affiliateService = {
   async getMyCommissionOrders(userId, { from, to } = {}) {
     const uid = Number(userId);
     if (!Number.isFinite(uid)) return [];
+
+    await this.expireStaleEarnings(uid);
+    const settings = await affiliateSettingsService.getSettings();
 
     const where = { affiliate_id: uid };
     if (from || to) {
@@ -511,7 +664,7 @@ const affiliateService = {
     return history.map(h => {
       const r = h.get({ plain: true });
       const buyer = userMap.get(Number(r.user_id)) || {};
-      return {
+      return enrichHistoryRow({
         ...r,
         buyer_name: buyer.name || 'Unknown',
         buyer_email: buyer.email ? buyer.email.replace(/(.{2}).*(@.*)/, '$1***$2') : '',
@@ -519,7 +672,7 @@ const affiliateService = {
         item_title: r.entity_type === 'course'
           ? (courseMap.get(Number(r.course_id)) || 'Course')
           : 'Membership Plan',
-      };
+      }, settings.earningsExpiryDays);
     });
   },
 
@@ -550,17 +703,30 @@ const affiliateService = {
    * Generate referral links for a user based on available courses, categories, and memberships.
    */
   async getReferralLinks(userId, referralCode) {
+    const { CourseCat } = require('../models');
+
     const courses = await Course.findAll({
       where: { is_published: true, status: 'publish' },
-      attributes: ['id', 'title', 'slug', 'price', 'sale_price', 'brief_description'],
+      attributes: ['id', 'title', 'slug', 'price', 'sale_price', 'brief_description', 'thumbnail_url'],
       order: [['created_at', 'DESC']],
     });
 
-    const { CourseCat } = require('../models');
+    const catAttrs = CourseCat.rawAttributes || {};
+    const catImageAttr = catAttrs.image_url
+      ? 'image_url'
+      : catAttrs.thumbnail_url
+        ? 'thumbnail_url'
+        : null;
+    const categoryAttrs = ['id', 'name', 'slug'];
+    if (catImageAttr) categoryAttrs.push(catImageAttr);
+
     const categories = await CourseCat.findAll({
-      attributes: ['id', 'name', 'slug'],
+      attributes: categoryAttrs,
       order: [['name', 'ASC']],
     });
+
+    const resolveImageUrl = (value) =>
+      typeof value === 'string' && value.trim() ? value.trim() : null;
 
     return {
       referralCode,
@@ -570,12 +736,14 @@ const affiliateService = {
         id: c.id,
         title: c.name,
         description: '',
+        imageUrl: catImageAttr ? resolveImageUrl(c[catImageAttr]) : null,
         url: `/courses?category=${c.slug}&ref=${referralCode}`,
       })),
       courses: courses.map(c => ({
         id: c.id,
         title: c.title,
         description: c.brief_description || '',
+        imageUrl: resolveImageUrl(c.thumbnail_url),
         originalPrice: parseFloat(c.price) || 0,
         discountedPrice: parseFloat(c.sale_price || c.price) || 0,
         url: `/course/${c.slug}?ref=${referralCode}`,

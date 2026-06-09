@@ -20,6 +20,7 @@ const register = asyncHandler(async (req, res) => {
     city,
     state,
     country,
+    gst,
   } = req.body;
   const user = await authService.register({
     email,
@@ -33,6 +34,7 @@ const register = asyncHandler(async (req, res) => {
     city,
     state,
     country,
+    gst,
   });
   const accessToken = authService.signAccess({
     userId: user.id,
@@ -55,6 +57,7 @@ const register = asyncHandler(async (req, res) => {
       city: user.city,
       state: user.state,
       country: user.country,
+      gst: user.gst || null,
       referral_code: user.referral_code,
       email_verified: !!user.email_verified,
     },
@@ -134,6 +137,7 @@ const me = asyncHandler(async (req, res) => {
     city: user.city || null,
     state: user.state || null,
     country: user.country || null,
+    gst: user.gst || null,
     email_verified: !!user.email_verified,
   });
 });

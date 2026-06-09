@@ -78,6 +78,156 @@ const getStats = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+// ── Dashboard stats ────────────────────────────────────────────────
+
+const PERIOD_DAYS = { '7d': 7, '30d': 30, '90d': 90 };
+
+function periodDates(days) {
+  const now = new Date();
+  const to = new Date(now);
+  to.setHours(23, 59, 59, 999);
+  const from = new Date(now);
+  from.setDate(from.getDate() - (days - 1));
+  from.setHours(0, 0, 0, 0);
+  const prevTo = new Date(from);
+  prevTo.setDate(prevTo.getDate() - 1);
+  prevTo.setHours(23, 59, 59, 999);
+  const prevFrom = new Date(prevTo);
+  prevFrom.setDate(prevFrom.getDate() - (days - 1));
+  prevFrom.setHours(0, 0, 0, 0);
+  return {
+    dateFrom: from.toISOString(),
+    dateTo: to.toISOString(),
+    prevDateFrom: prevFrom.toISOString(),
+    prevDateTo: prevTo.toISOString(),
+  };
+}
+
+function delta(current, previous) {
+  if (!previous || previous === 0) return current > 0 ? 100 : 0;
+  return parseFloat((((current - previous) / previous) * 100).toFixed(1));
+}
+
+const getDashboardStats = asyncHandler(async (req, res) => {
+  const period = PERIOD_DAYS[req.query.period] ? req.query.period : '30d';
+  const days = PERIOD_DAYS[period];
+  const { dateFrom, dateTo, prevDateFrom, prevDateTo } = periodDates(days);
+  const deltaLabel = `vs last ${period}`;
+  const bucket = days === 7 ? 'day' : days === 30 ? 'week' : 'month';
+
+  const [usersRes, coursesRes, currOrders, prevOrders, revenueSeries, recentOrdersRes, recentArticlesRes] = await Promise.all([
+    authClient.get('/users/internal/count'),
+    courseClient.get('/internal/courses'),
+    orderClient.get('/internal/orders/stats', { params: { dateFrom, dateTo } }),
+    orderClient.get('/internal/orders/stats', { params: { dateFrom: prevDateFrom, dateTo: prevDateTo } }),
+    orderClient.get('/internal/orders/revenue-series', { params: { dateFrom, dateTo, bucket } }),
+    orderClient.get('/internal/orders', { params: { limit: 15, sortBy: 'created_at', sortOrder: 'DESC' } }),
+    platformClient.get('/internal/platform/articles', { params: { limit: 5, sortBy: 'created_at', sortOrder: 'DESC', status: 'publish' } }).catch(() => ({ data: { data: [] } })),
+  ]);
+
+  const totalStudents = usersRes.data?.total ?? 0;
+  const courses = Array.isArray(coursesRes.data) ? coursesRes.data : (coursesRes.data?.data ?? []);
+  const activeCourses = courses.filter((c) => c.is_published).length;
+  const { total_orders: currOrderCount, total_revenue: currRevenue } = currOrders.data;
+  const { total_orders: prevOrderCount, total_revenue: prevRevenue } = prevOrders.data;
+
+  function formatRevenue(amount) {
+    if (amount >= 100000) return `₹${(amount / 100000).toFixed(1)}L`;
+    if (amount >= 1000) return `₹${(amount / 1000).toFixed(1)}K`;
+    return `₹${Math.round(amount)}`;
+  }
+
+  const stats = [
+    {
+      label: 'Total Students',
+      value: totalStudents.toLocaleString('en-IN'),
+      delta: 0,
+      deltaLabel,
+      iconKey: 'users',
+    },
+    {
+      label: 'Active Courses',
+      value: activeCourses,
+      delta: 0,
+      deltaLabel,
+      iconKey: 'courses',
+    },
+    {
+      label: 'Revenue',
+      value: formatRevenue(currRevenue),
+      delta: delta(currRevenue, prevRevenue),
+      deltaLabel,
+      iconKey: 'revenue',
+    },
+    {
+      label: 'New Orders',
+      value: currOrderCount,
+      delta: delta(currOrderCount, prevOrderCount),
+      deltaLabel,
+      iconKey: 'orders',
+    },
+  ];
+
+  // Top courses by enrollment (top 5, published only)
+  const topCourses = courses
+    .filter((c) => c.is_published)
+    .sort((a, b) => (b.enrolled_count ?? 0) - (a.enrolled_count ?? 0))
+    .slice(0, 5)
+    .map((c) => ({
+      id: String(c.id),
+      title: c.title,
+      category: Array.isArray(c.categories) && c.categories.length > 0 ? (c.categories[0]?.name ?? '') : '',
+      enrollments: c.enrolled_count ?? 0,
+      revenue: 0,
+      trend: 0,
+    }));
+
+  // Revenue time-series for chart
+  const revenueData = Array.isArray(revenueSeries.data) ? revenueSeries.data : [];
+
+  // Activity feed: merge recent orders + recent articles, sort by date, take top 15
+  const rawOrders = (() => {
+    const d = recentOrdersRes.data;
+    return Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : []);
+  })();
+  const rawArticles = (() => {
+    const d = recentArticlesRes.data;
+    return Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : []);
+  })();
+
+  const orderActivities = rawOrders.map((o) => ({
+    id: `order-${o.id}`,
+    type: o.type === 'membership' ? 'membership' : 'order',
+    title: o.buyer_name
+      ? `${o.buyer_name} — ${o.entity_name || (o.type === 'membership' ? 'Membership' : 'Course')}`
+      : (o.entity_name || 'New order'),
+    meta: o.amount != null ? `₹${Number(o.amount).toLocaleString('en-IN')}` : '',
+    timestamp: o.created_at,
+    status: o.status === 'paid' ? 'success' : o.status === 'failed' ? 'failed' : 'pending',
+  }));
+
+  const articleActivities = rawArticles.map((a) => ({
+    id: `article-${a.id}`,
+    type: 'article',
+    title: a.title || 'Article published',
+    meta: 'by Admin',
+    timestamp: a.published_at || a.created_at,
+    status: 'success',
+  }));
+
+  const activityFeed = [...orderActivities, ...articleActivities]
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, 15);
+
+  sendSuccess(res, {
+    period,
+    stats,
+    revenueData,
+    activityFeed,
+    topCourses,
+  });
+});
+
 const updatePaymentConfig = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
   const { razorpay_key_id, razorpay_key_secret } = req.body;
@@ -1035,7 +1185,8 @@ const deletePaymentGateway = asyncHandler(async (req, res) => {
 module.exports = {
   me,
   getPaymentConfigInternal,
-  getStats, 
+  getStats,
+  getDashboardStats,
   updatePaymentConfig,
   getLogs,
   getPaymentGateways,

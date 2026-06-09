@@ -8,6 +8,7 @@ router.post('/', usersController.create);
 router.get('/', usersController.list);
 // Must be registered before /:id so the literal path is not captured as a param
 router.get('/distinct-states', internalAuth, usersController.distinctStates);
+router.get('/internal/count', internalAuth, usersController.countUsers);
 router.get('/:id', usersController.getOne);
 router.put('/:id', usersController.update);
 router.delete('/:id', usersController.remove);

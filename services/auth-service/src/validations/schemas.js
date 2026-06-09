@@ -25,7 +25,8 @@ const register = {
 
 const login = {
     body: Joi.object({
-        email: Joi.string().email().required(),
+        // Email, WP username (login), or legacy numeric Studycafe / wp_user_id
+        email: Joi.string().trim().min(1).max(255).required(),
         password: Joi.string().required(),
     }),
 };

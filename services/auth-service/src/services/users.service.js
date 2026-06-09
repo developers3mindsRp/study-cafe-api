@@ -171,9 +171,9 @@ async function list(query = {}) {
     // Only select columns needed by the admin table — avoids transferring bio, social links, etc.
     const TABLE_COLUMNS = [
         'id', 'name', 'display_name', 'email', 'phone',
-        'designation', 'profession', 'state', 'city', 'country',
+        'designation', 'profession', 'company', 'state', 'city', 'country',
         'membership', 'plan', 'role_id', 'status', 'is_active',
-        'created_at',
+        'created_at', 'gst',
     ];
     const attributes = (lean === 'true' || lean === true)
         ? ['id', 'name', 'display_name', 'email', 'role_id', 'designation', 'profession', 'plan']
@@ -310,4 +310,9 @@ async function distinctStates() {
     return rows.map((r) => r.state).filter(Boolean);
 }
 
-module.exports = { list, getOne, create, update, remove, restore, listByIds, distinctStates };
+async function count() {
+    const total = await User.count();
+    return { total };
+}
+
+module.exports = { list, getOne, create, update, remove, listByIds, distinctStates, count };
