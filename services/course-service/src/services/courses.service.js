@@ -2056,9 +2056,9 @@ const coursesService = {
   /**
    * Fetch published courses by explicit IDs and/or by course-category IDs.
    * Used by auth-service to resolve "courses included in a membership plan".
-   * Returns deduplicated list ordered by id ASC.
+   * Returns deduplicated list; default order is id ASC, pass order: 'DESC' for newest first.
    */
-  async listByIdsOrCatIds({ ids = [], cat_ids = [] } = {}) {
+  async listByIdsOrCatIds({ ids = [], cat_ids = [], order = 'ASC' } = {}) {
     const courseIdSet = new Set(ids.map(Number).filter(Boolean));
 
     // Resolve courses belonging to any of the given category IDs
@@ -2076,11 +2076,17 @@ const coursesService = {
     if (courseIdSet.size === 0) return [];
 
     // Use the same query pattern as listAll() so category data is consistent with admin table.
-    // Only return published courses; order by id ASC.
+    // Only return published courses.
     const resolvedIds = [...courseIdSet];
+    const desc = String(order).toUpperCase() === 'DESC';
     const courseRows = await Course.findAll({
       where: { id: { [Op.in]: resolvedIds }, is_published: true },
-      order: [['id', 'ASC']],
+      order: desc
+        ? [
+            ['created_at', 'DESC'],
+            ['id', 'DESC'],
+          ]
+        : [['id', 'ASC']],
       attributes: ['id', 'title', 'slug', 'brief_description', 'thumbnail_url', 'price', 'sale_price'],
     });
 
