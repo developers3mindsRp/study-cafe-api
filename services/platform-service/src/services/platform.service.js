@@ -1566,6 +1566,16 @@ function canReadFullArticle(tier, viewer) {
   return { can_read_full: false, reason: 'premium_locked' };
 }
 
+/** Free-tier articles: anyone may download. Premium-tier: members and admins only. */
+function canDownloadArticle(tier, viewer) {
+  const t = normalizeBlogAccessTier(tier);
+  if (t !== 'premium') return true;
+  if (!viewer) return false;
+  if (['admin', 'super_admin'].includes(viewer.role)) return true;
+  if (viewer.hasActiveMembership) return true;
+  return false;
+}
+
 async function embedRelatedArticles(content) {
   if (typeof content !== 'string' || !content.length) return content;
   const relatedIds = extractRelatedIds(content);
@@ -1840,10 +1850,7 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
       can_read_full: access.can_read_full,
       reason: access.reason,
       show_read_more_cta: !isPreview && !access.can_read_full && blog_access_tier === 'premium',
-      // Downloads are always premium-only regardless of article tier
-      can_download: viewer
-        ? (['admin', 'super_admin'].includes(viewer.role) || !!viewer.hasActiveMembership)
-        : false,
+      can_download: isPreview ? true : canDownloadArticle(blog_access_tier, viewer),
     },
     body,
     toc: tocItems,
