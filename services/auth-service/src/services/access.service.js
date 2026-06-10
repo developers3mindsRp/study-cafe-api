@@ -132,7 +132,7 @@ async function getActiveMembership(userId) {
   return row ? row.get({ plain: true }) : null;
 }
 
-async function grantMembership({ userId, membershipType, orderId, startsAt, expiresAt }) {
+async function grantMembership({ userId, membershipType, orderId, startsAt, expiresAt, planJson }) {
   // Expire any existing active membership rows before inserting the new tier.
   // This keeps the history intact while ensuring only one active membership exists.
   await UserMembership.update(
@@ -148,10 +148,12 @@ async function grantMembership({ userId, membershipType, orderId, startsAt, expi
   });
 
   // Sync the main User table columns so the profile UI reflects the change immediately.
+  // planJson (if provided) stores { price, plan_validity, plan_purchased, plan_expiry, payment_id }
+  const planValue = planJson ? JSON.stringify(planJson) : membershipType;
   await User.update(
     {
-      membership: 1, // mark as member
-      plan: membershipType,
+      membership: 1,
+      plan: planValue,
     },
     { where: { id: userId } }
   );

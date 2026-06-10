@@ -148,12 +148,6 @@ const MODULE_HIERARCHY = {
     ['roles:create'],
     ['roles:delete'],
   ],
-  banners: [
-    ['banners:list', 'banners:view'],
-    ['banners:edit'],
-    ['banners:create'],
-    ['banners:delete'],
-  ],
   users: [
     ['users:course_allotment'],
     ['users:membership_allotment'],

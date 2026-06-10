@@ -156,7 +156,8 @@ const restoreCourseInternal = asyncHandler(async (req, res) => {
 const listByIdsOrCatIds = asyncHandler(async (req, res) => {
   const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
   const cat_ids = Array.isArray(req.body.cat_ids) ? req.body.cat_ids : [];
-  const rows = await coursesService.listByIdsOrCatIds({ ids, cat_ids });
+  const order = req.body.order === 'DESC' ? 'DESC' : 'ASC';
+  const rows = await coursesService.listByIdsOrCatIds({ ids, cat_ids, order });
   sendSuccess(res, rows);
 });
 

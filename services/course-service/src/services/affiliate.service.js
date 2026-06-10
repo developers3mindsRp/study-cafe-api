@@ -768,7 +768,10 @@ const affiliateService = {
         description: c.brief_description || '',
         imageUrl: resolveImageUrl(c.thumbnail_url),
         originalPrice: parseFloat(c.price) || 0,
-        discountedPrice: parseFloat(c.sale_price || c.price) || 0,
+        discountedPrice:
+          c.sale_price != null && c.sale_price !== ''
+            ? parseFloat(c.sale_price)
+            : parseFloat(c.price) || 0,
         url: `/course/${c.slug}?ref=${referralCode}`,
       })),
     };

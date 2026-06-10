@@ -141,6 +141,7 @@ function register(router) {
   router.post('/admin/platform/coupons', requireAdmin, p.postCoupon);
   router.put('/admin/platform/coupons/:id', requireAdmin, p.putCoupon);
   router.delete('/admin/platform/coupons/:id', requireAdmin, p.deleteCoupon);
+  router.get('/admin/platform/articles/counts', requireAdmin, p.getArticleStatusCounts);
   router.get('/admin/platform/articles', requireAdmin, p.getArticles);
   router.post('/admin/platform/articles/:id/preview-token', requireAdmin, controller.createArticlePreviewToken);
   router.get('/admin/platform/articles/:id', requireAdmin, p.getArticle);
@@ -177,13 +178,6 @@ function register(router) {
   router.delete('/admin/platform/newsletter/templates/:id', requireAdmin, p.deleteNewsletterTemplate);
   router.post('/admin/platform/newsletter/send', requireAdmin, p.sendNewsletter);
   router.post('/admin/platform/newsletter/sync-members', requireAdmin, p.syncMembershipSubscribers);
-
-  // ── Banners ─────────────────────────────────────────────────────────
-  router.get('/admin/platform/banners', requireAdmin, p.getBanners);
-  router.get('/admin/platform/banners/:id', requireAdmin, p.getBanner);
-  router.post('/admin/platform/banners', requireAdmin, p.postBanner);
-  router.put('/admin/platform/banners/:id', requireAdmin, p.putBanner);
-  router.delete('/admin/platform/banners/:id', requireAdmin, p.deleteBanner);
 
 
   // ── Affiliate routes ───────────────────────────────────────────────

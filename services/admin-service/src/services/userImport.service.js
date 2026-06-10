@@ -36,6 +36,10 @@ function normalizeRow(row) {
     membership: row.membership != null ? String(row.membership).trim().toLowerCase() : '',
     status: row.status != null ? String(row.status).trim().toLowerCase() : '',
     role: row.role != null ? String(row.role).trim().toLowerCase() : '',
+    plan_price: row.plan_price != null ? String(row.plan_price).trim() : '',
+    payment_id: row.payment_id != null ? String(row.payment_id).trim() : '',
+    plan_purchased: row.plan_purchased != null ? String(row.plan_purchased).trim() : '',
+    plan_expiry: row.plan_expiry != null ? String(row.plan_expiry).trim() : '',
   };
 
   for (const field of PROFILE_FIELDS) {
@@ -197,6 +201,7 @@ async function grantMembershipWithCourses({
   startsAt,
   expiresAt,
   enrolledCourseIds,
+  planJson,
 }) {
   await authClient.post('/access/grant-membership', {
     userId,
@@ -204,6 +209,7 @@ async function grantMembershipWithCourses({
     startsAt,
     expiresAt,
     orderId: null,
+    ...(planJson ? { planJson } : {}),
   });
 
   const courseIds = await getPlanCourseIds(plan.id);
@@ -338,7 +344,22 @@ async function importUsers({ rows, adminId, reqIp }) {
     const plan = membershipSlug ? planSlugMap.get(membershipSlug) : null;
 
     if (membershipSlug && plan) {
-      const { startsAt, expiresAt } = computeMembershipDates(plan);
+      const csvStartsAt = row.plan_purchased || null;
+      const csvExpiresAt = row.plan_expiry || null;
+      const computed = computeMembershipDates(plan);
+      const startsAt = csvStartsAt || computed.startsAt;
+      const expiresAt = csvExpiresAt || computed.expiresAt;
+
+      const planJson = (row.plan_price || row.payment_id || csvStartsAt || csvExpiresAt)
+        ? {
+            price: row.plan_price || undefined,
+            plan_validity: plan.duration_days ? String(plan.duration_days) : undefined,
+            plan_purchased: startsAt,
+            plan_expiry: expiresAt,
+            payment_id: row.payment_id || undefined,
+          }
+        : null;
+
       try {
         const enrolledCourseIds = await fetchUserEnrolledCourseIds(userId);
         const grantResult = await grantMembershipWithCourses({
@@ -348,6 +369,7 @@ async function importUsers({ rows, adminId, reqIp }) {
           startsAt,
           expiresAt,
           enrolledCourseIds,
+          planJson,
         });
         coursesEnrolled = grantResult.coursesEnrolled;
         coursesSkipped = grantResult.coursesSkipped;

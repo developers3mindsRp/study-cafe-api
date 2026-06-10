@@ -22,6 +22,8 @@ async function list(query = {}) {
         membership,
         email,
         state,
+        designation,
+        profession,
         course_id,
         joined_from,
         joined_to,
@@ -55,6 +57,28 @@ async function list(query = {}) {
                 Sequelize.fn('LOWER', Sequelize.col('state')),
                 Op.like,
                 `%${s}%`
+            )
+        );
+    }
+
+    if (designation != null && String(designation).trim() !== '') {
+        const d = String(designation).trim().toLowerCase();
+        andConditions.push(
+            Sequelize.where(
+                Sequelize.fn('LOWER', Sequelize.col('designation')),
+                Op.like,
+                `${d}%`
+            )
+        );
+    }
+
+    if (profession != null && String(profession).trim() !== '') {
+        const p = String(profession).trim().toLowerCase();
+        andConditions.push(
+            Sequelize.where(
+                Sequelize.fn('LOWER', Sequelize.col('profession')),
+                Op.like,
+                `${p}%`
             )
         );
     }
@@ -113,6 +137,8 @@ async function list(query = {}) {
             });
         }
     }
+
+    logger.info('[users.list] date filter', { joined_from, joined_to, full_query: query });
 
     const createdRange = {};
     if (joined_from) {

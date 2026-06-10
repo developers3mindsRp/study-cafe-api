@@ -474,29 +474,6 @@ const sendNewsletter = {
     }),
 };
 
-// ── Banners ─────────────────────────────────────────────────────────
-
-const createBanner = {
-    body: Joi.object({
-        identifier: Joi.string().max(255).required(),
-        desktop_image_url: Joi.string().required(),
-        mobile_image_url: Joi.string().required(),
-        link_url: Joi.string().uri().allow('', null),
-        is_active: Joi.boolean().default(true),
-    }),
-};
-
-const updateBanner = {
-    params: idParam.params,
-    body: Joi.object({
-        identifier: Joi.string().max(255),
-        desktop_image_url: Joi.string(),
-        mobile_image_url: Joi.string(),
-        link_url: Joi.string().uri().allow('', null),
-        is_active: Joi.boolean(),
-    }),
-};
-
 /** Full URL path SEO lookup (?path=/blogs/foo), avoids single-segment :slug limitation */
 const seoByPathQuery = {
     query: Joi.object({
@@ -559,8 +536,6 @@ module.exports = {
     createNewsletterTemplate,
     updateNewsletterTemplate,
     sendNewsletter,
-    createBanner,
-    updateBanner,
     createMediaAsset,
     mediaAssetsListQuery,
 };

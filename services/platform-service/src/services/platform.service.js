@@ -125,7 +125,6 @@ const {
   PlanComparisonFeature,
   PlanFeatureAvailability,
   NewsletterTemplate,
-  Banner,
   Faq,
   Article,
   ArticleCategoryMap,
@@ -2119,6 +2118,26 @@ async function getArticlesInternal(options = {}) {
   return result;
 }
 
+async function getArticleStatusCounts() {
+  const rows = await sequelize.query(
+    `SELECT status, COUNT(*) AS n FROM articles WHERE deleted_at IS NULL GROUP BY status`,
+    { type: QueryTypes.SELECT }
+  );
+  const map = {};
+  for (const r of rows) map[r.status] = Number(r.n);
+  return {
+    all: Object.values(map).reduce((s, n) => s + n, 0),
+    published: map['publish'] ?? 0,
+    draft: map['draft'] ?? 0,
+    scheduled: map['scheduled'] ?? 0,
+    pending: map['pending'] ?? 0,
+    trash: await sequelize.query(
+      `SELECT COUNT(*) AS n FROM articles WHERE deleted_at IS NOT NULL`,
+      { type: QueryTypes.SELECT }
+    ).then((r) => Number(r[0]?.n ?? 0)),
+  };
+}
+
 async function getArticleByIdInternal(id) {
   const row = await Article.findByPk(id, { paranoid: false });
   if (!row) return null;
@@ -3206,6 +3225,7 @@ module.exports = {
     getUpNextArticlesBySlugPublic,
     getArticlesInternal,
     getArticleByIdInternal,
+    getArticleStatusCounts,
     createArticle,
     updateArticle,
     deleteArticle,
@@ -3230,15 +3250,6 @@ module.exports = {
     getMediaAssetsInternal,
     createMediaAsset,
     deleteMediaAsset,
-  },
-  banners: {
-    getBannersPublic,
-    getBannerByIdentifierPublic,
-    getBannersInternal,
-    getBannerByIdInternal,
-    createBanner,
-    updateBanner,
-    deleteBanner,
   },
 };
 
@@ -3409,53 +3420,7 @@ async function createMediaAsset({ url, label, category = 'library', mime_type = 
 async function deleteMediaAsset(id) {
   const row = await Media.findByPk(id);
   if (!row) return null;
-  // Only remove registry row; never delete files on disk (articles/banners keep working)
-  await row.destroy();
-  return { id };
-}
-
-// ── Banners ─────────────────────────────────────────────────────────
-
-async function getBannersPublic() {
-  const rows = await Banner.findAll({
-    where: { is_active: true },
-    order: [["created_at", "DESC"]],
-  });
-  return rows.map((r) => r.get({ plain: true }));
-}
-
-async function getBannerByIdentifierPublic(identifier) {
-  const row = await Banner.findOne({
-    where: { identifier, is_active: true },
-  });
-  return row ? row.get({ plain: true }) : null;
-}
-
-async function getBannersInternal() {
-  const rows = await Banner.findAll({ order: [["created_at", "DESC"]] });
-  return rows.map((r) => r.get({ plain: true }));
-}
-
-async function getBannerByIdInternal(id) {
-  const row = await Banner.findByPk(id);
-  return row ? row.get({ plain: true }) : null;
-}
-
-async function createBanner(data) {
-  const row = await Banner.create(data);
-  return row.get({ plain: true });
-}
-
-async function updateBanner(id, data) {
-  const row = await Banner.findByPk(id);
-  if (!row) return null;
-  await row.update(data);
-  return row.get({ plain: true });
-}
-
-async function deleteBanner(id) {
-  const row = await Banner.findByPk(id);
-  if (!row) return null;
+  // Only remove registry row; never delete files on disk (articles keep working)
   await row.destroy();
   return { id };
 }

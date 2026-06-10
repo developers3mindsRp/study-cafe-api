@@ -282,12 +282,12 @@ async function fetchPlanBySlug(slug) {
 /**
  * Fetch courses by IDs + category IDs from course-service.
  */
-async function fetchCoursesByIdsOrCatIds(ids, cat_ids) {
+async function fetchCoursesByIdsOrCatIds(ids, cat_ids, order = 'ASC') {
   if (ids.length === 0 && cat_ids.length === 0) return [];
   try {
     const { data } = await axios.post(
       `${config.courseServiceUrl}/internal/courses/by-ids`,
-      { ids, cat_ids },
+      { ids, cat_ids, order: order === 'DESC' ? 'DESC' : 'ASC' },
       {
         timeout: 10000,
         headers: { 'x-internal-api-key': config.internalApiKey },
@@ -342,7 +342,7 @@ async function getMembershipCourses(userId) {
     const course_ids = Array.isArray(plan?.course_ids) ? plan.course_ids : [];
     const course_cat_ids = Array.isArray(plan?.course_cat_ids) ? plan.course_cat_ids : [];
 
-    const courses = await fetchCoursesByIdsOrCatIds(course_ids, course_cat_ids);
+    const courses = await fetchCoursesByIdsOrCatIds(course_ids, course_cat_ids, 'DESC');
 
     results.push({
       membershipId: membership.id,

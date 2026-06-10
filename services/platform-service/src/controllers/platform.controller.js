@@ -343,6 +343,11 @@ const getArticleByIdInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+const getArticleStatusCounts = asyncHandler(async (req, res) => {
+  const data = await platformService.articles.getArticleStatusCounts();
+  sendSuccess(res, data);
+});
+
 const createArticle = asyncHandler(async (req, res) => {
   const data = await platformService.articles.createArticle(req.body);
   sendCreated(res, data);
@@ -649,47 +654,6 @@ const deleteSiteSeoRoute = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
-// ── Banners ─────────────────────────────────────────────────────────
-
-const getBanners = asyncHandler(async (req, res) => {
-  const data = await platformService.banners.getBannersPublic();
-  sendSuccess(res, data);
-});
-
-const getBannerByIdentifier = asyncHandler(async (req, res) => {
-  const data = await platformService.banners.getBannerByIdentifierPublic(req.params.identifier);
-  if (!data) throw new AppError('Banner not found', 404);
-  sendSuccess(res, data);
-});
-
-const getBannersInternal = asyncHandler(async (req, res) => {
-  const data = await platformService.banners.getBannersInternal();
-  sendSuccess(res, data);
-});
-
-const getBannerInternal = asyncHandler(async (req, res) => {
-  const data = await platformService.banners.getBannerByIdInternal(req.params.id);
-  if (!data) throw new AppError('Banner not found', 404);
-  sendSuccess(res, data);
-});
-
-const createBanner = asyncHandler(async (req, res) => {
-  const data = await platformService.banners.createBanner(req.body);
-  sendCreated(res, data);
-});
-
-const updateBanner = asyncHandler(async (req, res) => {
-  const data = await platformService.banners.updateBanner(req.params.id, req.body);
-  if (!data) throw new AppError('Banner not found', 404);
-  sendSuccess(res, data);
-});
-
-const deleteBanner = asyncHandler(async (req, res) => {
-  const ok = await platformService.banners.deleteBanner(req.params.id);
-  if (!ok) throw new AppError('Banner not found', 404);
-  sendNoContent(res);
-});
-
 module.exports = {
   getHome,
   getHomeInternal,
@@ -760,6 +724,7 @@ module.exports = {
   getArticleUpNext,
   getArticlesInternal,
   getArticleByIdInternal,
+  getArticleStatusCounts,
   createArticle,
   updateArticle,
   deleteArticle,
@@ -782,11 +747,4 @@ module.exports = {
   getMediaAssets,
   createMediaAsset,
   deleteMediaAsset,
-  getBanners,
-  getBannerByIdentifier,
-  getBannersInternal,
-  getBannerInternal,
-  createBanner,
-  updateBanner,
-  deleteBanner,
 };
