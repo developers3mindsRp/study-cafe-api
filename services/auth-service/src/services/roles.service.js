@@ -33,7 +33,8 @@ function sanitizePermissions(arr) {
 
 function roleToDto(role, userCount = 0) {
   const plain = role.get ? role.get({ plain: true }) : role;
-  const permissions = Array.isArray(plain.permissions) ? plain.permissions : [];
+  const raw = Array.isArray(plain.permissions) ? plain.permissions : [];
+  const permissions = sanitizePermissions(raw);
   return {
     id: plain.id,
     name: plain.name,
@@ -72,7 +73,10 @@ async function listRoles({ adminPanelOnly = false } = {}) {
   const where = adminPanelOnly ? { is_admin_panel: true } : {};
   const roles = await Role.findAll({
     where,
-    order: [['id', 'ASC']],
+    order: [
+      ['is_system', 'DESC'],
+      ['name', 'ASC'],
+    ],
     attributes: roleQueryAttributes(),
   });
   const counts = await countUsersByRoleIds(roles.map((r) => r.id));
@@ -194,6 +198,8 @@ async function deleteRole(id) {
 async function seedRolePermissionsIfMissing() {
   if (!isDynamicRoleSchemaReady()) return;
   const panelRoles = new Set(['super_admin', 'admin', 'editor', 'viewer', 'editor_articles', 'custom']);
+  /** super_admin DB row kept in sync for display; runtime always uses ALL_PERMISSIONS. */
+  const alwaysSyncPermissions = new Set(['super_admin']);
 
   for (const [name, templatePerms] of Object.entries(ROLE_PERMISSIONS)) {
     const role = await Role.findOne({
@@ -204,7 +210,13 @@ async function seedRolePermissionsIfMissing() {
 
     const updates = {};
     const current = parseRolePermissions(role);
-    if ((!current || current.length === 0) && Array.isArray(templatePerms) && templatePerms.length > 0) {
+    if (
+      alwaysSyncPermissions.has(name)
+      && Array.isArray(templatePerms)
+      && templatePerms.length > 0
+    ) {
+      updates.permissions = sanitizePermissions(templatePerms);
+    } else if ((!current || current.length === 0) && Array.isArray(templatePerms) && templatePerms.length > 0) {
       updates.permissions = sanitizePermissions(templatePerms);
     }
     if (role.is_system == null || role.is_system === false) {

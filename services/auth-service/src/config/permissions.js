@@ -24,9 +24,8 @@ const ALL_PERMISSIONS = [
   'admin_users:list', 'admin_users:view', 'admin_users:create', 'admin_users:edit', 'admin_users:delete',
   'roles:list', 'roles:view', 'roles:create', 'roles:edit', 'roles:delete',
   'users:course_allotment',
-  'banners:list', 'banners:view', 'banners:create', 'banners:edit', 'banners:delete',
-  'users:course_allotment',
   'users:membership_allotment',
+  'banners:list', 'banners:view', 'banners:create', 'banners:edit', 'banners:delete',
 ];
 const MODULE_HIERARCHY = {
   articles: [
@@ -76,10 +75,10 @@ const MODULE_HIERARCHY = {
     ['newsletter:delete'],
   ],
   courses: [
-    ['courses:list', 'courses:view'],
-    ['courses:edit'],
-    ['courses:create'],
-    ['courses:delete'],
+    ['courses:list', 'courses:view', 'course_categories:list', 'course_categories:view', 'marketing_pages:list', 'marketing_pages:view', 'course_reviews:list', 'course_reviews:view'],
+    ['courses:edit', 'course_categories:edit', 'marketing_pages:edit', 'course_reviews:edit'],
+    ['courses:create', 'course_categories:create', 'marketing_pages:create'],
+    ['courses:delete', 'course_categories:delete', 'marketing_pages:delete', 'course_reviews:delete'],
   ],
   marketing_pages: [
     ['marketing_pages:list', 'marketing_pages:view'],
@@ -230,7 +229,8 @@ function mergePermissions(roleName, permissionOverrides) {
  * @param {string[]|null|undefined} rolePermissionsFromDb Permissions JSON from roles.permissions
  */
 function getEffectivePermissions(roleName, permissionOverrides, rolePermissionsFromDb = null) {
-  if (roleName === 'super_admin') return ALL_PERMISSIONS;
+  const normalizedRole = roleName ? String(roleName).toLowerCase() : '';
+  if (normalizedRole === 'super_admin') return ALL_PERMISSIONS;
 
   const overrides = Array.isArray(permissionOverrides) ? permissionOverrides : [];
   const fromDb = Array.isArray(rolePermissionsFromDb) ? rolePermissionsFromDb : null;

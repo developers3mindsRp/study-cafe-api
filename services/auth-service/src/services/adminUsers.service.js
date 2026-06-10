@@ -25,7 +25,7 @@ function isAssignableAdminRole(role) {
 }
 
 function actorMayAssignAdminRole({ actorRole, actorPermissions }) {
-  if (actorRole === 'super_admin' || actorRole === 'admin') return true;
+  if (actorRole === 'super_admin') return true;
   return Array.isArray(actorPermissions) && actorPermissions.includes('admin_users:create');
 }
 
@@ -34,7 +34,12 @@ async function listRoles() {
     where: isDynamicRoleSchemaReady()
       ? { is_admin_panel: true }
       : { name: { [Op.in]: LEGACY_ADMIN_PANEL_ROLES } },
-    order: [['id', 'ASC']],
+    order: isDynamicRoleSchemaReady()
+      ? [
+          ['is_system', 'DESC'],
+          ['name', 'ASC'],
+        ]
+      : [['name', 'ASC']],
     attributes: roleQueryAttributes(),
   });
   if (isDynamicRoleSchemaReady()) {

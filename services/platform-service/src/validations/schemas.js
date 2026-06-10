@@ -349,7 +349,7 @@ const createArticle = {
 
 const updateArticle = {
     params: idParam.params,
-    body: Joi.object(articleWriteBody),
+    body: Joi.object(articleWriteBody).fork('author_id', () => Joi.any().strip()),
 };
 
 // ── CMS pages ────────────────────────────────────────────────────────

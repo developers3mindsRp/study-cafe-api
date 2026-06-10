@@ -2293,53 +2293,59 @@ async function createArticle(data) {
 async function updateArticle(id, data) {
   const row = await Article.findByPk(id);
   if (!row) return null;
+  // Author is set at create only; edits must never change author_id or author display fields.
+  const {
+    author_id: _dropAuthorId,
+    author_name: _dropAuthorName,
+    author_role: _dropAuthorRole,
+    ...patch
+  } = data && typeof data === 'object' ? data : {};
   const cur = row.get({ plain: true });
   const previousSlug = cur.slug;
-  const nextStatus = data.status !== undefined ? normalizeArticleAdminStatus(data.status) : cur.status;
+  const nextStatus = patch.status !== undefined ? normalizeArticleAdminStatus(patch.status) : cur.status;
 
   let nextScheduled = cur.scheduled_publish_at;
-  if (data.scheduled_publish_at !== undefined) {
+  if (patch.scheduled_publish_at !== undefined) {
     nextScheduled =
-      data.scheduled_publish_at != null && data.scheduled_publish_at !== ''
-        ? new Date(data.scheduled_publish_at)
+      patch.scheduled_publish_at != null && patch.scheduled_publish_at !== ''
+        ? new Date(patch.scheduled_publish_at)
         : null;
   }
 
   assertValidArticleSchedule(nextStatus, nextStatus === 'scheduled' ? nextScheduled : null);
 
   const updates = {};
-  if (data.title !== undefined) updates.title = data.title;
-  if (data.slug !== undefined) updates.slug = data.slug;
-  if (data.excerpt !== undefined) updates.excerpt = data.excerpt;
-  if (data.content !== undefined) updates.content = data.content;
-  if (data.body !== undefined) updates.content = data.body;
-  if (data.thumbnail_url !== undefined) updates.thumbnail_url = data.thumbnail_url;
-  if (data.cover_image_url !== undefined) updates.thumbnail_url = data.cover_image_url;
-  if (data.thumbnail_alt !== undefined) updates.thumbnail_alt = data.thumbnail_alt || null;
-  if (data.thumbnail_link_url !== undefined) updates.thumbnail_link_url = data.thumbnail_link_url || null;
-  if (data.thumbnail_caption !== undefined) updates.thumbnail_caption = data.thumbnail_caption || null;
-  // author_id is set only on create; never overwrite on update.
-  if (data.sub_heading !== undefined) updates.sub_heading = data.sub_heading;
-  if (data.status !== undefined) updates.status = nextStatus;
-  if (data.meta_title !== undefined) updates.meta_title = data.meta_title;
-  if (data.meta_description !== undefined) updates.meta_description = data.meta_description;
-  if (data.meta_keywords !== undefined) updates.meta_keywords = data.meta_keywords;
-  if (data.canonical_url !== undefined) updates.canonical_url = data.canonical_url || null;
-  if (data.robots !== undefined) updates.robots = data.robots || null;
-  if (data.og_title !== undefined) updates.og_title = data.og_title || null;
-  if (data.og_description !== undefined) updates.og_description = data.og_description || null;
-  if (data.og_image_url !== undefined) updates.og_image_url = data.og_image_url || null;
-  if (data.blog_access_tier !== undefined) updates.blog_access_tier = normalizeBlogAccessTier(data.blog_access_tier);
-  if (data.rel_download_url !== undefined) updates.rel_download_url = data.rel_download_url || null;
-  if (data.citation !== undefined) updates.citation = data.citation ? (typeof data.citation === 'string' ? data.citation : JSON.stringify(data.citation)) : null;
+  if (patch.title !== undefined) updates.title = patch.title;
+  if (patch.slug !== undefined) updates.slug = patch.slug;
+  if (patch.excerpt !== undefined) updates.excerpt = patch.excerpt;
+  if (patch.content !== undefined) updates.content = patch.content;
+  if (patch.body !== undefined) updates.content = patch.body;
+  if (patch.thumbnail_url !== undefined) updates.thumbnail_url = patch.thumbnail_url;
+  if (patch.cover_image_url !== undefined) updates.thumbnail_url = patch.cover_image_url;
+  if (patch.thumbnail_alt !== undefined) updates.thumbnail_alt = patch.thumbnail_alt || null;
+  if (patch.thumbnail_link_url !== undefined) updates.thumbnail_link_url = patch.thumbnail_link_url || null;
+  if (patch.thumbnail_caption !== undefined) updates.thumbnail_caption = patch.thumbnail_caption || null;
+  if (patch.sub_heading !== undefined) updates.sub_heading = patch.sub_heading;
+  if (patch.status !== undefined) updates.status = nextStatus;
+  if (patch.meta_title !== undefined) updates.meta_title = patch.meta_title;
+  if (patch.meta_description !== undefined) updates.meta_description = patch.meta_description;
+  if (patch.meta_keywords !== undefined) updates.meta_keywords = patch.meta_keywords;
+  if (patch.canonical_url !== undefined) updates.canonical_url = patch.canonical_url || null;
+  if (patch.robots !== undefined) updates.robots = patch.robots || null;
+  if (patch.og_title !== undefined) updates.og_title = patch.og_title || null;
+  if (patch.og_description !== undefined) updates.og_description = patch.og_description || null;
+  if (patch.og_image_url !== undefined) updates.og_image_url = patch.og_image_url || null;
+  if (patch.blog_access_tier !== undefined) updates.blog_access_tier = normalizeBlogAccessTier(patch.blog_access_tier);
+  if (patch.rel_download_url !== undefined) updates.rel_download_url = patch.rel_download_url || null;
+  if (patch.citation !== undefined) updates.citation = patch.citation ? (typeof patch.citation === 'string' ? patch.citation : JSON.stringify(patch.citation)) : null;
 
-  if (data.status !== undefined || data.scheduled_publish_at !== undefined || data.published_at !== undefined) {
+  if (patch.status !== undefined || patch.scheduled_publish_at !== undefined || patch.published_at !== undefined) {
     if (nextStatus === 'publish') {
       const wasPublished = String(cur.status).toLowerCase() === 'publish';
-      if (!wasPublished || data.published_at !== undefined) {
+      if (!wasPublished || patch.published_at !== undefined) {
         updates.published_at =
-          data.published_at != null && data.published_at !== ''
-            ? new Date(data.published_at)
+          patch.published_at != null && patch.published_at !== ''
+            ? new Date(patch.published_at)
             : new Date();
       }
       updates.scheduled_publish_at = null;
@@ -2348,54 +2354,54 @@ async function updateArticle(id, data) {
       updates.published_at = null;
     } else {
       updates.scheduled_publish_at = null;
-      if (data.published_at !== undefined) {
-        updates.published_at = data.published_at ? new Date(data.published_at) : null;
+      if (patch.published_at !== undefined) {
+        updates.published_at = patch.published_at ? new Date(patch.published_at) : null;
       }
     }
   }
 
   await row.update(updates);
-  if (data.category_ids !== undefined) {
+  if (patch.category_ids !== undefined) {
     await ArticleCategoryMap.destroy({ where: { article_id: id } });
-    const ids = Array.isArray(data.category_ids) ? data.category_ids : [];
+    const ids = Array.isArray(patch.category_ids) ? patch.category_ids : [];
     if (ids.length) await ArticleCategoryMap.bulkCreate(ids.map((category_id) => ({ article_id: id, category_id })));
   }
-  if (data.tag_ids !== undefined || data.tag_labels !== undefined) {
+  if (patch.tag_ids !== undefined || patch.tag_labels !== undefined) {
     await ArticleTagMap.destroy({ where: { article_id: id } });
     const chipIds =
-      data.tag_ids !== undefined
-        ? (Array.isArray(data.tag_ids) ? data.tag_ids : [])
+      patch.tag_ids !== undefined
+        ? (Array.isArray(patch.tag_ids) ? patch.tag_ids : [])
         : await getExistingArticleTagIds(id);
     const labels =
-      data.tag_labels !== undefined ? (Array.isArray(data.tag_labels) ? data.tag_labels : []) : [];
+      patch.tag_labels !== undefined ? (Array.isArray(patch.tag_labels) ? patch.tag_labels : []) : [];
     const mergedTagIds = await mergeArticleTagIdsFromPayload({
       tag_ids: chipIds,
       tag_labels: labels,
     });
     if (mergedTagIds.length) await ArticleTagMap.bulkCreate(mergedTagIds.map((tag_id) => ({ article_id: id, tag_id })));
   }
-  if (data.article_type_ids !== undefined) {
+  if (patch.article_type_ids !== undefined) {
     await ArticleTypeMap.destroy({ where: { article_id: id } });
-    const ids = Array.isArray(data.article_type_ids) ? data.article_type_ids : [];
+    const ids = Array.isArray(patch.article_type_ids) ? patch.article_type_ids : [];
     if (ids.length) await ArticleTypeMap.bulkCreate(ids.map((article_type_id) => ({ article_id: id, article_type_id })));
   }
-  if (data.court_ids !== undefined) {
+  if (patch.court_ids !== undefined) {
     await ArticleCourtMap.destroy({ where: { article_id: id } });
-    const ids = Array.isArray(data.court_ids) ? data.court_ids : [];
+    const ids = Array.isArray(patch.court_ids) ? patch.court_ids : [];
     if (ids.length) await ArticleCourtMap.bulkCreate(ids.map((court_id) => ({ article_id: id, court_id })));
   }
   const out = await getArticleByIdInternal(id);
-  const slugChanged = data.slug !== undefined && String(previousSlug) !== String(out?.slug);
+  const slugChanged = patch.slug !== undefined && String(previousSlug) !== String(out?.slug);
   const seoFieldsTouched =
-    data.meta_title !== undefined ||
-    data.meta_description !== undefined ||
-    data.meta_keywords !== undefined ||
-    data.canonical_url !== undefined ||
-    data.robots !== undefined ||
-    data.og_title !== undefined ||
-    data.og_description !== undefined ||
-    data.og_image_url !== undefined ||
-    data.title !== undefined ||
+    patch.meta_title !== undefined ||
+    patch.meta_description !== undefined ||
+    patch.meta_keywords !== undefined ||
+    patch.canonical_url !== undefined ||
+    patch.robots !== undefined ||
+    patch.og_title !== undefined ||
+    patch.og_description !== undefined ||
+    patch.og_image_url !== undefined ||
+    patch.title !== undefined ||
     slugChanged;
   if (seoFieldsTouched) {
     await syncArticleSeoMetadata(out, slugChanged ? previousSlug : null).catch((err) => {
