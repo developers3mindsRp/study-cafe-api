@@ -1020,7 +1020,11 @@ const platform = {
     return c.post('/internal/platform/articles', body).then((r) => ({ data: r.data, status: 201 }));
   }),
   putArticle: platformProxy((c, req) => {
-    const { author_id, ...rest } = req.body;
+    const body = { ...req.body };
+    delete body.author_id;
+    delete body.author_name;
+    delete body.author_role;
+    
     return c.put(`/internal/platform/articles/${req.params.id}`, rest).then((r) => ({ data: r.data }));
   }),
   deleteArticle: platformProxy((c, req) => c.delete(`/internal/platform/articles/${req.params.id}`).then(() => ({ status: 204 }))),
