@@ -1,4 +1,5 @@
 const Joi = require('joi');
+const { ARTICLE_TAX_TYPE_VALUES } = require('../constants/articleTaxTypes');
 
 // ── Param schemas ──────────────────────────────────────────────────
 
@@ -338,6 +339,10 @@ const articleWriteBody = {
         Joi.string().allow('', null),
         Joi.object().unknown(true).allow(null)
     ).allow(null),
+    /** Notification metadata (tax notifications) */
+    noti_no: Joi.string().max(200).allow('', null),
+    noti_date: Joi.string().max(100).allow('', null),
+    type_of_tax: Joi.string().valid(...ARTICLE_TAX_TYPE_VALUES).allow('', null),
 };
 
 const createArticle = {

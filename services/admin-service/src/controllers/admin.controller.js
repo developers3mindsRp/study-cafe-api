@@ -1025,7 +1025,7 @@ const platform = {
     delete body.author_name;
     delete body.author_role;
     
-    return c.put(`/internal/platform/articles/${req.params.id}`, rest).then((r) => ({ data: r.data }));
+    return c.put(`/internal/platform/articles/${req.params.id}`, body).then((r) => ({ data: r.data }));
   }),
   deleteArticle: platformProxy((c, req) => c.delete(`/internal/platform/articles/${req.params.id}`).then(() => ({ status: 204 }))),
   restoreArticle: platformProxy((c, req) => c.post(`/internal/platform/articles/${req.params.id}/restore`).then(() => ({ status: 204 }))),
