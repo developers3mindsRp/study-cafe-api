@@ -1737,9 +1737,11 @@ function buildArticleCitationFromRow(row) {
 
 function buildArticleNotificationFromRow(row) {
   if (!row) return null;
-  const noti_no = normalizeNotificationField(row.noti_no);
-  const noti_date = normalizeNotificationField(row.noti_date);
-  const type_of_tax = normalizeNotificationField(row.type_of_tax);
+  const parsed = parseArticleCitation(row.citation);
+  const fromCitation = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  const noti_no = normalizeNotificationField(row.noti_no) ?? normalizeNotificationField(fromCitation.noti_no);
+  const noti_date = normalizeNotificationField(row.noti_date) ?? normalizeNotificationField(fromCitation.noti_date);
+  const type_of_tax = normalizeNotificationField(row.type_of_tax) ?? normalizeNotificationField(fromCitation.type_of_tax);
   if (!noti_no && !noti_date && !type_of_tax) return null;
   return { noti_no, noti_date, type_of_tax };
 }
@@ -1883,6 +1885,7 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     telegram_link = pickRandom([...new Set(allTelegram.filter(Boolean))]);
   }
 
+  const notification = buildArticleNotificationFromRow(p);
   const out = {
     ...p,
     blog_access_tier,
@@ -1895,7 +1898,11 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     body,
     toc: tocItems,
     citation: buildArticleCitationFromRow(p),
-    notification: buildArticleNotificationFromRow(p),
+    notification,
+    noti_no: notification?.noti_no ?? null,
+    noti_date: notification?.noti_date ?? null,
+    type_of_tax: notification?.type_of_tax ?? null,
+    has_notification: Boolean(notification),
     cover_image_url: p.thumbnail_url,
     author_name: authorName ?? null,
     download_url: p.rel_download_url || p.upload_url || null,
