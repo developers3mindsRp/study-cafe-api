@@ -7,6 +7,8 @@ module.exports = (sequelize) => {
         name: { type: DataTypes.STRING(200), allowNull: false },
         slug: { type: DataTypes.STRING(200), allowNull: true },
         parent_id: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
+        description: { type: DataTypes.TEXT, allowNull: true },
+        image_url: { type: DataTypes.STRING(500), allowNull: true },
         whatsapp_links: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
         telegram_links: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
         google_news_url: { type: DataTypes.STRING(500), allowNull: true },

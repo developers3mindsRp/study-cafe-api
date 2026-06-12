@@ -1617,6 +1617,25 @@ async function listMyPurchases(userId) {
     });
   }
 
+  // Deduplicate course purchases by courseId — a user may have multiple paid
+  // orders for the same course (re-purchase, batch re-enroll, migration dup).
+  // Keep the first occurrence (rows are ordered created_at DESC = most recent).
+  // Non-course rows (memberships/other) are always kept.
+  const dedupedOut = [];
+  const seenCourseIds = new Set();
+  for (const item of out) {
+    // Only course purchases populate courseEntityIds; memberships/other are kept as-is.
+    const isCoursePurchase = courseEntityIds.includes(Number(item.courseId));
+    if (isCoursePurchase) {
+      const cid = Number(item.courseId);
+      if (seenCourseIds.has(cid)) continue;
+      seenCourseIds.add(cid);
+    }
+    dedupedOut.push(item);
+  }
+  out.length = 0;
+  out.push(...dedupedOut);
+
   // Fetch expires_at for each course purchase from user_courses (shared DB)
   const expiryMap = new Map();
   if (courseEntityIds.length > 0) {

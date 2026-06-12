@@ -15,9 +15,15 @@ const config = require('../config');
 async function checkMembershipAccess(userId, courseId) {
   const now = new Date();
 
+  // Resolve internal id + wp_user_id so migrated memberships (stored under the
+  // legacy WP user id) are matched too.
+  const userRow = await User.findByPk(userId, { attributes: ['id', 'wp_user_id'] });
+  const lookupIds = [Number(userId)];
+  if (userRow?.wp_user_id != null) lookupIds.push(Number(userRow.wp_user_id));
+
   // Step 1: Does the user have any active membership?
   const activeMemberships = await UserMembership.findAll({
-    where: { user_id: userId },
+    where: { user_id: { [Op.in]: lookupIds } },
     attributes: ['membership_type'],
   });
  
@@ -45,7 +51,7 @@ async function checkMembershipAccess(userId, courseId) {
        AND pp.is_active = 1
        AND EXISTS (
          SELECT 1 FROM user_memberships um
-         WHERE um.user_id = :userId
+         WHERE um.user_id IN (:lookupIds)
            AND um.membership_type = pp.slug
            AND um.expires_at > NOW()
        )
@@ -62,7 +68,7 @@ async function checkMembershipAccess(userId, courseId) {
        )
      LIMIT 1`,
     {
-      replacements: { slugs: activeSlugs, userId: Number(userId), courseId: Number(courseId) },
+      replacements: { slugs: activeSlugs, lookupIds, courseId: Number(courseId) },
       type: QueryTypes.SELECT,
     }
   );
@@ -125,8 +131,11 @@ async function grantCourse({ userId, courseId, orderId, expiresAt }) {
 }
 
 async function getActiveMembership(userId) {
+  const userRow = await User.findByPk(userId, { attributes: ['id', 'wp_user_id'] });
+  const lookupIds = [Number(userId)];
+  if (userRow?.wp_user_id != null) lookupIds.push(Number(userRow.wp_user_id));
   const row = await UserMembership.findOne({
-    where: { user_id: userId, expires_at: { [Op.gt]: new Date() } },
+    where: { user_id: { [Op.in]: lookupIds }, expires_at: { [Op.gt]: new Date() } },
     order: [['expires_at', 'DESC']],
   });
   return row ? row.get({ plain: true }) : null;
