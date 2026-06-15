@@ -108,6 +108,7 @@ async function main() {
     await migratePages(src, tgt);
     await seedCmsPagesFromSource(src, tgt);
     await seedAffiliatePage(src, tgt);
+    await seedSeoMetadata(src, tgt);
     await migrateRedirections(src, tgt);
     await migrateWpLinks(src, tgt);
     await migrateMedia(src, tgt);
@@ -267,7 +268,9 @@ async function createAllTables(tgt) {
       wp_term_id BIGINT UNSIGNED,
       name VARCHAR(200) NOT NULL,
       slug VARCHAR(200),
-      parent_id BIGINT UNSIGNED
+      parent_id BIGINT UNSIGNED,
+      description TEXT,
+      image_url VARCHAR(500)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
     -- Tags (platform-service)
@@ -309,6 +312,14 @@ async function createAllTables(tgt) {
       meta_title VARCHAR(500),
       meta_description TEXT,
       meta_keywords VARCHAR(500),
+      canonical_url VARCHAR(1000),
+      robots VARCHAR(255),
+      og_title VARCHAR(255),
+      og_description TEXT,
+      og_image_url VARCHAR(500),
+      thumbnail_alt VARCHAR(500),
+      thumbnail_link_url VARCHAR(500),
+      thumbnail_caption TEXT,
       case_name TEXT,
       citation TEXT,
       appeal_number VARCHAR(500),
@@ -318,6 +329,7 @@ async function createAllTables(tgt) {
       section TEXT,
       noti_no VARCHAR(200),
       noti_date VARCHAR(100),
+      type_of_tax VARCHAR(100),
       ext_link VARCHAR(500),
       upload_url VARCHAR(500),
       rel_download_url VARCHAR(500),
@@ -469,6 +481,9 @@ async function createAllTables(tgt) {
       slug VARCHAR(200),
       content LONGTEXT,
       template VARCHAR(100),
+      meta_title VARCHAR(500),
+      meta_description TEXT,
+      meta_keywords VARCHAR(500),
       status VARCHAR(20) DEFAULT 'publish',
       created_at DATETIME,
       updated_at DATETIME
@@ -535,7 +550,8 @@ async function createAllTables(tgt) {
       user_id BIGINT UNSIGNED NOT NULL,
       course_id BIGINT UNSIGNED NOT NULL,
       order_id BIGINT UNSIGNED,
-      enrolled_at DATETIME
+      enrolled_at DATETIME,
+      UNIQUE KEY uq_enrollment_user_course (user_id, course_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
     -- Batches (course-service)
@@ -887,6 +903,81 @@ async function createAllTables(tgt) {
     await ensurePremiumPlansColumns(tgt);
     // Unified media table (label, category, indexes) for existing DBs created before this schema
     await ensureMediaTableSchema(tgt);
+    // SEO + notification columns added after the original schema (idempotent on existing DBs)
+    await ensureMigratedColumns(tgt);
+}
+
+/**
+ * Idempotently add SEO + notification columns to target tables that may predate
+ * them on existing (production) databases. Each ALTER is guarded against the
+ * "duplicate column" error so this is safe to run on every migration.
+ */
+async function ensureMigratedColumns(tgt) {
+    const alters = [
+        // Articles: notification tax type + extended SEO/thumbnail columns
+        "ALTER TABLE articles ADD COLUMN type_of_tax VARCHAR(100) NULL",
+        "ALTER TABLE articles ADD COLUMN canonical_url VARCHAR(1000) NULL",
+        "ALTER TABLE articles ADD COLUMN robots VARCHAR(255) NULL",
+        "ALTER TABLE articles ADD COLUMN og_title VARCHAR(255) NULL",
+        "ALTER TABLE articles ADD COLUMN og_description TEXT NULL",
+        "ALTER TABLE articles ADD COLUMN og_image_url VARCHAR(500) NULL",
+        "ALTER TABLE articles ADD COLUMN thumbnail_alt VARCHAR(500) NULL",
+        "ALTER TABLE articles ADD COLUMN thumbnail_link_url VARCHAR(500) NULL",
+        "ALTER TABLE articles ADD COLUMN thumbnail_caption TEXT NULL",
+        // Courses: full SEO set
+        "ALTER TABLE courses ADD COLUMN meta_title VARCHAR(500) NULL",
+        "ALTER TABLE courses ADD COLUMN meta_description TEXT NULL",
+        "ALTER TABLE courses ADD COLUMN meta_keywords VARCHAR(500) NULL",
+        "ALTER TABLE courses ADD COLUMN canonical_url VARCHAR(1000) NULL",
+        "ALTER TABLE courses ADD COLUMN robots VARCHAR(255) NULL",
+        "ALTER TABLE courses ADD COLUMN og_title VARCHAR(255) NULL",
+        "ALTER TABLE courses ADD COLUMN og_description TEXT NULL",
+        "ALTER TABLE courses ADD COLUMN og_image_url VARCHAR(500) NULL",
+        // Categories: description + image
+        "ALTER TABLE categories ADD COLUMN description TEXT NULL",
+        "ALTER TABLE categories ADD COLUMN image_url VARCHAR(500) NULL",
+        // Pages: SEO set
+        "ALTER TABLE pages ADD COLUMN meta_title VARCHAR(500) NULL",
+        "ALTER TABLE pages ADD COLUMN meta_description TEXT NULL",
+        "ALTER TABLE pages ADD COLUMN meta_keywords VARCHAR(500) NULL",
+    ];
+    for (const sql of alters) {
+        try {
+            await tgt.query(sql, { raw: true });
+        } catch (e) {
+            if (e.original && e.original.code === 'ER_DUP_FIELDNAME') continue;
+            if (e.message && e.message.includes('Duplicate column name')) continue;
+            if (e.original && e.original.code === 'ER_NO_SUCH_TABLE') continue;
+            throw e;
+        }
+    }
+
+    // Deduplicate enrollments by (user_id, course_id) then add a unique key so
+    // future syncs/inserts can't create duplicate course rows in a user's profile.
+    try {
+        const idx = await tgt.query(
+            "SHOW INDEX FROM enrollments WHERE Key_name = 'uq_enrollment_user_course'",
+            { type: QueryTypes.SELECT }
+        );
+        if (!idx.length) {
+            // Remove dupes, keeping the lowest id per (user_id, course_id).
+            await tgt.query(
+                `DELETE e1 FROM enrollments e1
+                 INNER JOIN enrollments e2
+                   ON e1.user_id = e2.user_id AND e1.course_id = e2.course_id AND e1.id > e2.id`,
+                { raw: true }
+            );
+            await tgt.query(
+                'ALTER TABLE enrollments ADD UNIQUE KEY uq_enrollment_user_course (user_id, course_id)',
+                { raw: true }
+            );
+        }
+    } catch (e) {
+        if (!(e.original && e.original.code === 'ER_NO_SUCH_TABLE')) {
+            // Non-fatal: log and continue (e.g. permission or pre-existing dup-key edge cases)
+            console.log(`   ⚠️  Could not ensure enrollments unique key: ${e.message}`);
+        }
+    }
 }
 
 /**
@@ -1088,7 +1179,7 @@ ON DUPLICATE KEY UPDATE
   case_name=VALUES(case_name), citation=VALUES(citation), appeal_number=VALUES(appeal_number),
   judgement_date=VALUES(judgement_date), assessment_year=VALUES(assessment_year),
   court_name=VALUES(court_name), section=VALUES(section), noti_no=VALUES(noti_no),
-  noti_date=VALUES(noti_date), ext_link=VALUES(ext_link), upload_url=VALUES(upload_url),
+  noti_date=VALUES(noti_date), type_of_tax=VALUES(type_of_tax), ext_link=VALUES(ext_link), upload_url=VALUES(upload_url),
   rel_download_url=VALUES(rel_download_url), external_links=VALUES(external_links),
   status=VALUES(status), blog_access_tier=VALUES(blog_access_tier),
   published_at=VALUES(published_at), updated_at=VALUES(updated_at)`;
@@ -1101,7 +1192,11 @@ ON DUPLICATE KEY UPDATE
   price=VALUES(price), sale_price=VALUES(sale_price), enrolled_count=VALUES(enrolled_count),
   ratings=VALUES(ratings), rating_users=VALUES(rating_users), thumbnail_url=VALUES(thumbnail_url),
   youtube_url=VALUES(youtube_url), language=VALUES(language), course_type=VALUES(course_type),
-  taxable=VALUES(taxable), keywords=VALUES(keywords), faqs=VALUES(faqs), feedback=VALUES(feedback),
+  taxable=VALUES(taxable), keywords=VALUES(keywords),
+  meta_title=VALUES(meta_title), meta_description=VALUES(meta_description), meta_keywords=VALUES(meta_keywords),
+  canonical_url=VALUES(canonical_url), robots=VALUES(robots), og_title=VALUES(og_title),
+  og_description=VALUES(og_description), og_image_url=VALUES(og_image_url),
+  faqs=VALUES(faqs), feedback=VALUES(feedback),
   includes_info=VALUES(includes_info), course_includes=VALUES(course_includes),
   certifications=VALUES(certifications), gateway=VALUES(gateway),
   is_published=VALUES(is_published), status=VALUES(status),
@@ -1471,69 +1566,141 @@ function parsePhpIntArray(val) {
 }
 
 /**
+ * Map a WordPress course `type` (sc_courses.course_type) to the membership tier
+ * that includes it, after the StudyCafe rebrand:
+ *   WP type 'Basic'    → tier 'basic'
+ *   WP type 'Advanced' → tier 'premium'   (advanced was rebranded to premium)
+ *   WP type 'Premium'  → tier 'ultimate'  (premium was rebranded to ultimate)
+ *   WP type 'Paid'     → individually purchased only (no membership)
+ *   '', null, 'Free'   → free (no membership)
+ */
+function courseTypeToTier(courseType) {
+    const t = String(courseType || '').trim().toLowerCase();
+    if (t === 'basic') return 'basic';
+    if (t === 'advanced' || t === 'advance') return 'premium';
+    if (t === 'premium') return 'ultimate';
+    return null; // paid / free / unknown → not part of any membership
+}
+
+/**
+ * Ensure the three canonical membership tier plans exist (basic, premium, ultimate)
+ * with a tier_rank for upgrade ordering. Existing rows are left untouched.
+ */
+async function ensureTierPlans(tgt) {
+    // tier_rank may not exist on very old DBs; ensurePremiumPlansColumns() adds it.
+    const TIERS = [
+        { slug: 'basic', name: 'Basic', rank: 1, duration: 365, lifetime: 0 },
+        { slug: 'premium', name: 'Premium', rank: 2, duration: 3650, lifetime: 1 },
+        { slug: 'ultimate', name: 'Ultimate', rank: 3, duration: 3650, lifetime: 1 },
+    ];
+    const existing = await tgt.query('SELECT slug FROM premium_plans', { type: QueryTypes.SELECT });
+    const have = new Set((existing || []).map((p) => String(p.slug || '').toLowerCase()));
+    let sortOrder = (existing || []).length;
+    for (const t of TIERS) {
+        if (have.has(t.slug)) continue;
+        try {
+            await tgt.query(
+                `INSERT INTO premium_plans (name, slug, description, price, currency, duration_days, is_lifetime, features, sort_order, is_active, tier_rank)
+                 VALUES (?, ?, NULL, 0, 'INR', ?, ?, '[]', ?, 1, ?)`,
+                { replacements: [t.name, t.slug, t.duration, t.lifetime, sortOrder++, t.rank], raw: true }
+            );
+            console.log(`   + created missing tier plan '${t.slug}'`);
+        } catch (e) {
+            // tier_rank column might be absent on a very old DB; retry without it.
+            if (e.message && /tier_rank/.test(e.message)) {
+                await tgt.query(
+                    `INSERT INTO premium_plans (name, slug, description, price, currency, duration_days, is_lifetime, features, sort_order, is_active)
+                     VALUES (?, ?, NULL, 0, 'INR', ?, ?, '[]', ?, 1)`,
+                    { replacements: [t.name, t.slug, t.duration, t.lifetime, sortOrder++], raw: true }
+                );
+            } else if (!(e.message && e.message.includes('Duplicate'))) {
+                throw e;
+            }
+        }
+    }
+}
+
+/**
  * Migrate plan_courses: which courses are included in each membership plan.
- * Source: deepak_postmeta rel_course on membership course posts (Ultimate/Premium/Basic from sc_courses).
+ *
+ * StudyCafe membership access is TIER-BASED on each course's `type`, not on a
+ * per-plan course list (the legacy `rel_course` meta is effectively unused — only
+ * a handful of non-empty rows). Each course is tagged Basic/Advanced/Premium and
+ * a membership unlocks all courses at-or-below its tier:
+ *   basic    → Basic courses
+ *   premium  → Basic + Advanced courses
+ *   ultimate → Basic + Advanced + Premium courses
+ * This rebuilds plan_courses from sc_courses.course_type so every tier (including
+ * Basic) gets the correct, complete course set.
  */
 async function migratePlanCourses(src, tgt) {
-    console.log('🔗 Migrating plan–course relations...');
+    console.log('🔗 Migrating plan–course relations (tier-based)...');
     const tables = await src.query(
-        "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('sc_courses', 'deepak_postmeta')",
+        "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sc_courses'",
         { type: QueryTypes.SELECT }
     );
-    if (!tables.some(t => t.TABLE_NAME === 'sc_courses') || !tables.some(t => t.TABLE_NAME === 'deepak_postmeta')) {
-        console.log('   ⏭️ No sc_courses or deepak_postmeta; skip.');
+    if (!tables.length) {
+        console.log('   ⏭️ No sc_courses; skip.');
         return;
     }
+
+    // Guarantee the three canonical tier plans exist (so every tier, incl. Basic,
+    // can be linked even if a source plan definition was missing).
+    await ensureTierPlans(tgt);
+
     const planRows = await tgt.query('SELECT id, slug FROM premium_plans', { type: QueryTypes.SELECT });
     const slugToPlanId = {};
     (planRows || []).forEach((p) => { slugToPlanId[String(p.slug || '').toLowerCase()] = p.id; });
+
+    // Tier hierarchy: each plan includes its own tier + all lower tiers.
+    const TIER_INCLUDES = {
+        basic: ['basic'],
+        premium: ['basic', 'premium'],
+        ultimate: ['basic', 'premium', 'ultimate'],
+    };
+
+    // Resolve source course id → target course id (via wp_post_id, then sc id).
     const courseRows = await tgt.query('SELECT id, wp_post_id FROM courses', { type: QueryTypes.SELECT });
     const wpPostIdToCourseId = {};
-    (courseRows || []).forEach((c) => { if (c.wp_post_id != null) wpPostIdToCourseId[Number(c.wp_post_id)] = c.id; });
-    const membershipCourses = await src.query(
-        `SELECT id, wp_post_id, title, slug FROM sc_courses
-         WHERE (title LIKE '%Lifetime Ultimate%' OR title LIKE '%Lifetime Premium%' OR (title LIKE '%Ultimate%' AND title LIKE '%Membership%') OR (title LIKE '%Premium%' AND title LIKE '%Membership%'))
-           AND title NOT LIKE 'DUP %'`,
-        { type: QueryTypes.SELECT }
-    );
-    if (!membershipCourses || membershipCourses.length === 0) {
-        console.log('   ✅ 0 plan–course links (no membership courses in source)');
-        return;
+    const courseIdSet = new Set();
+    (courseRows || []).forEach((c) => {
+        courseIdSet.add(Number(c.id));
+        if (c.wp_post_id != null) wpPostIdToCourseId[Number(c.wp_post_id)] = c.id;
+    });
+
+    // Group source courses by tier.
+    const scCourses = await src.query('SELECT id, wp_post_id, course_type, title FROM sc_courses', { type: QueryTypes.SELECT });
+    const coursesByTier = { basic: [], premium: [], ultimate: [] };
+    for (const c of scCourses) {
+        // Skip membership product posts themselves (they are not learning courses).
+        const title = String(c.title || '');
+        if (/^DUP /i.test(title)) continue;
+        if (/membership plan/i.test(title)) continue;
+        const tier = courseTypeToTier(c.course_type);
+        if (!tier) continue;
+        const targetCourseId = (c.wp_post_id != null && wpPostIdToCourseId[Number(c.wp_post_id)]) || (courseIdSet.has(Number(c.id)) ? Number(c.id) : null);
+        if (!targetCourseId) continue;
+        coursesByTier[tier].push(targetCourseId);
     }
-    const wpPostIds = membershipCourses.map((c) => c.wp_post_id).filter(Boolean);
-    if (wpPostIds.length === 0) {
-        console.log('   ✅ 0 plan–course links');
-        return;
-    }
-    const relRows = await src.query(
-        `SELECT post_id, meta_value FROM deepak_postmeta WHERE meta_key = 'rel_course' AND post_id IN (${wpPostIds.join(',')})`,
-        { type: QueryTypes.SELECT }
-    );
-    const relByPostId = {};
-    (relRows || []).forEach((r) => { relByPostId[r.post_id] = r.meta_value; });
+
     await tgt.query('DELETE FROM plan_courses', { raw: true });
+
     let inserted = 0;
-    for (const mc of membershipCourses) {
-        const lowerTitle = (mc.title && String(mc.title).toLowerCase()) || '';
-        const planSlug = lowerTitle.includes('ultimate') ? 'ultimate' : (lowerTitle.includes('premium') ? 'premium' : null);
-        if (!planSlug) continue;
-        const planId = slugToPlanId[planSlug];
-        if (!planId) continue;
-        const raw = relByPostId[mc.wp_post_id];
-        const coursePostIds = parsePhpIntArray(raw || '');
-        for (const postId of coursePostIds) {
-            const courseId = wpPostIdToCourseId[postId];
-            if (!courseId) continue;
-            try {
-                await tgt.query(
-                    'INSERT IGNORE INTO plan_courses (plan_id, course_id) VALUES (?, ?)',
-                    { replacements: [planId, courseId], raw: true }
-                );
-                inserted++;
-            } catch (_) { }
+    for (const [slug, includedTiers] of Object.entries(TIER_INCLUDES)) {
+        const planId = slugToPlanId[slug];
+        if (!planId) {
+            console.log(`   ⚠️  No premium_plans row for slug '${slug}'; skipping its course links.`);
+            continue;
         }
+        const courseIds = new Set();
+        includedTiers.forEach((t) => coursesByTier[t].forEach((cid) => courseIds.add(cid)));
+        if (courseIds.size === 0) continue;
+        const values = [...courseIds].map((cid) => `(${planId}, ${cid})`).join(',');
+        await tgt.query(`INSERT IGNORE INTO plan_courses (plan_id, course_id) VALUES ${values}`, { raw: true });
+        inserted += courseIds.size;
+        console.log(`   plan '${slug}' (#${planId}): ${courseIds.size} courses`);
     }
-    console.log(`   ✅ ${inserted} plan–course links`);
+    console.log(`   ✅ ${inserted} plan–course links (tier-based)`);
 }
 
 async function migrateCategories(src, tgt) {
@@ -1547,9 +1714,9 @@ async function migrateCategories(src, tgt) {
     const values = rows.map(r => {
         const { id: msId, wpRefSql } = msWpEntityIdExpr(r, 'wp_term_id');
         const parentId = mapPid(r.parent_id);
-        return `(${msId}, ${wpRefSql}, ${esc(r.name)}, ${esc(r.slug)}, ${parentId || 'NULL'})`;
+        return `(${msId}, ${wpRefSql}, ${esc(r.name)}, ${esc(r.slug)}, ${parentId || 'NULL'}, ${esc(r.description)}, ${escUploadUrl(r.image_url)})`;
     }).join(',');
-    await tgt.query(`INSERT IGNORE INTO categories (id, wp_term_id, name, slug, parent_id) VALUES ${values}`, { raw: true });
+    await tgt.query(`INSERT IGNORE INTO categories (id, wp_term_id, name, slug, parent_id, description, image_url) VALUES ${values}`, { raw: true });
     const nextAi = await bumpTableAutoIncrement(tgt, 'categories');
     console.log(`   🔢 categories AUTO_INCREMENT → ${nextAi}`);
     console.log(`   ✅ ${rows.length} categories`);
@@ -1710,9 +1877,9 @@ async function migrateArticles(src, tgt) {
             const { id: msId, wpPostIdSql } = msArticleIdAndWpPostExprFromScRow(a);
             const viewsVal = a.views != null && a.views !== '' ? Number(a.views) || 0 : 0;
             const authorId = mapUid(a.author_id);
-            return `(${msId}, ${wpPostIdSql}, ${esc(a.title, 65535)}, ${esc(a.slug)}, ${escUploadContent(a.content, 16000000)}, ${esc(a.excerpt, 65535)}, ${esc(a.sub_heading)}, ${authorId || 'NULL'}, ${escUploadUrl(a.thumbnail_url)}, ${viewsVal}, ${esc(a.meta_title)}, ${esc(a.meta_description)}, ${esc(a.meta_keywords)}, ${esc(a.case_name)}, ${esc(a.citation)}, ${esc(a.appeal_number)}, ${esc(a.judgement_date)}, ${esc(a.assessment_year)}, ${esc(a.court_name)}, ${esc(a.section)}, ${esc(a.noti_no)}, ${esc(a.noti_date)}, ${esc(a.ext_link)}, ${escUploadUrl(a.upload_url)}, ${escUploadUrl(a.rel_download_url)}, ${esc(a.external_links)}, ${esc(a.status)}, ${accessTier}, ${escDate(a.published_at)}, ${escDate(a.created_at)}, ${escDate(a.updated_at)})`;
+            return `(${msId}, ${wpPostIdSql}, ${esc(a.title, 65535)}, ${esc(a.slug)}, ${escUploadContent(a.content, 16000000)}, ${esc(a.excerpt, 65535)}, ${esc(a.sub_heading)}, ${authorId || 'NULL'}, ${escUploadUrl(a.thumbnail_url)}, ${viewsVal}, ${esc(a.meta_title)}, ${esc(a.meta_description)}, ${esc(a.meta_keywords)}, ${esc(a.case_name)}, ${esc(a.citation)}, ${esc(a.appeal_number)}, ${esc(a.judgement_date)}, ${esc(a.assessment_year)}, ${esc(a.court_name)}, ${esc(a.section)}, ${esc(a.noti_no)}, ${esc(a.noti_date)}, ${esc(a.type_of_tax)}, ${esc(a.ext_link)}, ${escUploadUrl(a.upload_url)}, ${escUploadUrl(a.rel_download_url)}, ${esc(a.external_links)}, ${esc(a.status)}, ${accessTier}, ${escDate(a.published_at)}, ${escDate(a.created_at)}, ${escDate(a.updated_at)})`;
         }).join(',');
-        await tgt.query(`INSERT INTO articles (id, wp_post_id, title, slug, content, excerpt, sub_heading, author_id, thumbnail_url, views, meta_title, meta_description, meta_keywords, case_name, citation, appeal_number, judgement_date, assessment_year, court_name, section, noti_no, noti_date, ext_link, upload_url, rel_download_url, external_links, status, blog_access_tier, published_at, created_at, updated_at) VALUES ${values}${ARTICLE_UPSERT_TAIL}`, { raw: true });
+        await tgt.query(`INSERT INTO articles (id, wp_post_id, title, slug, content, excerpt, sub_heading, author_id, thumbnail_url, views, meta_title, meta_description, meta_keywords, case_name, citation, appeal_number, judgement_date, assessment_year, court_name, section, noti_no, noti_date, type_of_tax, ext_link, upload_url, rel_download_url, external_links, status, blog_access_tier, published_at, created_at, updated_at) VALUES ${values}${ARTICLE_UPSERT_TAIL}`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allArticles.length)}/${allArticles.length}\r`);
     }
 
@@ -1804,9 +1971,9 @@ async function migrateCourses(src, tgt) {
         const isPub = c.status === 'publish' ? 1 : 0;
         const courseIncludes = c.course_includes != null && c.course_includes !== '' ? c.course_includes : null;
         const { id: msId, wpRefSql } = msWpEntityIdExpr(c, 'wp_post_id');
-        return `(${msId}, ${wpRefSql}, ${esc(c.title)}, ${esc(c.short_title)}, ${esc(c.slug)}, ${esc(c.brief_description)}, ${escUploadContent(c.description, 16000000)}, ${escUploadContent(c.curriculum, 16000000)}, ${esc(c.learn_outcomes)}, ${esc(c.requirements)}, ${esc(c.terms_conditions)}, ${c.price || 0}, ${c.sale_price || 'NULL'}, ${c.enrolled_count || 0}, ${c.ratings || 'NULL'}, ${c.rating_users || 0}, ${escUploadUrl(c.thumbnail_url)}, ${esc(c.youtube_url)}, ${esc(c.language)}, ${esc(c.course_type)}, ${c.taxable ? 1 : 0}, ${esc(c.keywords)}, ${esc(c.faqs, 16000000)}, ${esc(c.feedback, 16000000)}, ${esc(c.includes_info, 16000000)}, ${escUploadContent(courseIncludes, 16000000)}, ${esc(c.certifications)}, ${esc(c.gateway)}, ${isPub}, ${esc(c.status)}, ${escDate(c.start_date)}, ${escDate(c.end_date)}, ${escDate(c.created_at)}, ${escDate(c.updated_at)})`;
+        return `(${msId}, ${wpRefSql}, ${esc(c.title)}, ${esc(c.short_title)}, ${esc(c.slug)}, ${esc(c.brief_description)}, ${escUploadContent(c.description, 16000000)}, ${escUploadContent(c.curriculum, 16000000)}, ${esc(c.learn_outcomes)}, ${esc(c.requirements)}, ${esc(c.terms_conditions)}, ${c.price || 0}, ${c.sale_price || 'NULL'}, ${c.enrolled_count || 0}, ${c.ratings || 'NULL'}, ${c.rating_users || 0}, ${escUploadUrl(c.thumbnail_url)}, ${esc(c.youtube_url)}, ${esc(c.language)}, ${esc(c.course_type)}, ${c.taxable ? 1 : 0}, ${esc(c.keywords)}, ${esc(c.meta_title)}, ${esc(c.meta_description)}, ${esc(c.meta_keywords)}, ${esc(c.canonical_url)}, ${esc(c.robots)}, ${esc(c.og_title)}, ${esc(c.og_description)}, ${escUploadUrl(c.og_image_url)}, ${esc(c.faqs, 16000000)}, ${esc(c.feedback, 16000000)}, ${esc(c.includes_info, 16000000)}, ${escUploadContent(courseIncludes, 16000000)}, ${esc(c.certifications)}, ${esc(c.gateway)}, ${isPub}, ${esc(c.status)}, ${escDate(c.start_date)}, ${escDate(c.end_date)}, ${escDate(c.created_at)}, ${escDate(c.updated_at)})`;
     }).join(',');
-    await tgt.query(`INSERT INTO courses (id, wp_post_id, title, short_title, slug, brief_description, description, curriculum, learn_outcomes, requirements, terms_conditions, price, sale_price, enrolled_count, ratings, rating_users, thumbnail_url, youtube_url, language, course_type, taxable, keywords, faqs, feedback, includes_info, course_includes, certifications, gateway, is_published, status, start_date, end_date, created_at, updated_at) VALUES ${values}${COURSE_UPSERT_TAIL}`, { raw: true });
+    await tgt.query(`INSERT INTO courses (id, wp_post_id, title, short_title, slug, brief_description, description, curriculum, learn_outcomes, requirements, terms_conditions, price, sale_price, enrolled_count, ratings, rating_users, thumbnail_url, youtube_url, language, course_type, taxable, keywords, meta_title, meta_description, meta_keywords, canonical_url, robots, og_title, og_description, og_image_url, faqs, feedback, includes_info, course_includes, certifications, gateway, is_published, status, start_date, end_date, created_at, updated_at) VALUES ${values}${COURSE_UPSERT_TAIL}`, { raw: true });
     if (rows.length) {
         const nextAi = await bumpTableAutoIncrement(tgt, 'courses');
         console.log(`   🔢 courses AUTO_INCREMENT → ${nextAi}`);
@@ -2027,9 +2194,9 @@ async function migratePages(src, tgt) {
             const chunk = rows.slice(i, i + BATCH);
             const values = chunk.map(p => {
                 const { id: msId, wpRefSql } = msWpEntityIdExpr(p, 'wp_post_id');
-                return `(${msId}, ${wpRefSql}, ${esc(p.title)}, ${esc(p.slug)}, ${escUploadContent(p.content, 16000000)}, ${esc(p.template)}, ${esc(p.status)}, ${escDate(p.created_at)}, ${escDate(p.updated_at)})`;
+                return `(${msId}, ${wpRefSql}, ${esc(p.title)}, ${esc(p.slug)}, ${escUploadContent(p.content, 16000000)}, ${esc(p.template)}, ${esc(p.meta_title)}, ${esc(p.meta_description)}, ${esc(p.meta_keywords)}, ${esc(p.status)}, ${escDate(p.created_at)}, ${escDate(p.updated_at)})`;
             }).join(',');
-            await tgt.query(`INSERT IGNORE INTO pages (id, wp_post_id, title, slug, content, template, status, created_at, updated_at) VALUES ${values}`, { raw: true });
+            await tgt.query(`INSERT IGNORE INTO pages (id, wp_post_id, title, slug, content, template, meta_title, meta_description, meta_keywords, status, created_at, updated_at) VALUES ${values}`, { raw: true });
         }
         if (rows.length) {
             const nextAi = await bumpTableAutoIncrement(tgt, 'pages');
@@ -2067,6 +2234,99 @@ async function seedCmsPagesFromSource(src, tgt) {
         console.log(`   ✅ cms_pages: ${inserted} seeded (existing rows preserved)`);
     } catch (e) {
         if (e.message && e.message.includes("doesn't exist")) { console.log('   ⏭️  sc_pages or cms_pages not present, skip'); return; }
+        throw e;
+    }
+}
+
+/**
+ * Ensure the seo_metadata table has the full column set used by the SeoMetadata
+ * model (the inline stub is minimal; production was built via Sequelize sync, but
+ * we ALTER-in any missing columns to be safe and self-contained).
+ */
+async function ensureSeoMetadataColumns(tgt) {
+    const cols = [
+        ['meta_keywords', 'VARCHAR(500) NULL'],
+        ['canonical_url', 'VARCHAR(1000) NULL'],
+        ['og_title', 'VARCHAR(255) NULL'],
+        ['og_description', 'TEXT NULL'],
+        ['og_image_url', 'VARCHAR(1000) NULL'],
+    ];
+    for (const [name, ddl] of cols) {
+        const existing = await tgt.query(`SHOW COLUMNS FROM seo_metadata LIKE '${name}'`, { type: QueryTypes.SELECT });
+        if (!existing.length) {
+            await tgt.query(`ALTER TABLE seo_metadata ADD COLUMN ${name} ${ddl}`, { raw: true });
+        }
+    }
+}
+
+/**
+ * Default SEO for top-level public site routes ( /, /about, /courses, ... ).
+ * These have no per-entity fallback at runtime, so we seed seo_metadata rows for
+ * them. Existing rows (admin-entered) are preserved — we only INSERT missing paths.
+ * Page-specific routes draw their title/description from migrated sc_pages SEO,
+ * falling back to sensible site defaults.
+ */
+async function seedSeoMetadata(src, tgt) {
+    console.log('🔍 Seeding seo_metadata for site routes (missing paths only)...');
+    try {
+        await ensureSeoMetadataColumns(tgt);
+
+        const SITE_NAME = 'Studycafe';
+        const SITE_DESC = 'One Stop Solution For CA CS CWA Direct Indirect Tax GST Business News';
+
+        // Map of public route path → { name, slug-in-sc_pages (optional) }
+        const ROUTES = [
+            { path: '/', name: 'Home', pageSlug: 'home', title: `${SITE_NAME} - ${SITE_DESC}`, desc: SITE_DESC },
+            { path: '/about', name: 'About', pageSlug: 'about', title: `About Us - ${SITE_NAME}` },
+            { path: '/contact', name: 'Contact', pageSlug: 'contact', title: `Contact Us - ${SITE_NAME}` },
+            { path: '/courses', name: 'Courses', title: `Online Courses - ${SITE_NAME}`, desc: `Explore CA, CS, CMA and Tax courses on ${SITE_NAME}.` },
+            { path: '/blogs', name: 'Blogs', title: `Latest Articles & Updates - ${SITE_NAME}`, desc: SITE_DESC },
+            { path: '/downloads', name: 'Downloads', title: `Free Downloads - ${SITE_NAME}`, desc: `Download notifications, circulars and study material from ${SITE_NAME}.` },
+            { path: '/plans', name: 'Plans', title: `Membership Plans - ${SITE_NAME}`, desc: `Choose a ${SITE_NAME} membership to unlock premium courses and content.` },
+            { path: '/privacy-policy', name: 'Privacy Policy', pageSlug: 'privacy-policy', title: `Privacy Policy - ${SITE_NAME}` },
+            { path: '/terms-of-use', name: 'Terms of Use', pageSlug: 'terms-of-use', title: `Terms of Use - ${SITE_NAME}` },
+            { path: '/disclaimer', name: 'Disclaimer', pageSlug: 'disclaimer', title: `Disclaimer - ${SITE_NAME}` },
+            { path: '/refund-policy', name: 'Refund Policy', pageSlug: 'refund-policy', title: `Refund Policy - ${SITE_NAME}` },
+        ];
+
+        // Pull migrated page SEO so route titles/descriptions prefer real content.
+        let pageSeoBySlug = {};
+        try {
+            const pageRows = await src.query(
+                'SELECT slug, title, meta_title, meta_description, meta_keywords FROM sc_pages',
+                { type: QueryTypes.SELECT }
+            );
+            pageRows.forEach((p) => { if (p.slug) pageSeoBySlug[p.slug] = p; });
+        } catch (_) { /* sc_pages SEO columns may be absent on very old sources */ }
+
+        // Existing seo_metadata paths (normalized, with and without leading slash)
+        const existing = await tgt.query('SELECT page_slug FROM seo_metadata', { type: QueryTypes.SELECT });
+        const existingPaths = new Set();
+        (existing || []).forEach((r) => {
+            const s = String(r.page_slug || '').trim();
+            if (!s) return;
+            existingPaths.add(s);
+            existingPaths.add(s.startsWith('/') ? s.slice(1) : `/${s}`);
+        });
+
+        let inserted = 0;
+        for (const route of ROUTES) {
+            if (existingPaths.has(route.path)) continue;
+            const pg = route.pageSlug ? pageSeoBySlug[route.pageSlug] : null;
+            const metaTitle = (pg && (pg.meta_title || pg.title)) || route.title || `${route.name} - ${SITE_NAME}`;
+            const metaDescription = (pg && pg.meta_description) || route.desc || SITE_DESC;
+            const metaKeywords = (pg && pg.meta_keywords) || null;
+            await tgt.query(
+                `INSERT INTO seo_metadata (page_name, page_slug, meta_title, meta_description, meta_keywords, og_title, og_description, robots)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 'index, follow')`,
+                { replacements: [route.name, route.path, String(metaTitle).slice(0, 255), metaDescription, metaKeywords, String(metaTitle).slice(0, 255), metaDescription], raw: true }
+            );
+            existingPaths.add(route.path);
+            inserted++;
+        }
+        console.log(`   ✅ seo_metadata: ${inserted} site routes seeded (existing rows preserved)`);
+    } catch (e) {
+        if (e.message && e.message.includes("doesn't exist")) { console.log('   ⏭️  seo_metadata not present, skip'); return; }
         throw e;
     }
 }

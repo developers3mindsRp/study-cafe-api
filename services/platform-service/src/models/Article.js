@@ -35,6 +35,7 @@ module.exports = (sequelize) => {
       section: { type: DataTypes.TEXT, allowNull: true },
       noti_no: { type: DataTypes.STRING(200), allowNull: true },
       noti_date: { type: DataTypes.STRING(100), allowNull: true },
+      type_of_tax: { type: DataTypes.STRING(100), allowNull: true },
       ext_link: { type: DataTypes.STRING(500), allowNull: true },
       upload_url: { type: DataTypes.STRING(500), allowNull: true },
       rel_download_url: { type: DataTypes.STRING(500), allowNull: true },

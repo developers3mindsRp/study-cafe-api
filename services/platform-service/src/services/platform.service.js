@@ -1671,6 +1671,41 @@ function parseArticleCitation(citationRaw) {
   }
 }
 
+const NOTIFICATION_CITATION_KEYS = ['noti_no', 'noti_date', 'type_of_tax'];
+
+function normalizeNotificationField(value) {
+  if (value == null || String(value).trim() === '') return null;
+  return String(value).trim();
+}
+
+/** Notification fields live on article columns; strip from citation JSON payloads. */
+function stripNotificationFromCitationValue(citationRaw) {
+  if (citationRaw == null || citationRaw === '') return citationRaw;
+  const parsed = parseArticleCitation(citationRaw);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return citationRaw;
+  const next = { ...parsed };
+  let changed = false;
+  for (const key of NOTIFICATION_CITATION_KEYS) {
+    if (key in next) {
+      delete next[key];
+      changed = true;
+    }
+  }
+  if (!changed) return citationRaw;
+  return JSON.stringify(next);
+}
+
+function serializeArticleCitationPayload(citationRaw) {
+  if (citationRaw == null || citationRaw === '') return null;
+  if (typeof citationRaw === 'string') return stripNotificationFromCitationValue(citationRaw);
+  if (typeof citationRaw === 'object') {
+    const next = { ...citationRaw };
+    for (const key of NOTIFICATION_CITATION_KEYS) delete next[key];
+    return JSON.stringify(next);
+  }
+  return null;
+}
+
 /** Build frontend citation object from migrated article columns (WP case-law fields). */
 function buildArticleCitationFromRow(row) {
   if (!row) return null;
@@ -1683,8 +1718,6 @@ function buildArticleCitationFromRow(row) {
     assessment_year: row.assessment_year || null,
     court: row.court_name || null,
     section: row.section || null,
-    noti_no: row.noti_no || null,
-    noti_date: row.noti_date || null,
   };
   const hasColumnData = Object.values(fromColumns).some((v) => v != null && String(v).trim() !== '');
   if (!parsed && !hasColumnData) return null;
@@ -1697,11 +1730,20 @@ function buildArticleCitationFromRow(row) {
       assessment_year: parsed.assessment_year || fromColumns.assessment_year,
       court: parsed.court || parsed.court_name || fromColumns.court,
       section: parsed.section || fromColumns.section,
-      noti_no: parsed.noti_no || fromColumns.noti_no,
-      noti_date: parsed.noti_date || fromColumns.noti_date,
     };
   }
   return fromColumns;
+}
+
+function buildArticleNotificationFromRow(row) {
+  if (!row) return null;
+  const parsed = parseArticleCitation(row.citation);
+  const fromCitation = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  const noti_no = normalizeNotificationField(row.noti_no) ?? normalizeNotificationField(fromCitation.noti_no);
+  const noti_date = normalizeNotificationField(row.noti_date) ?? normalizeNotificationField(fromCitation.noti_date);
+  const type_of_tax = normalizeNotificationField(row.type_of_tax) ?? normalizeNotificationField(fromCitation.type_of_tax);
+  if (!noti_no && !noti_date && !type_of_tax) return null;
+  return { noti_no, noti_date, type_of_tax };
 }
 
 /**
@@ -1843,6 +1885,7 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     telegram_link = pickRandom([...new Set(allTelegram.filter(Boolean))]);
   }
 
+  const notification = buildArticleNotificationFromRow(p);
   const out = {
     ...p,
     blog_access_tier,
@@ -1855,6 +1898,11 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     body,
     toc: tocItems,
     citation: buildArticleCitationFromRow(p),
+    notification,
+    noti_no: notification?.noti_no ?? null,
+    noti_date: notification?.noti_date ?? null,
+    type_of_tax: notification?.type_of_tax ?? null,
+    has_notification: Boolean(notification),
     cover_image_url: p.thumbnail_url,
     author_name: authorName ?? null,
     download_url: p.rel_download_url || p.upload_url || null,
@@ -2282,7 +2330,10 @@ async function createArticle(data) {
     meta_title: data.meta_title || null,
     meta_description: data.meta_description || null,
     meta_keywords: data.meta_keywords || null,
-    citation: data.citation ? (typeof data.citation === 'string' ? data.citation : JSON.stringify(data.citation)) : null,
+    citation: serializeArticleCitationPayload(data.citation),
+    noti_no: normalizeNotificationField(data.noti_no),
+    noti_date: normalizeNotificationField(data.noti_date),
+    type_of_tax: normalizeNotificationField(data.type_of_tax),
     canonical_url: data.canonical_url || null,
     robots: data.robots || null,
     og_title: data.og_title || null,
@@ -2363,7 +2414,22 @@ async function updateArticle(id, data) {
   if (patch.og_image_url !== undefined) updates.og_image_url = patch.og_image_url || null;
   if (patch.blog_access_tier !== undefined) updates.blog_access_tier = normalizeBlogAccessTier(patch.blog_access_tier);
   if (patch.rel_download_url !== undefined) updates.rel_download_url = patch.rel_download_url || null;
-  if (patch.citation !== undefined) updates.citation = patch.citation ? (typeof patch.citation === 'string' ? patch.citation : JSON.stringify(patch.citation)) : null;
+  if (patch.noti_no !== undefined) updates.noti_no = normalizeNotificationField(patch.noti_no);
+  if (patch.noti_date !== undefined) updates.noti_date = normalizeNotificationField(patch.noti_date);
+  if (patch.type_of_tax !== undefined) updates.type_of_tax = normalizeNotificationField(patch.type_of_tax);
+
+  const hasNotificationPatch =
+    patch.noti_no !== undefined
+    || patch.noti_date !== undefined
+    || patch.type_of_tax !== undefined;
+  const nextCitationBase = patch.citation !== undefined
+    ? serializeArticleCitationPayload(patch.citation)
+    : cur.citation;
+  if (hasNotificationPatch) {
+    updates.citation = stripNotificationFromCitationValue(nextCitationBase);
+  } else if (patch.citation !== undefined) {
+    updates.citation = nextCitationBase;
+  }
 
   if (patch.status !== undefined || patch.scheduled_publish_at !== undefined || patch.published_at !== undefined) {
     if (nextStatus === 'publish') {

@@ -106,11 +106,21 @@ async function fetchProgressSummary(userId, courseIds) {
 }
 
 async function dashboardStats(userId) {
+  const { Op } = require('sequelize');
+  const userRow = await User.findByPk(userId, { attributes: ['id', 'wp_user_id'] });
+  const lookupIds = [String(userId)];
+  if (userRow?.wp_user_id != null) lookupIds.push(String(userRow.wp_user_id));
+
   const rows = await UserCourse.findAll({
-    where: { user_id: userId },
-    attributes: ['course_id'],
+    where: { user_id: { [Op.in]: lookupIds } },
+    attributes: ['course_id', 'expires_at'],
   });
-  const courseIds = rows.map((r) => Number(r.course_id)).filter((n) => n > 0);
+  const now = new Date();
+  // Count only active (non-expired) courses on the dashboard.
+  const courseIds = rows
+    .filter((r) => !r.expires_at || new Date(r.expires_at) > now)
+    .map((r) => Number(r.course_id))
+    .filter((n) => n > 0);
   const totalCourses = courseIds.length;
   const summary = await fetchProgressSummary(userId, courseIds);
   let completedCourses = 0;
@@ -164,13 +174,16 @@ function courseMatchesSearch(term, { title, slug, category }) {
  * Optional `search` filters by course title, slug, or category (case-insensitive).
  */
 async function myCourses(userId, { search } = {}) {
-  const allRows = await UserCourse.findAll({ where: { user_id: userId } });
+  // Resolve wp_user_id so migrated grants stored under the legacy id are included.
+  const { Op } = require('sequelize');
+  const userRow = await User.findByPk(userId, { attributes: ['id', 'wp_user_id'] });
+  const lookupIds = [String(userId)];
+  if (userRow?.wp_user_id != null) lookupIds.push(String(userRow.wp_user_id));
+
+  // Return ALL granted courses (active AND expired). The caller/UI separates them
+  // by `accessStatus`; expired courses are no longer silently dropped.
+  const rows = await UserCourse.findAll({ where: { user_id: { [Op.in]: lookupIds } } });
   const now = new Date();
-  // Exclude rows where expires_at is set and already past — access has ended
-  const rows = allRows.filter((row) => {
-    const exp = row.get({ plain: true }).expires_at;
-    return !exp || new Date(exp) > now;
-  });
   const courseIds = rows.map((row) => Number(row.get({ plain: true }).course_id)).filter((n) => n > 0);
   const summary = await fetchProgressSummary(userId, courseIds);
   const out = [];
@@ -189,6 +202,7 @@ async function myCourses(userId, { search } = {}) {
     const totalLessons = Number(sum.totalLessons) || 0;
     const completedCount = Number(sum.completedLessons) || 0;
     const expiresAt = r.expires_at ? new Date(r.expires_at).toISOString() : null;
+    const isExpired = !!(r.expires_at && new Date(r.expires_at) <= now);
     out.push({
       id: `${r.user_id}-${r.course_id}`,
       userId: String(r.user_id),
@@ -204,11 +218,12 @@ async function myCourses(userId, { search } = {}) {
         category,
         totalLessons,
       },
-      purchaseDate: new Date().toISOString(),
+      // No reliable purchase timestamp on user_courses; leave null instead of faking "now".
+      purchaseDate: null,
       price: 0,
       status: 'completed',
       accessExpiresAt: expiresAt,
-      accessStatus: 'active',
+      accessStatus: isExpired ? 'expired' : 'active',
       progress,
       completedLessons: Array.from({ length: completedCount }, (_, i) => String(i)),
       lastAccessedAt: undefined,
@@ -219,9 +234,16 @@ async function myCourses(userId, { search } = {}) {
 
 async function getSubscription(userId) {
   const { UserMembership } = require('../models');
+  const { Op } = require('sequelize');
   const now = new Date();
+
+  // Resolve both internal id and wp_user_id so migrated memberships are found
+  const userRow = await User.findByPk(userId, { attributes: ['id', 'wp_user_id'] });
+  const lookupIds = [String(userId)];
+  if (userRow?.wp_user_id != null) lookupIds.push(String(userRow.wp_user_id));
+
   const membership = await UserMembership.findOne({
-    where: { user_id: userId },
+    where: { user_id: { [Op.in]: lookupIds } },
     order: [['expires_at', 'DESC']],
   });
   if (!membership) {
