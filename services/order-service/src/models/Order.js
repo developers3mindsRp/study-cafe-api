@@ -30,6 +30,9 @@ module.exports = (sequelize) => {
       certificate_issue_date: { type: DataTypes.STRING(50), allowNull: true },
       status: { type: DataTypes.STRING(50), allowNull: false, defaultValue: 'pending' },
       gateway: { type: DataTypes.STRING(50), allowNull: true },
+      // Legacy WP workflow status: 'publish' = active course, 'draft' = expired course.
+      // Drives the My Courses Active/Expired split for migrated purchases.
+      wp_post_status: { type: DataTypes.STRING(20), allowNull: true },
       refund_amount: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
       refund_remarks: { type: DataTypes.TEXT, allowNull: true },
       utm: { type: DataTypes.JSON, allowNull: true },

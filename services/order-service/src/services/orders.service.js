@@ -1550,9 +1550,19 @@ async function listMyPurchases(userId) {
     }
   }
 
-  // Only return fully paid orders — pending/failed orders (incomplete payments) are excluded
+  // Return:
+  //  - fully paid orders (native + migrated active purchases), AND
+  //  - migrated legacy orders carrying a WP workflow status ('publish' = active,
+  //    'draft' = expired). The legacy site lists one card per order (duplicates
+  //    allowed) and shows expired orders regardless of payment, so we mirror that.
   const rows = await Order.findAll({
-    where: { user_id: userId, status: 'paid' },
+    where: {
+      user_id: userId,
+      [Op.or]: [
+        { status: 'paid' },
+        { wp_post_status: { [Op.in]: ['publish', 'draft'] } },
+      ],
+    },
     order: [['created_at', 'DESC']],
   });
   const out = [];
@@ -1647,6 +1657,8 @@ async function listMyPurchases(userId) {
       }),
       transactionId: o.order_id || String(o.id),
       status: purchaseStatus,
+      // Legacy WP workflow status: 'publish' = active, 'draft' = expired, null = native order.
+      wpPostStatus: o.wp_post_status || null,
       progress: 0,
       completedLessons: [],
       completedAt: undefined,
@@ -1654,26 +1666,12 @@ async function listMyPurchases(userId) {
     });
   }
 
-  // Deduplicate course purchases by courseId — a user may have multiple paid
-  // orders for the same course (re-purchase, batch re-enroll, migration dup).
-  // Keep the first occurrence (rows are ordered created_at DESC = most recent).
-  // Non-course rows (memberships/other) are always kept.
-  const dedupedOut = [];
-  const seenCourseIds = new Set();
-  for (const item of out) {
-    // Only course purchases populate courseEntityIds; memberships/other are kept as-is.
-    const isCoursePurchase = courseEntityIds.includes(Number(item.courseId));
-    if (isCoursePurchase) {
-      const cid = Number(item.courseId);
-      if (seenCourseIds.has(cid)) continue;
-      seenCourseIds.add(cid);
-    }
-    dedupedOut.push(item);
-  }
-  out.length = 0;
-  out.push(...dedupedOut);
+  // NOTE: Intentionally NOT de-duplicating by courseId. The legacy site shows one
+  // card per order (the same course can appear multiple times across active/expired),
+  // so we preserve every order row to match it exactly.
 
-  // Fetch expires_at for each course purchase from user_courses (shared DB)
+  // Fetch expires_at for each course purchase from user_courses (shared DB).
+  // Used only as a fallback for native (non-legacy) orders that have no wp_post_status.
   const expiryMap = new Map();
   if (courseEntityIds.length > 0) {
     const placeholders = courseEntityIds.map(() => '?').join(',');
@@ -1688,7 +1686,17 @@ async function listMyPurchases(userId) {
 
   const now = new Date();
   for (const item of out) {
-    if (item.course && courseEntityIds.includes(Number(item.courseId))) {
+    if (!item.course || !courseEntityIds.includes(Number(item.courseId))) continue;
+    if (item.wpPostStatus === 'draft') {
+      // Legacy expired order — authoritative.
+      item.accessStatus = 'expired';
+      item.accessExpiresAt = null;
+    } else if (item.wpPostStatus === 'publish') {
+      // Legacy active order — authoritative.
+      item.accessStatus = 'active';
+      item.accessExpiresAt = null;
+    } else {
+      // Native order: fall back to the user_courses access window.
       const expiresAt = expiryMap.has(Number(item.courseId))
         ? expiryMap.get(Number(item.courseId))
         : null;

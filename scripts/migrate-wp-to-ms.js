@@ -212,6 +212,7 @@ async function createAllTables(tgt) {
       user_id BIGINT UNSIGNED,
       course_id BIGINT UNSIGNED,
       order_id VARCHAR(128),
+      expires_at DATETIME NULL,
       PRIMARY KEY (user_id, course_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -629,6 +630,7 @@ async function createAllTables(tgt) {
       certificate_issue_date VARCHAR(50),
       status VARCHAR(50) NOT NULL DEFAULT 'pending',
       gateway VARCHAR(50),
+      wp_post_status VARCHAR(20),
       created_at DATETIME
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -940,6 +942,10 @@ async function ensureMigratedColumns(tgt) {
         "ALTER TABLE pages ADD COLUMN meta_title VARCHAR(500) NULL",
         "ALTER TABLE pages ADD COLUMN meta_description TEXT NULL",
         "ALTER TABLE pages ADD COLUMN meta_keywords VARCHAR(500) NULL",
+        // Orders: WP workflow status (publish = active, draft = expired) drives My Courses split
+        "ALTER TABLE orders ADD COLUMN wp_post_status VARCHAR(20) NULL",
+        // User courses: access window end (NULL = lifetime/active; past date = expired)
+        "ALTER TABLE user_courses ADD COLUMN expires_at DATETIME NULL",
     ];
     for (const sql of alters) {
         try {
@@ -2100,9 +2106,10 @@ async function migrateOrders(src, tgt) {
             const couponCode = o.coupon_code ? esc(o.coupon_code) : 'NULL';
             const couponDiscount = o.coupon_discount != null ? o.coupon_discount : 0;
             const status = normalizeMigratedOrderStatus(o);
-            return `(${msId}, ${wpRefSql}, ${orderId}, ${userId || 'NULL'}, ${courseId || 'NULL'}, ${esc(type)}, ${entityId}, ${o.amount || 'NULL'}, ${originalAmount}, ${couponCode}, ${couponDiscount}, 'INR', ${esc(o.buyer_name)}, ${esc(o.buyer_email)}, ${esc(o.buyer_mobile)}, ${esc(o.rp_payment_id)}, NULL, ${esc(o.affiliate)}, ${esc(o.certificate_name)}, ${esc(o.certificate_issue_date)}, ${esc(status)}, ${esc(o.gateway)}, ${escDate(o.created_at)})`;
+            const wpPostStatus = o.wp_post_status ? esc(String(o.wp_post_status).toLowerCase().trim()) : 'NULL';
+            return `(${msId}, ${wpRefSql}, ${orderId}, ${userId || 'NULL'}, ${courseId || 'NULL'}, ${esc(type)}, ${entityId}, ${o.amount || 'NULL'}, ${originalAmount}, ${couponCode}, ${couponDiscount}, 'INR', ${esc(o.buyer_name)}, ${esc(o.buyer_email)}, ${esc(o.buyer_mobile)}, ${esc(o.rp_payment_id)}, NULL, ${esc(o.affiliate)}, ${esc(o.certificate_name)}, ${esc(o.certificate_issue_date)}, ${esc(status)}, ${esc(o.gateway)}, ${wpPostStatus}, ${escDate(o.created_at)})`;
         }).join(',');
-        await tgt.query(`INSERT IGNORE INTO orders (id, wp_post_id, order_id, user_id, course_id, type, entity_id, amount, original_amount, coupon_code, coupon_discount, currency, buyer_name, buyer_email, buyer_mobile, rp_payment_id, razorpay_order_id, affiliate, certificate_name, certificate_issue_date, status, gateway, created_at) VALUES ${values}`, { raw: true });
+        await tgt.query(`INSERT IGNORE INTO orders (id, wp_post_id, order_id, user_id, course_id, type, entity_id, amount, original_amount, coupon_code, coupon_discount, currency, buyer_name, buyer_email, buyer_mobile, rp_payment_id, razorpay_order_id, affiliate, certificate_name, certificate_issue_date, status, gateway, wp_post_status, created_at) VALUES ${values}`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allOrders.length)}/${allOrders.length}\r`);
     }
     if (allOrders.length) {
@@ -2556,7 +2563,16 @@ async function migrateEnrollments(src, tgt) {
     console.log(`   ✅ ${rows.length} enrollments`);
 }
 
-/** Populate user_courses from enrollments so auth-service has user→course access. */
+/**
+ * Populate user_courses from enrollments so auth-service has user→course access.
+ *
+ * Active vs expired mirrors the legacy site, which keys it off the order's WP
+ * workflow status: `publish` = active course, `draft` = expired course. We dedupe
+ * by (user, course) here (user_courses PK), preferring ACTIVE: if the user has at
+ * least one active (publish) order for the course, expires_at stays NULL (lifetime);
+ * only when every order for that course is expired (draft) do we set a past
+ * expires_at so membership/access checks treat it as expired.
+ */
 async function migrateUserCourses(src, tgt) {
     console.log('📚 Migrating user_courses (from enrollments)...');
     const courseIdMap = await buildScWpPostIdMap(src, 'sc_courses', 'wp_post_id');
@@ -2565,27 +2581,49 @@ async function migrateUserCourses(src, tgt) {
     const mapCid = (id) => courseIdMap[id] ?? id;
     const mapOid = (id) => (id != null ? (orderIdMap[id] ?? id) : null);
     const mapUid = (id) => userIdMap[id] ?? id;
-    const rows = await src.query('SELECT user_id, course_id, order_id FROM sc_enrollments', { type: QueryTypes.SELECT });
+
+    // Join enrollments to their originating order so we know each order's WP status.
+    const rows = await src.query(
+        `SELECT e.user_id, e.course_id, e.order_id, e.enrolled_at, o.wp_post_status
+         FROM sc_enrollments e
+         LEFT JOIN sc_orders o ON o.id = e.order_id`,
+        { type: QueryTypes.SELECT }
+    );
     if (!rows.length) { console.log('   ✅ 0 user_courses'); return; }
-    const seen = new Set();
-    const pairs = rows.filter(e => {
-        const key = `${mapUid(e.user_id)}-${mapCid(e.course_id)}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
+
+    // Collapse to one row per (user, course); prefer the active (publish) order.
+    const byKey = new Map();
+    for (const e of rows) {
+        const userId = mapUid(e.user_id);
+        const courseId = mapCid(e.course_id);
+        const key = `${userId}-${courseId}`;
+        const wpStatus = String(e.wp_post_status || '').toLowerCase().trim();
+        const isActive = wpStatus !== 'draft'; // publish/empty/unknown => treat as active
+        const existing = byKey.get(key);
+        if (!existing) {
+            byKey.set(key, { userId, courseId, orderId: e.order_id, isActive });
+        } else if (isActive && !existing.isActive) {
+            // Upgrade to active and adopt the active order id.
+            existing.isActive = true;
+            existing.orderId = e.order_id;
+        }
+    }
+
+    // Expired courses get a fixed past timestamp so the API/access layer flags them.
+    const EXPIRED_AT = '2000-01-01 00:00:00';
+    const pairs = [...byKey.values()];
     for (let i = 0; i < pairs.length; i += BATCH) {
         const chunk = pairs.slice(i, i + BATCH);
         const values = chunk.map(e => {
-            const courseId = mapCid(e.course_id);
-            const orderId = mapOid(e.order_id);
-            const userId = mapUid(e.user_id);
-            return `(${userId}, ${courseId}, ${orderId ? esc(String(orderId)) : 'NULL'})`;
+            const orderId = mapOid(e.orderId);
+            const expiresAt = e.isActive ? 'NULL' : esc(EXPIRED_AT);
+            return `(${e.userId}, ${e.courseId}, ${orderId ? esc(String(orderId)) : 'NULL'}, ${expiresAt})`;
         }).join(',');
-        await tgt.query(`INSERT INTO user_courses (user_id, course_id, order_id) VALUES ${values}
-        ON DUPLICATE KEY UPDATE order_id=VALUES(order_id)`, { raw: true });
+        await tgt.query(`INSERT INTO user_courses (user_id, course_id, order_id, expires_at) VALUES ${values}
+        ON DUPLICATE KEY UPDATE order_id=VALUES(order_id), expires_at=VALUES(expires_at)`, { raw: true });
     }
-    console.log(`   ✅ ${pairs.length} user_courses`);
+    const expiredCount = pairs.filter(p => !p.isActive).length;
+    console.log(`   ✅ ${pairs.length} user_courses (${expiredCount} expired)`);
 }
 
 /** Enroll purchased users into the first batch per course so dashboard videos are accessible. */
@@ -2820,7 +2858,95 @@ async function migrateAffiliateData(src, tgt) {
         console.warn('   ⚠️  withdrawal_requests migration failed:', e.message);
     }
 
+    // ── 5) Derive affiliate earnings from orders (WP source of truth) ──
+    // WordPress has no affiliate_history/affiliate_balances tables; earnings live on
+    // each order (`affiliate` = referrer user id, `affiliate_commission` from `utms`).
+    // Build affiliate_history + affiliate_balances from migrated sc_orders so the
+    // user's earnings / payment report matches the legacy site.
+    await deriveAffiliateEarningsFromOrders(src, tgt);
+
     console.log('   ✅ Affiliate data migration done');
+}
+
+/**
+ * Reconstruct affiliate earnings from orders. One affiliate_history row per order
+ * that has an affiliate (referrer) and a positive commission; affiliate_balances is
+ * the per-affiliate aggregate (total_earned = sum of confirmed commissions).
+ * Only paid orders count toward earnings (mirrors the legacy report).
+ */
+async function deriveAffiliateEarningsFromOrders(src, tgt) {
+    try {
+        // Skip if affiliate_history already has data (e.g. populated from a real source table).
+        const existing = await tgt.query('SELECT COUNT(*) c FROM affiliate_history', { type: QueryTypes.SELECT });
+        if (Number(existing[0]?.c) > 0) {
+            console.log(`   affiliate earnings: ${existing[0].c} history rows already present; skip derivation`);
+            return;
+        }
+
+        // Does sc_orders carry the affiliate_commission column (added in stage 1)?
+        const cols = await src.query(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sc_orders' AND COLUMN_NAME IN ('affiliate','affiliate_commission')",
+            { type: QueryTypes.SELECT }
+        );
+        const hasAffiliate = cols.some(c => c.COLUMN_NAME === 'affiliate');
+        if (!hasAffiliate) { console.log('   ⏭️  sc_orders has no affiliate column; skip earnings derivation'); return; }
+        const hasCommission = cols.some(c => c.COLUMN_NAME === 'affiliate_commission');
+
+        const userIdMap = await buildScUserIdMap(src);
+        const courseIdMap = await buildScWpPostIdMap(src, 'sc_courses', 'wp_post_id');
+        const mapUid = (id) => (id != null && id !== '' ? (userIdMap[id] ?? id) : null);
+        const mapCid = (id) => (id != null && id !== '' ? (courseIdMap[id] ?? id) : null);
+
+        const rows = await src.query(
+            `SELECT id, user_id, course_id, amount, affiliate, status, created_at${hasCommission ? ', affiliate_commission' : ''}
+             FROM sc_orders
+             WHERE affiliate IS NOT NULL AND affiliate <> '' AND affiliate <> '0'`,
+            { type: QueryTypes.SELECT }
+        );
+        if (!rows.length) { console.log('   affiliate earnings: 0 orders with an affiliate'); return; }
+
+        await tgt.query('DELETE FROM affiliate_history', { raw: true });
+        const balances = new Map(); // affiliateMsId -> total_earned
+        let histId = 0;
+        const histValues = [];
+        for (const o of rows) {
+            const affiliateMsId = mapUid(parseInt(o.affiliate, 10));
+            if (!affiliateMsId) continue;
+            const buyerMsId = mapUid(o.user_id);
+            if (!buyerMsId) continue;
+            const isPaid = String(o.status || '').toLowerCase() === 'paid';
+            const commission = hasCommission && o.affiliate_commission != null ? Number(o.affiliate_commission) : 0;
+            if (!(commission > 0)) continue;
+            const courseId = mapCid(o.course_id);
+            const orderRef = `ORD_${o.id}`;
+            const histStatus = isPaid ? 'confirmed' : 'pending';
+            histValues.push(`(${++histId}, ${courseId || 'NULL'}, 'course', ${courseId ? esc(String(courseId)) : 'NULL'}, ${buyerMsId}, ${affiliateMsId}, ${esc(orderRef)}, ${o.amount != null ? o.amount : 'NULL'}, ${commission}, ${esc(histStatus)}, ${escDate(o.created_at)})`);
+            if (isPaid) balances.set(affiliateMsId, (balances.get(affiliateMsId) || 0) + commission);
+        }
+
+        for (let i = 0; i < histValues.length; i += BATCH) {
+            const chunk = histValues.slice(i, i + BATCH).join(',');
+            await tgt.query(
+                `INSERT IGNORE INTO affiliate_history (id, course_id, entity_type, entity_id, user_id, affiliate_id, order_id, order_amount, commission_amount, status, created_at) VALUES ${chunk}`,
+                { raw: true }
+            );
+        }
+
+        // Aggregate balances. Preserve any existing withdrawals; recompute earned/balance.
+        for (const [affId, earned] of balances.entries()) {
+            await tgt.query(
+                `INSERT INTO affiliate_balances (affiliate_id, total_earned, total_withdrawn, current_balance, created_at)
+                 VALUES (?, ?, 0, ?, NOW())
+                 ON DUPLICATE KEY UPDATE total_earned = VALUES(total_earned),
+                   current_balance = VALUES(total_earned) - total_withdrawn`,
+                { replacements: [affId, earned, earned], raw: true }
+            );
+        }
+
+        console.log(`   ✅ affiliate earnings derived: ${histValues.length} history rows, ${balances.size} affiliate balances`);
+    } catch (e) {
+        console.warn('   ⚠️  affiliate earnings derivation failed:', e.message);
+    }
 }
 
 // ──── Run ────
