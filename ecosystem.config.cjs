@@ -46,7 +46,7 @@ const proc = {
   merge_logs: true,
   log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
 };
-
+   
 function logFiles(name) {
   return {
     out_file: path.join(logsDir, `${name}.log`),

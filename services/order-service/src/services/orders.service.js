@@ -30,6 +30,43 @@ function generateOrderId() {
   return 'ORD_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
 }
 
+const ORDER_GATEWAY = {
+  RAZORPAY: 'razorpay',
+  ADMIN: 'admin',
+  FREE: 'free',
+};
+
+function normalizeOrderGateway(value) {
+  const g = String(value || '').toLowerCase().trim();
+  if (g === 'razorpay' || g === 'rp') return ORDER_GATEWAY.RAZORPAY;
+  if (g === 'admin' || g === 'manual') return ORDER_GATEWAY.ADMIN;
+  if (g === 'free') return ORDER_GATEWAY.FREE;
+  return '';
+}
+
+function resolveOrderGateway({ gateway, paymentId, amount, source } = {}) {
+  if (Number(amount) === 0) return ORDER_GATEWAY.FREE;
+  const normalized = normalizeOrderGateway(gateway);
+  if (normalized) return normalized;
+  const pid = normalizeAdminPaymentId(paymentId);
+  if (pid && !pid.startsWith('manual:') && !pid.startsWith('free:')) {
+    return ORDER_GATEWAY.RAZORPAY;
+  }
+  if (source === 'checkout' || source === 'webhook') return ORDER_GATEWAY.RAZORPAY;
+  return ORDER_GATEWAY.ADMIN;
+}
+
+function formatPaymentMethodLabel(gateway, { amount, hasRazorpayPayment } = {}) {
+  if (Number(amount) === 0 || normalizeOrderGateway(gateway) === ORDER_GATEWAY.FREE) {
+    return 'Free';
+  }
+  const normalized = normalizeOrderGateway(gateway);
+  if (normalized === ORDER_GATEWAY.ADMIN) return 'Admin';
+  if (normalized === ORDER_GATEWAY.RAZORPAY) return 'Razorpay';
+  if (hasRazorpayPayment) return 'Razorpay';
+  return 'Razorpay';
+}
+
 // ─── Internal service helpers ─────────────────────────────────────────────────
 
 async function fetchPlanDetails(entityId) {
@@ -757,7 +794,7 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
         return { alreadyPaid: true, message: 'Already paid' };
       }
 
-      await locked.update({ status: 'paid' }, { transaction: t });
+      await locked.update({ status: 'paid', gateway: ORDER_GATEWAY.RAZORPAY }, { transaction: t });
 
       const existingPay = await Payment.findOne({
         where: { razorpay_payment_id: razorpayPaymentId },
@@ -1045,6 +1082,7 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
             currency,
             affiliate: normalizeReferralForOrder(referralCode),
             utm: utm !== undefined ? utm : order.utm,
+            gateway: ORDER_GATEWAY.RAZORPAY,
             buyer_name: buyer_name != null ? buyer_name : order.buyer_name,
             buyer_email: buyer_email != null ? buyer_email : order.buyer_email,
             buyer_mobile: buyer_mobile != null ? buyer_mobile : order.buyer_mobile,
@@ -1069,6 +1107,7 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
             status: 'pending',
             affiliate: normalizeReferralForOrder(referralCode),
             utm,
+            gateway: ORDER_GATEWAY.RAZORPAY,
             buyer_name,
             buyer_email,
             buyer_mobile,
@@ -1602,12 +1641,10 @@ async function listMyPurchases(userId) {
       enrolledBatch,
       purchaseDate: o.created_at,
       price: Number(o.amount) || 0,
-      paymentMethod:
-        o.gateway === 'free' || Number(o.amount) === 0
-          ? 'Free'
-          : payment
-            ? 'Razorpay'
-            : o.gateway || 'Razorpay',
+      paymentMethod: formatPaymentMethodLabel(o.gateway, {
+        amount: o.amount,
+        hasRazorpayPayment: !!payment,
+      }),
       transactionId: o.order_id || String(o.id),
       status: purchaseStatus,
       progress: 0,
@@ -2403,6 +2440,7 @@ async function getInvoice(userId, orderId) {
   }
 
   const isFree = p.gateway === 'free' || Number(p.amount) === 0;
+  const hasRealPayment = payment && !String(payment.razorpay_payment_id || '').startsWith('manual:');
   return {
     orderId: p.order_id,
     type: p.type,
@@ -2416,8 +2454,12 @@ async function getInvoice(userId, orderId) {
     currency: p.currency,
     status: p.status,
     paidAt: p.created_at,
-    paymentId: payment && !isFree ? payment.razorpay_payment_id : null,
-    paymentMethod: isFree ? 'Free' : 'Razorpay',
+    paymentId: payment && !isFree && hasRealPayment ? payment.razorpay_payment_id : null,
+    paymentMethod: formatPaymentMethodLabel(p.gateway, {
+      amount: p.amount,
+      hasRazorpayPayment: hasRealPayment,
+    }),
+    gateway: normalizeOrderGateway(p.gateway) || p.gateway || null,
   };
 }
 
@@ -2581,10 +2623,21 @@ async function createManualOrder(data) {
     coupon_code,
     payment_id,
     razorpay_payment_id,
+    gateway,
   } = data;
 
   const typeUpper = normalizeOrderType(type);
   const orderId = generateOrderId();
+  const paymentRefInput = normalizeAdminPaymentId(payment_id || razorpay_payment_id);
+  const resolvedGateway = resolveOrderGateway({
+    gateway,
+    paymentId: paymentRefInput,
+    amount,
+  });
+
+  if (status === 'paid' && resolvedGateway === ORDER_GATEWAY.RAZORPAY && !paymentRefInput) {
+    throw new AppError('Razorpay Payment ID is required for Razorpay payments', 400);
+  }
 
   let resolvedBatchId = null;
   if (typeUpper === 'COURSE') {
@@ -2623,7 +2676,7 @@ async function createManualOrder(data) {
         buyer_gst: buyer_gst || null,
         status: status,
         affiliate: normalizeReferralForOrder(affiliate),
-        gateway: 'manual',
+        gateway: resolvedGateway,
         coupon_code: couponResult ? couponResult.coupon.code : (coupon_code || null),
         coupon_discount: couponResult ? couponResult.discountAmount : 0,
         original_amount: originalAmount,
@@ -2640,7 +2693,7 @@ async function createManualOrder(data) {
 
     if (status === 'paid') {
       const adminPaymentRef =
-        normalizeAdminPaymentId(payment_id || razorpay_payment_id) || `manual:${orderId}`;
+        paymentRefInput || `manual:${orderId}`;
       await ensurePaymentCaptured(locked, adminPaymentRef, { source: 'manual', transaction: t });
       await emitPurchaseOutbox(locked, t);
       await emitPaymentEmailOutbox(locked, adminPaymentRef, 'success', t);
@@ -2744,6 +2797,13 @@ async function updateOrder(id, data) {
       order.affiliate = normalizeReferralForOrder(data.affiliate);
     }
 
+    if (data.gateway !== undefined) {
+      const normalizedGateway = normalizeOrderGateway(data.gateway);
+      if (normalizedGateway) {
+        order.gateway = normalizedGateway;
+      }
+    }
+
     let newStatus = oldStatus;
     if (data.status !== undefined) {
       order.status = data.status;
@@ -2784,9 +2844,22 @@ async function updateOrder(id, data) {
       oldStatus !== 'paid' &&
       oldStatus !== 'completed'
     ) {
-      if (!adminPaymentRef && oldStatus === 'failed') {
+      const resolvedGateway = resolveOrderGateway({
+        gateway: data.gateway ?? order.gateway,
+        paymentId: adminPaymentRef,
+        amount: reloaded.amount,
+      });
+      order.gateway = resolvedGateway;
+      await order.save({ transaction: t });
+      reloaded = await Order.findOne({
+        where: { id: order.id },
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+
+      if (resolvedGateway === ORDER_GATEWAY.RAZORPAY && !adminPaymentRef) {
         throw new AppError(
-          'Razorpay Payment ID is required when marking a failed order as paid',
+          'Razorpay Payment ID is required when marking an order as paid via Razorpay',
           400
         );
       }
