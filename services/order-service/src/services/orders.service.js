@@ -225,6 +225,17 @@ function buildMembershipPayload(order, plan, userContact = null) {
     payload.startsAt = now.toISOString();
     payload.expiresAt = expires.toISOString();
   }
+
+  const paidAmount = order.amount != null ? Number(order.amount) : null;
+  payload.planJson = {
+    price: paidAmount != null && !Number.isNaN(paidAmount)
+      ? String(paidAmount)
+      : (plan?.price != null ? String(plan.price) : undefined),
+    plan_purchased: payload.startsAt,
+    plan_expiry: payload.expiresAt,
+    payment_id: order.order_id ? String(order.order_id) : undefined,
+  };
+
   return payload;
 }
 

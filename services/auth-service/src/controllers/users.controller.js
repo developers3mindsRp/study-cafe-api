@@ -1,4 +1,5 @@
 const usersService = require('../services/users.service');
+const userExportJobService = require('../services/userExportJob.service');
 const { createCrudController, asyncHandler, sendSuccess, sendNoContent, AppError } = require('../../../../shared');
 
 const controller = createCrudController(usersService, { resourceName: 'User' });
@@ -27,4 +28,35 @@ const countUsers = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
-module.exports = { ...controller, restore, listByIds, distinctStates, countUsers };
+const exportCsv = asyncHandler(async (req, res) => {
+  await usersService.exportCsvStream(req.query, res);
+});
+
+const startExportJob = asyncHandler(async (req, res) => {
+  const data = await userExportJobService.startExportJob(req.query);
+  sendSuccess(res, data, 202);
+});
+
+const getExportJobStatus = asyncHandler(async (req, res) => {
+  const status = userExportJobService.getExportJobStatus(req.params.jobId);
+  if (!status) throw new AppError('Export job not found', 404);
+  sendSuccess(res, status);
+});
+
+const downloadExportJob = asyncHandler(async (req, res) => {
+  const filename = typeof req.query.filename === 'string' ? req.query.filename : undefined;
+  const downloadToken = typeof req.query.token === 'string' ? req.query.token : undefined;
+  await userExportJobService.downloadExportJob(req.params.jobId, res, filename, downloadToken);
+});
+
+module.exports = {
+  ...controller,
+  restore,
+  listByIds,
+  distinctStates,
+  countUsers,
+  exportCsv,
+  startExportJob,
+  getExportJobStatus,
+  downloadExportJob,
+};

@@ -48,6 +48,7 @@ async function processEvent(record) {
           orderId: data.orderId,
           startsAt: data.startsAt,
           expiresAt: data.expiresAt,
+          planJson: data.planJson,
         },
         { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
       );

@@ -1,7 +1,8 @@
 const { User, Role, sequelize } = require('../models');
-const { Op, Sequelize } = require('sequelize');
+const { Op, Sequelize, QueryTypes } = require('sequelize');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const fs = require('fs');
 const { AppError, logger, parseTrashedMode, trashedSequelizeOptions, withTrashedWhere } = require('../../../../shared');
 
 /** Admin list role filter values → roles.name (and users.role legacy column). */
@@ -11,7 +12,193 @@ const ROLE_FILTER_ALIASES = {
     admin: ['admin'],
 };
 
-async function list(query = {}) {
+const EXPORT_BATCH_SIZE = 1000;
+
+const USER_EXPORT_CSV_HEADERS = [
+    'email',
+    'password',
+    'name',
+    'first_name',
+    'last_name',
+    'phone',
+    'role',
+    'status',
+    'membership_plan_name',
+    'membership_status',
+    'plan_price',
+    'payment_id',
+    'plan_purchased',
+    'plan_expiry',
+    'designation',
+    'profession',
+    'company',
+    'city',
+    'state',
+    'country',
+    'bio',
+];
+
+function escapeCsvCell(value) {
+    const s = value == null ? '' : String(value);
+    if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+}
+
+function formatMembershipPlanLabel(membershipRow) {
+    if (!membershipRow) return 'Free';
+    if (membershipRow.plan_name) return String(membershipRow.plan_name);
+    const slug = String(membershipRow.membership_type || '').trim();
+    if (!slug) return 'Free';
+    return slug.charAt(0).toUpperCase() + slug.slice(1);
+}
+
+function membershipStatusFromRow(membershipRow) {
+    if (!membershipRow) return 'Free';
+    const now = new Date();
+    const startsAt = membershipRow.starts_at ? new Date(membershipRow.starts_at) : null;
+    const expiresAt = membershipRow.expires_at ? new Date(membershipRow.expires_at) : null;
+    if (!expiresAt || Number.isNaN(expiresAt.getTime())) return 'Free';
+    if (expiresAt <= now) return 'Expired';
+    if (startsAt && !Number.isNaN(startsAt.getTime()) && startsAt > now) return 'Pending';
+    return 'Active';
+}
+
+function formatMembershipDate(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+/** Purchase price from users.plan JSON ({ price } or { plan_price }) when admin/import stored it. */
+function parsePlanJsonPrice(planValue) {
+    if (planValue == null || planValue === '') return null;
+    let parsed = planValue;
+    if (typeof planValue === 'string') {
+        const trimmed = planValue.trim();
+        if (!trimmed.startsWith('{')) return null;
+        try {
+            parsed = JSON.parse(trimmed);
+        } catch {
+            return null;
+        }
+    }
+    if (!parsed || typeof parsed !== 'object') return null;
+    const price = parsed.price ?? parsed.plan_price;
+    if (price == null || String(price).trim() === '') return null;
+    return String(price).trim();
+}
+
+function resolveMembershipPlanPrice(user, membership) {
+    const fromJson = parsePlanJsonPrice(user.plan);
+    if (fromJson) return fromJson;
+    if (membership?.plan_price != null && String(membership.plan_price).trim() !== '') {
+        return String(membership.plan_price).trim();
+    }
+    return '';
+}
+
+/**
+ * Latest membership per user in one query (by highest user_memberships.id).
+ * Maps rows back to internal users.id, including wp_user_id legacy rows.
+ */
+async function fetchLatestMembershipsByUserIds(userRows) {
+    if (!userRows.length) return new Map();
+
+    const lookupIds = [...new Set(
+        userRows.flatMap((u) => {
+            const ids = [];
+            const uid = Number(u.id);
+            if (Number.isFinite(uid) && uid > 0) ids.push(uid);
+            const wpId = u.wp_user_id != null ? Number(u.wp_user_id) : null;
+            if (Number.isFinite(wpId) && wpId > 0) ids.push(wpId);
+            return ids;
+        }),
+    )];
+    if (!lookupIds.length) return new Map();
+
+    const membershipRows = await sequelize.query(
+        `SELECT um.id, um.user_id, um.membership_type, um.order_id, um.starts_at, um.expires_at,
+                pp.name AS plan_name, pp.price AS plan_price
+         FROM user_memberships um
+         LEFT JOIN premium_plans pp ON pp.slug = um.membership_type
+         INNER JOIN (
+           SELECT user_id, MAX(id) AS max_id
+           FROM user_memberships
+           WHERE user_id IN (:lookupIds)
+           GROUP BY user_id
+         ) latest ON latest.max_id = um.id`,
+        {
+            replacements: { lookupIds },
+            type: QueryTypes.SELECT,
+        },
+    );
+
+    const byMembershipUserId = new Map(
+        membershipRows.map((row) => [Number(row.user_id), row]),
+    );
+    const result = new Map();
+    for (const user of userRows) {
+        const uid = Number(user.id);
+        const wpId = user.wp_user_id != null ? Number(user.wp_user_id) : null;
+        const membership = byMembershipUserId.get(uid) || (wpId ? byMembershipUserId.get(wpId) : null);
+        if (membership) result.set(uid, membership);
+    }
+    return result;
+}
+
+function enrichUsersWithMembership(rows, membershipMap) {
+    return rows.map((user) => {
+        const membership = membershipMap.get(Number(user.id)) || null;
+        const membership_plan_name = formatMembershipPlanLabel(membership);
+        const membership_status = membershipStatusFromRow(membership);
+        const membership_expires_at = membership?.expires_at ?? null;
+        const membership_payment_id = membership?.order_id ?? null;
+        const membership_plan_purchased = membership?.starts_at ?? null;
+        const membership_plan_expiry = membership?.expires_at ?? null;
+        const membership_plan_price = resolveMembershipPlanPrice(user, membership);
+        return {
+            ...user,
+            membership_plan_name,
+            membership_status,
+            membership_expires_at,
+            membership_payment_id,
+            membership_plan_purchased,
+            membership_plan_expiry,
+            membership_plan_price,
+            membership_name: membership ? membership_plan_name : null,
+        };
+    });
+}
+
+function userRowToExportCsvLine(user) {
+    const cells = [
+        user.email,
+        '',
+        user.name,
+        user.first_name,
+        user.last_name,
+        user.phone,
+        user.role,
+        user.status,
+        user.membership_plan_name ?? 'Free',
+        user.membership_status ?? 'Free',
+        user.membership_plan_price ?? '',
+        user.membership_payment_id ?? '',
+        formatMembershipDate(user.membership_plan_purchased),
+        formatMembershipDate(user.membership_plan_expiry ?? user.membership_expires_at),
+        user.designation,
+        user.profession,
+        user.company,
+        user.city,
+        user.state,
+        user.country,
+        user.bio,
+    ];
+    return cells.map(escapeCsvCell).join(',');
+}
+
+async function buildListQueryContext(query = {}) {
     const {
         page = 1,
         limit = 10,
@@ -194,42 +381,150 @@ async function list(query = {}) {
         ? [['id', orderDir]]
         : [[sortBy, orderDir], ['id', orderDir]];
 
-    // Only select columns needed by the admin table — avoids transferring bio, social links, etc.
     const TABLE_COLUMNS = [
-        'id', 'name', 'display_name', 'email', 'phone',
-        'designation', 'profession', 'company', 'state', 'city', 'country',
-        'membership', 'plan', 'role_id', 'status', 'is_active',
+        'id', 'wp_user_id', 'name', 'display_name', 'email', 'phone',
+        'first_name', 'last_name', 'designation', 'profession', 'company',
+        'state', 'city', 'country', 'bio', 'role', 'role_id', 'status', 'is_active',
         'created_at', 'gst',
     ];
     const attributes = (lean === 'true' || lean === true)
-        ? ['id', 'name', 'display_name', 'email', 'role_id', 'designation', 'profession', 'plan']
+        ? ['id', 'wp_user_id', 'name', 'display_name', 'email', 'role_id', 'role', 'designation', 'profession']
         : TABLE_COLUMNS;
 
-    const { count, rows } = await User.findAndCountAll({
+    return {
         where,
-        attributes,
-        offset,
-        limit: parseInt(limit, 10),
+        trashMode,
         order,
+        attributes,
+        page: parseInt(page, 10),
+        limit: parseInt(limit, 10),
+        offset,
+        sortBy,
+    };
+}
+
+async function list(query = {}) {
+    const ctx = await buildListQueryContext(query);
+
+    const { count, rows } = await User.findAndCountAll({
+        where: ctx.where,
+        attributes: ctx.attributes,
+        offset: ctx.offset,
+        limit: ctx.limit,
+        order: ctx.order,
         raw: true,
         nest: true,
-        ...trashedSequelizeOptions(trashMode),
+        ...trashedSequelizeOptions(ctx.trashMode),
     });
 
-    const data = rows.map((u) => {
-        u.membership_name = u.plan
-            ? u.plan.charAt(0).toUpperCase() + u.plan.slice(1)
-            : null;
-        return u;
-    });
+    const membershipMap = await fetchLatestMembershipsByUserIds(rows);
+    const data = enrichUsersWithMembership(rows, membershipMap);
 
     return {
         data,
         total: count,
-        page: parseInt(page, 10),
-        limit: parseInt(limit, 10),
-        pages: Math.ceil(count / parseInt(limit, 10)),
+        page: ctx.page,
+        limit: ctx.limit,
+        pages: Math.ceil(count / ctx.limit) || 0,
     };
+}
+
+async function countForExport(query = {}) {
+    const ctx = await buildListQueryContext({ ...query, page: 1, limit: 1, lean: true });
+    const total = await User.count({
+        where: ctx.where,
+        ...trashedSequelizeOptions(ctx.trashMode),
+    });
+    return { total };
+}
+
+async function* iterateExportBatches(query) {
+    // Always paginate by primary key for export — simple `id < lastId` is O(1) on the PK index
+    // and avoids the expensive OR-based composite cursor needed for non-unique sort columns.
+    // Descending order (newest users first) matches what users expect in the CSV.
+    const ctx = await buildListQueryContext({ ...query, page: 1, limit: EXPORT_BATCH_SIZE, lean: true });
+
+    const exportAttributes = [
+        'id', 'wp_user_id', 'name', 'display_name', 'email', 'phone',
+        'first_name', 'last_name', 'designation', 'profession', 'company',
+        'state', 'city', 'country', 'bio', 'role', 'role_id', 'status',
+        'created_at', 'plan',
+    ];
+
+    let lastId = null;
+
+    for (;;) {
+        const andParts = [ctx.where];
+        if (lastId !== null) {
+            andParts.push({ id: { [Op.lt]: lastId } });
+        }
+
+        const rows = await User.findAll({
+            where: { [Op.and]: andParts },
+            attributes: exportAttributes,
+            limit: EXPORT_BATCH_SIZE,
+            order: [['id', 'DESC']],
+            raw: true,
+            nest: true,
+            ...trashedSequelizeOptions(ctx.trashMode),
+        });
+
+        if (!rows.length) break;
+
+        const membershipMap = await fetchLatestMembershipsByUserIds(rows);
+        const enriched = enrichUsersWithMembership(rows, membershipMap);
+        yield enriched;
+
+        lastId = rows[rows.length - 1].id;
+        if (rows.length < EXPORT_BATCH_SIZE) break;
+    }
+}
+
+async function writeExportToFile(query, filePath, onProgress, knownTotal) {
+    const total = knownTotal ?? (await countForExport(query)).total;
+    const header = `\uFEFF${USER_EXPORT_CSV_HEADERS.map(escapeCsvCell).join(',')}\r\n`;
+    await fs.promises.writeFile(filePath, header, 'utf8');
+
+    let loaded = 0;
+    for await (const batch of iterateExportBatches(query)) {
+        const lines = batch.map((user) => `${userRowToExportCsvLine(user)}\r\n`).join('');
+        if (lines) {
+            await fs.promises.appendFile(filePath, lines, 'utf8');
+        }
+        loaded += batch.length;
+        if (onProgress) {
+            onProgress({ loaded, total, phase: 'fetching' });
+        }
+    }
+
+    if (onProgress) {
+        onProgress({ loaded, total, phase: 'writing' });
+    }
+
+    return { exported: loaded, total };
+}
+
+/**
+ * Stream users CSV export in batches (keyset pagination matching list sort order).
+ * Membership columns come from user_memberships + premium_plans; purchase price from users.plan JSON when stored.
+ */
+async function exportCsvStream(query, res) {
+    const datePart = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="users-export-${datePart}.csv"`);
+    res.write('\uFEFF');
+    res.write(`${USER_EXPORT_CSV_HEADERS.map(escapeCsvCell).join(',')}\r\n`);
+
+    let exported = 0;
+    for await (const batch of iterateExportBatches(query)) {
+        for (const user of batch) {
+            res.write(`${userRowToExportCsvLine(user)}\r\n`);
+        }
+        exported += batch.length;
+    }
+
+    logger.info('[users.exportCsvStream] completed', { exported });
+    res.end();
 }
 
 // ─── Get One ─────────────────────────────────────────────────────────────────
@@ -341,4 +636,16 @@ async function count() {
     return { total };
 }
 
-module.exports = { list, getOne, create, update, remove, listByIds, distinctStates, count };
+module.exports = {
+    list,
+    countForExport,
+    writeExportToFile,
+    exportCsvStream,
+    getOne,
+    create,
+    update,
+    remove,
+    listByIds,
+    distinctStates,
+    count,
+};

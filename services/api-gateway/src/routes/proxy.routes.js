@@ -87,6 +87,8 @@ function register(app) {
     target: config.authServiceUrl,
     changeOrigin: true,
     pathRewrite: { '^/api/users': '/users' },
+    timeout: 600000,
+    proxyTimeout: 600000,
   });
 
   /** Profile, dashboard stats, avatar, my courses (auth-service) */
@@ -134,6 +136,8 @@ function register(app) {
 
   app.use('/api/auth', authProxy);
   app.use('/api/access', validateJWT, authProxy);
+  /** Large CSV download uses a one-time token from job status — no JWT in browser navigation. */
+  app.get('/api/users/export/:jobId/download', optionalJWT, usersProxy);
   app.use('/api/users', validateJWT, usersProxy);
   app.use('/api/user', validateJWT, userAccountProxy);
   app.use('/api/user-uploads', userUploadsProxy);
