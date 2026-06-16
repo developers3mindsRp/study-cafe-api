@@ -1,12 +1,12 @@
 const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
 const config = require('../config');
-const { UserMembership } = require('../models');
+const { UserMembership, PremiumPlan } = require('../models');
 const { logger } = require('../../../../shared');
 
 /**
  * Optional JWT + membership hydration for public blog/article routes.
- * Sets req.viewer = { userId, email, role, hasActiveMembership } or null.
+ * Sets req.viewer = { userId, email, role, hasActiveMembership, membershipSlug, membershipTierRank } or null.
  */
 async function optionalWebUser(req, res, next) {
   req.viewer = null;
@@ -26,13 +26,27 @@ async function optionalWebUser(req, res, next) {
         expires_at: { [Op.gte]: now },
       },
       order: [['expires_at', 'DESC']],
-      attributes: ['id'],
+      attributes: ['id', 'membership_type'],
     });
+    let membershipSlug = null;
+    let membershipTierRank = 0;
+    if (m) {
+      membershipSlug = m.get('membership_type') || null;
+      if (membershipSlug) {
+        const plan = await PremiumPlan.findOne({
+          where: { slug: membershipSlug },
+          attributes: ['tier_rank'],
+        });
+        membershipTierRank = plan ? Number(plan.get('tier_rank') ?? 0) : 0;
+      }
+    }
     req.viewer = {
       userId,
       email: decoded.email,
       role: decoded.role || 'user',
       hasActiveMembership: !!m,
+      membershipSlug,
+      membershipTierRank,
     };
   } catch (err) {
     req.viewer = null;

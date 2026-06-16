@@ -1576,6 +1576,40 @@ function canDownloadArticle(tier, viewer) {
   return false;
 }
 
+/** Case citation + notification details: premium + ultimate members (tier_rank >= 2) and admins only. */
+function canViewArticleCitation(viewer) {
+  if (!viewer) return false;
+  if (['admin', 'super_admin'].includes(viewer.role)) return true;
+  if (!viewer.hasActiveMembership) return false;
+  if (Number(viewer.membershipTierRank ?? 0) >= 2) return true;
+  const slug = String(viewer.membershipSlug || '').toLowerCase();
+  return slug === 'premium' || slug === 'ultimate';
+}
+
+/** Raw article columns that must not leak on public slug API for basic/free viewers. */
+const PREMIUM_METADATA_ROW_KEYS = [
+  'case_name',
+  'citation',
+  'appeal_number',
+  'judgement_date',
+  'assessment_year',
+  'court_name',
+  'section',
+  'noti_no',
+  'noti_date',
+  'type_of_tax',
+];
+
+function stripPremiumMetadataFromArticlePublic(out, canView) {
+  if (canView) return out;
+  for (const key of PREMIUM_METADATA_ROW_KEYS) {
+    if (key in out) out[key] = null;
+  }
+  out.notification = null;
+  out.has_notification = false;
+  return out;
+}
+
 async function embedRelatedArticles(content) {
   if (typeof content !== 'string' || !content.length) return content;
   const relatedIds = extractRelatedIds(content);
@@ -1886,6 +1920,7 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
   }
 
   const notification = buildArticleNotificationFromRow(p);
+  const canViewPremiumMetadata = isPreview || canViewArticleCitation(viewer);
   const out = {
     ...p,
     blog_access_tier,
@@ -1894,15 +1929,17 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
       reason: access.reason,
       show_read_more_cta: !isPreview && !access.can_read_full && blog_access_tier === 'premium',
       can_download: isPreview ? true : canDownloadArticle(blog_access_tier, viewer),
+      can_view_citation: canViewPremiumMetadata,
+      can_view_notification: canViewPremiumMetadata,
     },
     body,
     toc: tocItems,
-    citation: buildArticleCitationFromRow(p),
-    notification,
-    noti_no: notification?.noti_no ?? null,
-    noti_date: notification?.noti_date ?? null,
-    type_of_tax: notification?.type_of_tax ?? null,
-    has_notification: Boolean(notification),
+    citation: canViewPremiumMetadata ? buildArticleCitationFromRow(p) : null,
+    notification: canViewPremiumMetadata ? notification : null,
+    noti_no: canViewPremiumMetadata ? (notification?.noti_no ?? null) : null,
+    noti_date: canViewPremiumMetadata ? (notification?.noti_date ?? null) : null,
+    type_of_tax: canViewPremiumMetadata ? (notification?.type_of_tax ?? null) : null,
+    has_notification: canViewPremiumMetadata ? Boolean(notification) : false,
     cover_image_url: p.thumbnail_url,
     author_name: authorName ?? null,
     download_url: p.rel_download_url || p.upload_url || null,
@@ -1912,7 +1949,7 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     tags,
   };
   if (related_articles.length) out.related_articles = related_articles;
-  return out;
+  return stripPremiumMetadataFromArticlePublic(out, canViewPremiumMetadata);
 }
 
 const UP_NEXT_LIST_ATTRS = [
