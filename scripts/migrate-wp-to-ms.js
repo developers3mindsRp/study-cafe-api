@@ -1236,7 +1236,9 @@ async function migrateUsers(src, tgt) {
             const { id: msId, wpRefSql } = msWpEntityIdExpr(u, 'wp_user_id');
             const passHash = passwords[msId] || passwords[u.wp_user_id] || null;
             const email = u.email || `wp_${msId}@placeholder.studycafe.in`;
-            const membership = normalizeMembershipSlug(u.membership);
+            // sc_users.membership is already normalized by migrate-complete.js
+            // (advanced→premium, premium→ultimate). Do NOT normalize again here.
+            const membership = u.membership ? String(u.membership).trim().substring(0, 64) : null;
             const createdAt = escDate(u.created_at);
             return `(${msId}, ${wpRefSql}, ${esc(email)}, ${esc(passHash)}, ${esc(u.display_name)}, ${esc(u.display_name)}, ${esc(u.login)}, ${esc(u.first_name)}, ${esc(u.last_name)}, ${esc(u.user_nicename)}, ${esc(u.user_url)}, ${esc(u.phone)}, ${esc(u.profession)}, ${esc(u.designation)}, ${esc(u.company)}, ${esc(u.city)}, ${esc(u.state)}, ${esc(u.country)}, ${escUploadUrl(u.profile_pic_url)}, ${esc(membership)}, ${esc(u.plan)}, ${defaultUserRoleId}, 'user', 1, ${esc(u.status)}, ${esc(u.facebook)}, ${esc(u.twitter)}, ${esc(u.linkedin)}, ${esc(u.instagram)}, ${esc(u.youtube)}, ${esc(u.gst)}, ${esc(u.account_status)}, ${esc(u.bio)}, ${createdAt}, ${createdAt}, ${createdAt})`;
         }).join(',');
@@ -1299,8 +1301,9 @@ async function migrateUserMemberships(src, tgt) {
                 continue;
             }
         }
+        // sc_users.membership is already normalized — pass through as-is.
         const membershipType = (u.membership && String(u.membership).trim() && String(u.membership).toLowerCase() !== 'free')
-            ? normalizeMembershipSlug(u.membership)
+            ? String(u.membership).trim().substring(0, 64)
             : 'free';
         if (!start || !end || isNaN(start.getTime()) || isNaN(end.getTime())) {
             if (membershipType === 'free') {
