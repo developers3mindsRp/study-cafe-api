@@ -18,6 +18,12 @@ const listByIds = asyncHandler(async (req, res) => {
   sendSuccess(res, users);
 });
 
+const searchIds = asyncHandler(async (req, res) => {
+  const term = req.body.term ?? req.body.search ?? req.query.term ?? '';
+  const ids = await usersService.searchIds(term);
+  sendSuccess(res, ids);
+});
+
 const distinctStates = asyncHandler(async (req, res) => {
   const states = await usersService.distinctStates();
   sendSuccess(res, states);
@@ -53,6 +59,7 @@ module.exports = {
   ...controller,
   restore,
   listByIds,
+  searchIds,
   distinctStates,
   countUsers,
   exportCsv,

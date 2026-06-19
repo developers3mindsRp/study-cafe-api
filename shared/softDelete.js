@@ -24,11 +24,17 @@ function trashedSequelizeOptions(mode) {
   return {};
 }
 
+/** True when a Sequelize where object has any string or Symbol (Op.*) keys. */
+function whereHasClauses(where) {
+  if (!where || typeof where !== 'object') return false;
+  return Object.keys(where).length > 0 || Object.getOwnPropertySymbols(where).length > 0;
+}
+
 /** Merge trash filter into a Sequelize where clause. */
 function withTrashedWhere(baseWhere, mode) {
   if (mode !== 'only') return baseWhere || {};
   const trashedClause = { deleted_at: { [Op.ne]: null } };
-  if (!baseWhere || Object.keys(baseWhere).length === 0) return trashedClause;
+  if (!whereHasClauses(baseWhere)) return trashedClause;
   return { [Op.and]: [baseWhere, trashedClause] };
 }
 
@@ -38,4 +44,5 @@ module.exports = {
   parseTrashedMode,
   trashedSequelizeOptions,
   withTrashedWhere,
+  whereHasClauses,
 };

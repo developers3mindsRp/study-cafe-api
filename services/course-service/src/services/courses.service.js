@@ -2054,11 +2054,13 @@ const coursesService = {
   },
 
   /**
-   * Fetch published courses by explicit IDs and/or by course-category IDs.
-   * Used by auth-service to resolve "courses included in a membership plan".
+   * Fetch courses by explicit IDs and/or by course-category IDs.
+   * Used by auth-service to resolve "courses included in a membership plan" (published only),
+   * and by order-service to resolve order entity names (pass includeUnpublished so historical
+   * orders pointing at unpublished/archived courses still resolve a title).
    * Returns deduplicated list; default order is id ASC, pass order: 'DESC' for newest first.
    */
-  async listByIdsOrCatIds({ ids = [], cat_ids = [], order = 'ASC' } = {}) {
+  async listByIdsOrCatIds({ ids = [], cat_ids = [], order = 'ASC', includeUnpublished = false } = {}) {
     const courseIdSet = new Set(ids.map(Number).filter(Boolean));
 
     // Resolve courses belonging to any of the given category IDs
@@ -2076,11 +2078,13 @@ const coursesService = {
     if (courseIdSet.size === 0) return [];
 
     // Use the same query pattern as listAll() so category data is consistent with admin table.
-    // Only return published courses.
+    // Published-only by default; admin order-name resolution opts into unpublished too.
     const resolvedIds = [...courseIdSet];
     const desc = String(order).toUpperCase() === 'DESC';
+    const courseWhere = { id: { [Op.in]: resolvedIds } };
+    if (!includeUnpublished) courseWhere.is_published = true;
     const courseRows = await Course.findAll({
-      where: { id: { [Op.in]: resolvedIds }, is_published: true },
+      where: courseWhere,
       order: desc
         ? [
             ['created_at', 'DESC'],

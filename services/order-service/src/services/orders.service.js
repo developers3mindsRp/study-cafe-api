@@ -13,6 +13,7 @@ const {
   sqlDeletedAtIsNull,
   trashedSequelizeOptions,
   withTrashedWhere,
+  whereHasClauses,
 } = require('../../../../shared');
 
 // GST rate applied on top of the post-discount price before charging via Razorpay
@@ -542,12 +543,27 @@ function buildExpiredCourseAccessWhere() {
   };
 }
 
+function debugSerializeWhere(value) {
+  if (value == null) return value;
+  if (Array.isArray(value)) return value.map(debugSerializeWhere);
+  if (typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value)) out[k] = debugSerializeWhere(value[k]);
+    for (const sym of Object.getOwnPropertySymbols(value)) {
+      const label = sym.description ? `[${sym.description}]` : String(sym);
+      out[label] = debugSerializeWhere(value[sym]);
+    }
+    return out;
+  }
+  return value;
+}
+
 function mergeCourseAccessFilter(baseWhere, courseAccess) {
   const mode = courseAccess && String(courseAccess).toLowerCase().trim();
   if (mode !== 'active' && mode !== 'expired') return baseWhere;
   const expired = buildExpiredCourseAccessWhere();
   const clause = mode === 'expired' ? expired : { [Op.not]: expired };
-  if (!baseWhere || Object.keys(baseWhere).length === 0) return clause;
+  if (!whereHasClauses(baseWhere)) return clause;
   return { [Op.and]: [baseWhere, clause] };
 }
 
@@ -1756,14 +1772,37 @@ async function listAllOrders({
   const trashMode = parseTrashedMode({ trashed });
   let where = {};
 
-  if (search) {
+  if (search && String(search).trim()) {
     const term = String(search).trim();
+
+    // Match payment ID → order ids.
     const paymentRows = await Payment.findAll({
       where: { razorpay_payment_id: { [Op.like]: `%${term}%` } },
       attributes: ['order_id'],
       raw: true,
     });
     const orderIdsFromPayments = [...new Set(paymentRows.map((p) => p.order_id))];
+
+    // Match buyer name/email/phone on the linked user record → user ids.
+    // Many orders store buyer info only on the user, so searching the order's
+    // own buyer_* columns alone misses them — resolve matching users too.
+    let userIdsFromSearch = [];
+    try {
+      const { data: body } = await axios.post(
+        `${config.authServiceUrl}/users/internal/search-ids`,
+        { term },
+        { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 5000 }
+      );
+      const ids = body && typeof body === 'object' && 'data' in body ? body.data : body;
+      if (Array.isArray(ids)) userIdsFromSearch = ids;
+    } catch (err) {
+      logger.warn(`[orders] user search-ids failed: ${err.message}`);
+    }
+
+    console.log("SEARCH TERM:", term);
+    console.log("USER IDS:", userIdsFromSearch);
+    console.log("PAYMENT ORDER IDS:", orderIdsFromPayments);
+
     const orClauses = [
       { order_id: { [Op.like]: `%${term}%` } },
       { buyer_email: { [Op.like]: `%${term}%` } },
@@ -1773,7 +1812,27 @@ async function listAllOrders({
     if (orderIdsFromPayments.length) {
       orClauses.push({ id: { [Op.in]: orderIdsFromPayments } });
     }
+    if (userIdsFromSearch.length) {
+      // Restrict the user-profile fallback to orders that have no stored buyer_email.
+      // If an order already has its own buyer_email, the LIKE clause above handles it.
+      // Without this guard, every order ever placed by a matching user is returned —
+      // including orders with a completely different stored email — causing false positives.
+      orClauses.push({
+        [Op.and]: [
+          { user_id: { [Op.in]: userIdsFromSearch } },
+          {
+            [Op.or]: [
+              { buyer_email: { [Op.is]: null } },
+              { buyer_email: '' },
+            ],
+          },
+        ],
+      });
+    }
     where[Op.or] = orClauses;
+
+    console.log("OR CLAUSES", JSON.stringify(debugSerializeWhere(orClauses), null, 2));
+    console.log("WHERE AFTER SEARCH", JSON.stringify(debugSerializeWhere(where), null, 2));
   }
 
   if (status) {
@@ -1819,10 +1878,32 @@ async function listAllOrders({
 
   const listWhere = mergeCourseAccessFilter(withTrashedWhere(where, trashMode), courseAccess);
 
+  const whereClause = listWhere;
+  const order = [[sortBy, sortOrder]];
+  const findLimit = Math.min(Number(limit) || 100, 500);
+  const findOffset = Number(offset) || 0;
+
+  console.log("WHERE BEFORE QUERY", JSON.stringify(debugSerializeWhere(whereClause), null, 2));
+
+  console.log(
+    "[order] WHERE CLAUSE:",
+    JSON.stringify(debugSerializeWhere(whereClause), null, 2)
+  );
+
+  console.log(
+    "[order] FIND OPTIONS:",
+    JSON.stringify({
+      where: debugSerializeWhere(whereClause),
+      limit: findLimit,
+      offset: findOffset,
+      order,
+    }, null, 2)
+  );
+
   const { rows, count } = await Order.findAndCountAll({
-    where: listWhere,
+    where: whereClause,
     ...trashedSequelizeOptions(trashMode),
-    order: [[sortBy, sortOrder]],
+    order,
     attributes: [
       'id',
       'order_id',
@@ -1841,11 +1922,21 @@ async function listAllOrders({
       'utm',
       'gateway'
     ],
-    limit: Math.min(Number(limit) || 100, 500),
-    offset: Number(offset) || 0,
+    limit: findLimit,
+    offset: findOffset,
   });
 
   const orders = rows.map((r) => r.get({ plain: true }));
+
+  console.log(
+    orders.map((r) => ({
+      id: r.id,
+      order_id: r.order_id,
+      user_id: r.user_id,
+      buyer_email: r.buyer_email,
+      buyer_name: r.buyer_name,
+    }))
+  );
 
   // 1. Fetch latest payments for these orders
   const orderIds = orders.map((o) => o.id);
@@ -1882,6 +1973,7 @@ async function listAllOrders({
   // Actually, we can fetch all courses and all plans if the lists are small, or just fetch unique ones.
   const courseIds = [...new Set(orders.filter(o => o.type === 'course').map(o => o.entity_id).filter(Boolean))];
   const planIds = [...new Set(orders.filter(o => o.type === 'membership').map(o => o.entity_id).filter(Boolean))];
+  const paymentLinkIds = [...new Set(orders.filter(o => o.type === 'payment_link').map(o => o.entity_id).filter(Boolean))];
 
   const validityByCourseId = await fetchCourseValiditiesMap(courseIds);
 
@@ -1892,6 +1984,7 @@ async function listAllOrders({
     try {
       const { data: courseRes } = await axios.post(`${config.courseServiceUrl}/internal/courses/by-ids`, {
         ids: courseIds,
+        includeUnpublished: true,
       }, {
         headers: { 'X-Internal-API-Key': config.internalApiKey }
       });
@@ -1918,6 +2011,34 @@ async function listAllOrders({
     }
   }
 
+  // Resolve payment-link titles via admin-service (no bulk endpoint — fetch each unique id).
+  if (paymentLinkIds.length > 0) {
+    try {
+      const settled = await Promise.all(
+        paymentLinkIds.map(async (eid) => {
+          try {
+            const { data: body, status } = await axios.get(
+              `${config.adminServiceUrl}/internal/payment-links/${encodeURIComponent(eid)}`,
+              { headers: { 'x-internal-api-key': config.internalApiKey }, timeout: 8000, validateStatus: () => true }
+            );
+            const payload =
+              body && typeof body === 'object' && body.success === true && body.data !== undefined ? body.data : body;
+            const name =
+              status === 200 && payload && typeof payload === 'object' ? payload.title || payload.name || null : null;
+            return { eid: String(eid), name };
+          } catch {
+            return { eid: String(eid), name: null };
+          }
+        })
+      );
+      for (const { eid, name } of settled) {
+        if (name) entityNameMap[`payment_link_${eid}`] = name;
+      }
+    } catch (err) {
+      logger.warn(`Bulk payment-link resolve failed: ${err.message}`);
+    }
+  }
+
   const enrichedData = orders.map((o) => {
     const payment = paymentMap[o.id];
     const user = userMap[o.user_id];
@@ -1929,7 +2050,13 @@ async function listAllOrders({
       buyer_name: o.buyer_name || (user ? user.name : null),
       buyer_email: o.buyer_email || (user ? user.email : null),
       buyer_mobile: o.buyer_mobile || (user ? user.phone : null),
-      entity_name: entityNameMap[`${o.type}_${o.entity_id}`] || (o.type === 'membership' ? 'Plan' : 'Course'),
+      entity_name:
+        entityNameMap[`${o.type}_${o.entity_id}`] ||
+        (o.type === 'membership'
+          ? 'Plan'
+          : o.type === 'payment_link'
+            ? 'Payment link'
+            : 'Course'),
       course_access: computeCourseAccessLabel(o, validityByCourseId),
     };
   });
@@ -2175,7 +2302,7 @@ async function listCouponUsages({
     try {
       const { data: courseRes } = await axios.post(
         `${config.courseServiceUrl}/internal/courses/by-ids`,
-        { ids: courseIds },
+        { ids: courseIds, includeUnpublished: true },
         { headers: { 'x-internal-api-key': config.internalApiKey }, timeout: 8000 }
       );
       const list = courseRes?.data ?? courseRes;
@@ -2398,7 +2525,7 @@ async function enrichAdminOrderResponse(p) {
     try {
       const { data: courseRes } = await axios.post(
         `${config.courseServiceUrl}/internal/courses/by-ids`,
-        { ids: [String(p.entity_id)] },
+        { ids: [String(p.entity_id)], includeUnpublished: true },
         { headers: { 'X-Internal-API-Key': config.internalApiKey } }
       );
       const courses = courseRes.data || courseRes;

@@ -25,6 +25,7 @@ const {
   parseTrashedMode,
   trashedSequelizeOptions,
   withTrashedWhere,
+  whereHasClauses,
 } = require('./softDelete');
 
 module.exports = {
@@ -48,4 +49,5 @@ module.exports = {
     parseTrashedMode,
     trashedSequelizeOptions,
     withTrashedWhere,
+    whereHasClauses,
 };

@@ -103,16 +103,16 @@ const listAllInternal = asyncHandler(async (req, res) => {
     trashed,
     course_access: courseAccess,
   } = req.query;
-  
-  const result = await ordersService.listAllOrders({ 
-    limit, 
-    offset, 
-    search, 
-    sortBy, 
-    sortOrder, 
-    dateFrom, 
-    dateTo, 
-    courseId, 
+
+  const result = await ordersService.listAllOrders({
+    limit,
+    offset,
+    search,
+    sortBy,
+    sortOrder,
+    dateFrom,
+    dateTo,
+    courseId,
     type,
     amountMin,
     amountMax,

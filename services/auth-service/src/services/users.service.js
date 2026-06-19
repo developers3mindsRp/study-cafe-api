@@ -612,6 +612,30 @@ async function listByIds(ids) {
     });
 }
 
+/**
+ * Resolve user IDs whose name / email / phone partially match a search term.
+ * Used by order-service so an order search by buyer name/email/phone also finds
+ * orders whose buyer details live on the linked user record, not the order row.
+ * Capped to avoid unbounded IN() clauses.
+ */
+async function searchIds(term, { limit = 2000 } = {}) {
+    const q = String(term || '').trim();
+    if (!q) return [];
+    const rows = await User.findAll({
+        where: {
+            [Op.or]: [
+                { name: { [Op.like]: `%${q}%` } },
+                { email: { [Op.like]: `%${q}%` } },
+                { phone: { [Op.like]: `%${q}%` } },
+            ],
+        },
+        attributes: ['id'],
+        limit: Math.min(Number(limit) || 2000, 5000),
+        raw: true,
+    });
+    return rows.map((r) => r.id);
+}
+
 /** Returns all distinct non-empty state values from the users table, sorted alphabetically. */
 async function distinctStates() {
     const rows = await User.findAll({
@@ -646,6 +670,7 @@ module.exports = {
     update,
     remove,
     listByIds,
+    searchIds,
     distinctStates,
     count,
 };
