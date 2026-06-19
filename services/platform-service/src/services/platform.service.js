@@ -109,6 +109,7 @@ const {
   parseTrashedMode,
   trashedSequelizeOptions,
   withTrashedWhere,
+  whereHasClauses,
 } = require('../../../../shared');
 const articleScheduling = require('./article-scheduling.service');
 const {
@@ -996,7 +997,7 @@ async function getPlanLinkedCoursesInternal(id) {
 /** Merge non-trashed filter into Sequelize article where (public + active admin lists). */
 function withActiveArticleWhere(baseWhere = {}) {
   const active = activeRowWhere();
-  if (!baseWhere || Object.keys(baseWhere).length === 0) return active;
+  if (!whereHasClauses(baseWhere)) return active;
   return { [Op.and]: [baseWhere, active] };
 }
 
@@ -2087,34 +2088,46 @@ function assertValidArticleSchedule(status, scheduledAt) {
 
 function buildArticlesWhere(options = {}) {
   const { status, search, blog_access_tier, date_from, date_to } = options;
-  const where = {};
+  const andClauses = [];
+
   if (status === 'scheduled_future') {
-    where[Op.or] = [
-      { status: 'scheduled' },
-      { published_at: { [Op.gt]: new Date() } },
-    ];
+    andClauses.push({
+      [Op.or]: [
+        { status: 'scheduled' },
+        { published_at: { [Op.gt]: new Date() } },
+      ],
+    });
   } else if (status) {
-    where.status = status;
+    andClauses.push({ status });
   }
-  if (blog_access_tier) where.blog_access_tier = blog_access_tier;
+
+  if (blog_access_tier) andClauses.push({ blog_access_tier });
+
   if (date_from || date_to) {
-    where.created_at = {};
-    if (date_from) where.created_at[Op.gte] = new Date(date_from);
+    const createdAt = {};
+    if (date_from) createdAt[Op.gte] = new Date(date_from);
     if (date_to) {
       const to = new Date(date_to);
       to.setHours(23, 59, 59, 999);
-      where.created_at[Op.lte] = to;
+      createdAt[Op.lte] = to;
     }
+    andClauses.push({ created_at: createdAt });
   }
+
   if (search && String(search).trim()) {
     const term = `%${String(search).trim()}%`;
-    where[Op.or] = [
-      { title: { [Op.like]: term } },
-      { excerpt: { [Op.like]: term } },
-      { slug: { [Op.like]: term } },
-    ];
+    andClauses.push({
+      [Op.or]: [
+        { title: { [Op.like]: term } },
+        { excerpt: { [Op.like]: term } },
+        { slug: { [Op.like]: term } },
+      ],
+    });
   }
-  return where;
+
+  if (andClauses.length === 0) return {};
+  if (andClauses.length === 1) return andClauses[0];
+  return { [Op.and]: andClauses };
 }
 
 function normalizeSortColumn(sortBy) {
