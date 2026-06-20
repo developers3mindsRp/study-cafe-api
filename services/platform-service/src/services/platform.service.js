@@ -1902,11 +1902,13 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
   let whatsapp_link = null;
   let telegram_link = null;
   let google_news_url = null;
+  const categories = [];
   if (catIds.length) {
     const catRows = await Category.findAll({
       where: { id: { [Op.in]: catIds } },
-      attributes: ['id', 'whatsapp_links', 'telegram_links', 'google_news_url'],
+      attributes: ['id', 'name', 'slug', 'whatsapp_links', 'telegram_links', 'google_news_url'],
     });
+    const catById = new Map(catRows.map((c) => [Number(c.id), c.get({ plain: true })]));
     const allWhatsapp = [];
     const allTelegram = [];
     for (const cat of catRows) {
@@ -1914,6 +1916,11 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
       if (Array.isArray(c.whatsapp_links)) allWhatsapp.push(...c.whatsapp_links);
       if (Array.isArray(c.telegram_links)) allTelegram.push(...c.telegram_links);
       if (!google_news_url && c.google_news_url) google_news_url = c.google_news_url;
+    }
+    // Preserve the article's category order from the map rows.
+    for (const id of catIds) {
+      const c = catById.get(id);
+      if (c) categories.push({ id, name: c.name ?? '', slug: c.slug ?? '' });
     }
     // Pick one random link from the full pool on every request
     whatsapp_link = pickRandom([...new Set(allWhatsapp.filter(Boolean))]);
@@ -1948,6 +1955,7 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     telegram_link,
     google_news_url,
     tags,
+    categories,
   };
   if (related_articles.length) out.related_articles = related_articles;
   return stripPremiumMetadataFromArticlePublic(out, canViewPremiumMetadata);
