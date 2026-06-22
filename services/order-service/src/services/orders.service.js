@@ -1556,27 +1556,42 @@ async function fetchProgressSummary(userId, courseIds) {
   }
 }
 
-async function listMyPurchases(userId) {
-  const courseCache = new Map();
-  async function fetchCourseForOrder(entityId) {
-    if (!entityId) return null;
-    const key = String(entityId);
-    if (courseCache.has(key)) return courseCache.get(key);
-    try {
-      const { data } = await axios.get(`${config.courseServiceUrl}/courses/${key}`, {
-        timeout: 8000,
-        validateStatus: (s) => s === 200,
-      });
-      const payload = data.data !== undefined ? data.data : data;
-      courseCache.set(key, payload);
-      return payload;
-    } catch (err) {
-      logger.warn(`[orders] listMyPurchases course fetch failed for key ${key}: ${err.message}`);
-      courseCache.set(key, null);
-      return null;
-    }
+/** Bulk-load course metadata for purchase history (includes draft/unpublished migrated courses). */
+async function fetchCoursesMetaMap(entityIds) {
+  const ids = [...new Set(entityIds.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+  const map = new Map();
+  if (!ids.length) return map;
+  const rows = await sequelize.query(
+    `SELECT id, title, slug, brief_description, description, thumbnail_url, price, enrolled_count, status, created_at, updated_at
+     FROM courses
+     WHERE id IN (:ids) AND ${sqlDeletedAtIsNull()}`,
+    { replacements: { ids }, type: QueryTypes.SELECT },
+  );
+  for (const row of rows) {
+    map.set(String(row.id), row);
   }
+  return map;
+}
 
+/** Bulk-load batch rows for my-purchases (shared DB). */
+async function fetchBatchesMap(batchIds) {
+  const ids = [...new Set(batchIds.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+  const map = new Map();
+  if (!ids.length) return map;
+  const rows = await sequelize.query(
+    `SELECT b.id, b.name, b.start_date, b.end_date, b.meet_link, b.course_id, c.slug AS course_slug
+     FROM batches b
+     LEFT JOIN courses c ON c.id = b.course_id
+     WHERE b.id IN (:ids)`,
+    { replacements: { ids }, type: QueryTypes.SELECT },
+  );
+  for (const row of rows) {
+    map.set(Number(row.id), row);
+  }
+  return map;
+}
+
+async function listMyPurchases(userId) {
   // Return:
   //  - fully paid orders (native + migrated active purchases), AND
   //  - migrated legacy orders carrying a WP workflow status ('publish' = active,
@@ -1592,18 +1607,36 @@ async function listMyPurchases(userId) {
     },
     order: [['created_at', 'DESC']],
   });
+  const courseEntityIds = rows
+    .filter((row) => row.get({ plain: true }).type === 'course' && row.get({ plain: true }).entity_id)
+    .map((row) => Number(row.get({ plain: true }).entity_id));
+  const courseMetaMap = await fetchCoursesMetaMap(courseEntityIds);
+
+  const plainRows = rows.map((row) => row.get({ plain: true }));
+  const orderIds = plainRows.map((o) => o.id);
+  const batchIds = [...new Set(plainRows.map((o) => o.batch_id).filter(Boolean))];
+
+  const [paymentRows, batchMap] = await Promise.all([
+    orderIds.length
+      ? Payment.findAll({
+          where: { order_id: { [Op.in]: orderIds } },
+          order: [['id', 'DESC']],
+        })
+      : [],
+    fetchBatchesMap(batchIds),
+  ]);
+  const paymentByOrderId = new Map();
+  for (const p of paymentRows) {
+    const oid = p.order_id;
+    if (!paymentByOrderId.has(oid)) paymentByOrderId.set(oid, p);
+  }
+
   const out = [];
-  const courseEntityIds = [];
-  for (const row of rows) {
-    const o = row.get({ plain: true });
-    const payment = await Payment.findOne({
-      where: { order_id: o.id },
-      order: [['id', 'DESC']],
-    });
+  for (const o of plainRows) {
+    const payment = paymentByOrderId.get(o.id) || null;
     let course = null;
     if (o.type === 'course' && o.entity_id) {
-      courseEntityIds.push(Number(o.entity_id));
-      const meta = await fetchCourseForOrder(o.entity_id);
+      const meta = courseMetaMap.get(String(o.entity_id)) || null;
       const cid = String(o.entity_id);
       course = {
         id: cid,
@@ -1651,7 +1684,7 @@ async function listMyPurchases(userId) {
 
     let enrolledBatch = null;
     if (o.type === 'course' && o.batch_id && course) {
-      const batchRow = await fetchBatchById(o.batch_id);
+      const batchRow = batchMap.get(Number(o.batch_id)) || null;
       if (batchRow) {
         const phase = computeLiveBatchPhase(batchRow);
         enrolledBatch = {

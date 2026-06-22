@@ -238,71 +238,62 @@ async function getOverallProgress(userId, authHeader) {
     { replacements: { userId }, type: QueryTypes.SELECT }
   );
   const courseIds = [...new Set(rows.map((r) => r.course_id).filter((id) => id != null))];
-  const out = [];
-  for (const cid of courseIds) {
-    try {
-      const p = await getCourseProgress(cid, userId, authHeader);
-      out.push({
-        courseId: p.courseId,
-        percent: p.percent,
-        status: p.status,
-        completedSessions: p.completedSessions,
-        totalSessions: p.totalSessions,
-      });
-    } catch (err) {
-      // skip if access lost
-      logger.warn(`[progress] getOverallProgress skipped course ${cid} for user ${userId}`, { error: err.message });
-    }
-  }
-  return out;
+  const summary = await internalProgressSummary({ userId, courseIds });
+  return courseIds.map((cid) => {
+    const s = summary[cid] || summary[String(cid)] || {};
+    return {
+      courseId: String(cid),
+      percent: Number(s.progress) || 0,
+      status: s.status || 'not_started',
+      completedSessions: Number(s.completedLessons) || 0,
+      totalSessions: Number(s.totalLessons) || 0,
+    };
+  });
 }
 
 /**
  * Internal: batch summary for auth-service my-courses.
+ * Read-only — does not auto-enroll or grant access (side effects belong on purchase/learn flows).
  * body: { userId, courseIds: number[] }
  */
 async function internalProgressSummary({ userId, courseIds }) {
-  const ids = (courseIds || []).map(Number).filter((n) => n > 0);
+  const ids = [...new Set((courseIds || []).map(Number).filter((n) => n > 0))];
   if (!userId || ids.length === 0) return {};
 
   const result = {};
   for (const courseId of ids) {
-    let batch = await coursesService.getUserBatchForCourse(courseId, userId);
-    if (!batch) {
-      await coursesService.autoEnrollInBatch(courseId, userId, null);
-    }
-    await coursesService.repairUserBatchIfNoSessions(courseId, userId);
-    batch = await coursesService.getUserBatchForCourse(courseId, userId);
-    if (!batch) {
-      result[courseId] = {
-        progress: 0,
-        completedLessons: 0,
-        totalLessons: 0,
-        status: 'not_started',
-      };
-      continue;
-    }
+    result[courseId] = {
+      progress: 0,
+      completedLessons: 0,
+      totalLessons: 0,
+      status: 'not_started',
+    };
+  }
 
-    const sessions = await Session.findAll({
-      where: { batch_id: batch.id },
-      attributes: ['id'],
-    });
-    const sessionIds = sessions.map((s) => s.id);
-    const total = sessionIds.length;
+  const progressRows = await sequelize.query(
+    `SELECT b.course_id,
+            COUNT(DISTINCT s.id) AS total_sessions,
+            COUNT(DISTINCT CASE WHEN ucp.status = 'completed' THEN s.id END) AS completed_sessions
+     FROM batch_enrollments be
+     INNER JOIN batches b ON b.id = be.batch_id
+     INNER JOIN sessions s ON s.batch_id = b.id
+     LEFT JOIN user_course_progress ucp
+       ON ucp.session_id = s.id
+      AND ucp.user_id = be.user_id
+      AND ucp.course_id = b.course_id
+      AND ucp.status = 'completed'
+     WHERE be.user_id = :userId AND b.course_id IN (:ids)
+     GROUP BY b.course_id`,
+    { replacements: { userId, ids }, type: QueryTypes.SELECT },
+  );
 
-    const completed = await UserCourseProgress.count({
-      where: {
-        user_id: userId,
-        course_id: courseId,
-        session_id: { [Op.in]: sessionIds },
-        status: 'completed',
-      },
-    });
-
+  for (const row of progressRows) {
+    const courseId = Number(row.course_id);
+    const total = Number(row.total_sessions) || 0;
+    const completed = Number(row.completed_sessions) || 0;
     const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
     const status =
       completed >= total && total > 0 ? 'completed' : completed > 0 ? 'in_progress' : 'not_started';
-
     result[courseId] = {
       progress: percent,
       completedLessons: completed,

@@ -1,5 +1,6 @@
 const axios = require('axios');
-const { User, UserCourse, Role } = require('../models');
+const { QueryTypes } = require('sequelize');
+const { User, UserCourse, Role, sequelize } = require('../models');
 const config = require('../config');
 const { AppError, logger } = require('../../../../shared');
 
@@ -108,8 +109,7 @@ async function fetchProgressSummary(userId, courseIds) {
 async function dashboardStats(userId) {
   const { Op } = require('sequelize');
   const userRow = await User.findByPk(userId, { attributes: ['id', 'wp_user_id'] });
-  const lookupIds = [String(userId)];
-  if (userRow?.wp_user_id != null) lookupIds.push(String(userRow.wp_user_id));
+  const lookupIds = membershipLookupIds(userId, userRow);
 
   const rows = await UserCourse.findAll({
     where: { user_id: { [Op.in]: lookupIds } },
@@ -140,6 +140,35 @@ async function dashboardStats(userId) {
     totalLearningHours: 0,
     averageProgress,
   };
+}
+
+function membershipLookupIds(userId, userRow) {
+  const ids = new Set();
+  const primary = Number(userId);
+  if (Number.isFinite(primary) && primary > 0) ids.add(primary);
+  const wp = Number(userRow?.wp_user_id);
+  if (Number.isFinite(wp) && wp > 0) ids.add(wp);
+  return [...ids];
+}
+
+async function fetchCoursesMetaMap(courseIds) {
+  const ids = [...new Set((courseIds || []).map(Number).filter((n) => n > 0))];
+  const map = new Map();
+  if (!ids.length) return map;
+  try {
+    const rows = await sequelize.query(
+      `SELECT id, title, slug, thumbnail_url, price
+       FROM courses
+       WHERE id IN (:ids)`,
+      { replacements: { ids }, type: QueryTypes.SELECT },
+    );
+    for (const row of rows) {
+      map.set(String(row.id), row);
+    }
+  } catch (err) {
+    logger.warn('[account] fetchCoursesMetaMap failed (non-blocking)', { error: err.message });
+  }
+  return map;
 }
 
 async function fetchCourseMeta(courseId) {
@@ -177,19 +206,21 @@ async function myCourses(userId, { search } = {}) {
   // Resolve wp_user_id so migrated grants stored under the legacy id are included.
   const { Op } = require('sequelize');
   const userRow = await User.findByPk(userId, { attributes: ['id', 'wp_user_id'] });
-  const lookupIds = [String(userId)];
-  if (userRow?.wp_user_id != null) lookupIds.push(String(userRow.wp_user_id));
+  const lookupIds = membershipLookupIds(userId, userRow);
 
   // Return ALL granted courses (active AND expired). The caller/UI separates them
   // by `accessStatus`; expired courses are no longer silently dropped.
   const rows = await UserCourse.findAll({ where: { user_id: { [Op.in]: lookupIds } } });
   const now = new Date();
   const courseIds = rows.map((row) => Number(row.get({ plain: true }).course_id)).filter((n) => n > 0);
-  const summary = await fetchProgressSummary(userId, courseIds);
+  const [summary, metaMap] = await Promise.all([
+    fetchProgressSummary(userId, courseIds),
+    fetchCoursesMetaMap(courseIds),
+  ]);
   const out = [];
   for (const row of rows) {
     const r = row.get({ plain: true });
-    const meta = await fetchCourseMeta(r.course_id);
+    const meta = metaMap.get(String(r.course_id)) || null;
     const title = meta?.title || `Course #${r.course_id}`;
     const thumb = meta?.thumbnail_url ?? meta?.thumbnail ?? null;
     const slug = meta?.slug ?? null;
@@ -239,8 +270,7 @@ async function getSubscription(userId) {
 
   // Resolve both internal id and wp_user_id so migrated memberships are found
   const userRow = await User.findByPk(userId, { attributes: ['id', 'wp_user_id'] });
-  const lookupIds = [String(userId)];
-  if (userRow?.wp_user_id != null) lookupIds.push(String(userRow.wp_user_id));
+  const lookupIds = membershipLookupIds(userId, userRow);
 
   const membership = await UserMembership.findOne({
     where: { user_id: { [Op.in]: lookupIds } },
@@ -302,14 +332,59 @@ async function fetchPlanBySlug(slug) {
 }
 
 /**
- * Fetch courses by IDs + category IDs from course-service.
+ * Load plan course/category ids directly from the shared DB (plan_courses table).
+ * More reliable than HTTP to platform-service for membership course resolution.
  */
-async function fetchCoursesByIdsOrCatIds(ids, cat_ids, order = 'ASC') {
+async function fetchPlanLinkedCoursesFromDb(slug) {
+  if (!slug) return null;
+  try {
+    const rows = await sequelize.query(
+      `SELECT pp.id, pp.name, pp.slug,
+              (SELECT JSON_ARRAYAGG(pc.course_id) FROM plan_courses pc WHERE pc.plan_id = pp.id) AS course_ids,
+              (SELECT JSON_ARRAYAGG(pcc.course_cat_id) FROM plan_course_categories pcc WHERE pcc.plan_id = pp.id) AS course_cat_ids
+       FROM premium_plans pp
+       WHERE pp.slug = :slug AND pp.is_active = 1
+       LIMIT 1`,
+      { replacements: { slug }, type: QueryTypes.SELECT },
+    );
+    const row = rows[0];
+    if (!row) return null;
+    const parseJsonIds = (val) => {
+      if (val == null) return [];
+      if (Array.isArray(val)) return val.map(Number).filter((n) => n > 0);
+      try {
+        const parsed = typeof val === 'string' ? JSON.parse(val) : val;
+        return Array.isArray(parsed) ? parsed.map(Number).filter((n) => n > 0) : [];
+      } catch {
+        return [];
+      }
+    };
+    return {
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      course_ids: parseJsonIds(row.course_ids),
+      course_cat_ids: parseJsonIds(row.course_cat_ids),
+    };
+  } catch (err) {
+    logger.warn('[account] fetchPlanLinkedCoursesFromDb failed (non-blocking)', {
+      slug,
+      error: err.message,
+    });
+    return null;
+  }
+}
+
+/**
+ * Fetch courses by IDs + category IDs from course-service.
+ * Membership plans include draft/unpublished migrated courses — pass includeUnpublished.
+ */
+async function fetchCoursesByIdsOrCatIds(ids, cat_ids, order = 'ASC', { includeUnpublished = false } = {}) {
   if (ids.length === 0 && cat_ids.length === 0) return [];
   try {
     const { data } = await axios.post(
       `${config.courseServiceUrl}/internal/courses/by-ids`,
-      { ids, cat_ids, order: order === 'DESC' ? 'DESC' : 'ASC' },
+      { ids, cat_ids, order: order === 'DESC' ? 'DESC' : 'ASC', includeUnpublished: !!includeUnpublished },
       {
         timeout: 10000,
         headers: { 'x-internal-api-key': config.internalApiKey },
@@ -339,8 +414,7 @@ async function getMembershipCourses(userId) {
 
   // Resolve both internal id and wp_user_id so migrated memberships are found
   const userRow = await User.findByPk(userId, { attributes: ['id', 'wp_user_id'] });
-  const lookupIds = [String(userId)];
-  if (userRow?.wp_user_id != null) lookupIds.push(String(userRow.wp_user_id));
+  const lookupIds = membershipLookupIds(userId, userRow);
 
   // Get ALL active memberships for this user (multiple plans possible)
   const memberships = await UserMembership.findAll({
@@ -360,11 +434,17 @@ async function getMembershipCourses(userId) {
     const slug = membership.membership_type;
     if (!slug) continue;
 
-    const plan = await fetchPlanBySlug(slug);
+    // Prefer shared DB (plan_courses); fall back to platform-service internal API.
+    let plan = await fetchPlanLinkedCoursesFromDb(slug);
+    if (!plan || (!plan.course_ids?.length && !plan.course_cat_ids?.length)) {
+      plan = await fetchPlanBySlug(slug);
+    }
     const course_ids = Array.isArray(plan?.course_ids) ? plan.course_ids : [];
     const course_cat_ids = Array.isArray(plan?.course_cat_ids) ? plan.course_cat_ids : [];
 
-    const courses = await fetchCoursesByIdsOrCatIds(course_ids, course_cat_ids, 'DESC');
+    const courses = await fetchCoursesByIdsOrCatIds(course_ids, course_cat_ids, 'DESC', {
+      includeUnpublished: true,
+    });
 
     results.push({
       membershipId: membership.id,

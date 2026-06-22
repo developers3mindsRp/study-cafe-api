@@ -946,6 +946,8 @@ async function ensureMigratedColumns(tgt) {
         "ALTER TABLE orders ADD COLUMN wp_post_status VARCHAR(20) NULL",
         // User courses: access window end (NULL = lifetime/active; past date = expired)
         "ALTER TABLE user_courses ADD COLUMN expires_at DATETIME NULL",
+        // Users: profession may have been created as VARCHAR; widen to TEXT
+        "ALTER TABLE users MODIFY COLUMN profession TEXT",
     ];
     for (const sql of alters) {
         try {
@@ -1591,6 +1593,121 @@ function courseTypeToTier(courseType) {
     return null; // paid / free / unknown → not part of any membership
 }
 
+/** Each membership tier includes its own bucket plus all lower tiers. */
+const TIER_INCLUDES = {
+    basic: ['basic'],
+    premium: ['basic', 'premium'],
+    ultimate: ['basic', 'premium', 'ultimate'],
+};
+
+function isExcludedMembershipCourseTitle(title) {
+    const s = String(title || '');
+    return /^DUP /i.test(s) || /membership plan/i.test(s);
+}
+
+/** Group course rows into basic / premium / ultimate buckets (target course ids). */
+function groupMembershipCoursesByTier(rows, { getId, getTitle, getType }) {
+    const coursesByTier = { basic: [], premium: [], ultimate: [] };
+    for (const row of rows) {
+        if (isExcludedMembershipCourseTitle(getTitle(row))) continue;
+        const tier = courseTypeToTier(getType(row));
+        if (!tier) continue;
+        const courseId = getId(row);
+        if (!courseId) continue;
+        coursesByTier[tier].push(Number(courseId));
+    }
+    return coursesByTier;
+}
+
+/** Expected course count per canonical tier slug from a coursesByTier map. */
+function expectedCountsFromTierBuckets(coursesByTier) {
+    const expected = {};
+    for (const [slug, tiers] of Object.entries(TIER_INCLUDES)) {
+        const ids = new Set();
+        tiers.forEach((t) => coursesByTier[t].forEach((id) => ids.add(id)));
+        expected[slug] = ids.size;
+    }
+    return expected;
+}
+
+/** Write tier-based plan_courses links (replaces all existing rows). */
+async function writeTierPlanCourseLinks(tgt, slugToPlanId, coursesByTier) {
+    await tgt.query('DELETE FROM plan_courses', { raw: true });
+    let inserted = 0;
+    for (const [slug, includedTiers] of Object.entries(TIER_INCLUDES)) {
+        const planId = slugToPlanId[slug];
+        if (!planId) {
+            console.log(`   ⚠️  No premium_plans row for slug '${slug}'; skipping its course links.`);
+            continue;
+        }
+        const courseIds = new Set();
+        includedTiers.forEach((t) => coursesByTier[t].forEach((cid) => courseIds.add(cid)));
+        if (courseIds.size === 0) {
+            console.log(`   ⚠️  No courses mapped for plan '${slug}'; skipping.`);
+            continue;
+        }
+        const idList = [...courseIds];
+        for (let i = 0; i < idList.length; i += BATCH) {
+            const chunk = idList.slice(i, i + BATCH);
+            const values = chunk.map((cid) => `(${planId}, ${cid})`).join(',');
+            await tgt.query(`INSERT IGNORE INTO plan_courses (plan_id, course_id) VALUES ${values}`, { raw: true });
+        }
+        inserted += idList.length;
+        console.log(`   plan '${slug}' (#${planId}): ${idList.length} courses`);
+    }
+    console.log(`   ✅ ${inserted} plan–course links (tier-based)`);
+    return inserted;
+}
+
+async function countPlanCoursesByTierSlug(tgt) {
+    const rows = await tgt.query(
+        `SELECT LOWER(pp.slug) AS slug, COUNT(pc.course_id) AS c
+         FROM premium_plans pp
+         LEFT JOIN plan_courses pc ON pc.plan_id = pp.id
+         WHERE LOWER(pp.slug) IN ('basic', 'premium', 'ultimate')
+         GROUP BY pp.id, pp.slug`,
+        { type: QueryTypes.SELECT },
+    );
+    const counts = { basic: 0, premium: 0, ultimate: 0 };
+    (rows || []).forEach((r) => {
+        const slug = String(r.slug || '').toLowerCase();
+        if (slug in counts) counts[slug] = Number(r.c || 0);
+    });
+    return counts;
+}
+
+async function expectedTierPlanCountsFromTargetCourses(tgt) {
+    const courseRows = await tgt.query('SELECT id, title, course_type FROM courses', { type: QueryTypes.SELECT });
+    const coursesByTier = groupMembershipCoursesByTier(courseRows, {
+        getId: (c) => c.id,
+        getTitle: (c) => c.title,
+        getType: (c) => c.course_type,
+    });
+    return expectedCountsFromTierBuckets(coursesByTier);
+}
+
+/** Compare plan_courses against courses.course_type tier logic; rebuild if any tier is wrong. */
+async function verifyAndRepairPlanCourses(tgt) {
+    const [actual, expected] = await Promise.all([
+        countPlanCoursesByTierSlug(tgt),
+        expectedTierPlanCountsFromTargetCourses(tgt),
+    ]);
+    const mismatches = [];
+    for (const slug of Object.keys(TIER_INCLUDES)) {
+        if (actual[slug] !== expected[slug]) {
+            mismatches.push({ slug, actual: actual[slug], expected: expected[slug] });
+        }
+    }
+    if (!mismatches.length) {
+        console.log('   plan_courses: all tier plans match expected counts (basic/premium/ultimate).');
+        return { repaired: false, actual, expected };
+    }
+    console.log('   plan_courses: tier mismatch — rebuilding from courses.course_type:');
+    mismatches.forEach((m) => console.log(`     ${m.slug}: have ${m.actual}, expected ${m.expected}`));
+    await rebuildPlanCoursesFromTarget(tgt);
+    return { repaired: true, mismatches, actual, expected };
+}
+
 /**
  * Ensure the three canonical membership tier plans exist (basic, premium, ultimate)
  * with a tier_rank for upgrade ordering. Existing rows are left untouched.
@@ -1661,13 +1778,6 @@ async function migratePlanCourses(src, tgt) {
     const slugToPlanId = {};
     (planRows || []).forEach((p) => { slugToPlanId[String(p.slug || '').toLowerCase()] = p.id; });
 
-    // Tier hierarchy: each plan includes its own tier + all lower tiers.
-    const TIER_INCLUDES = {
-        basic: ['basic'],
-        premium: ['basic', 'premium'],
-        ultimate: ['basic', 'premium', 'ultimate'],
-    };
-
     // Resolve source course id → target course id (via wp_post_id, then sc id).
     const courseRows = await tgt.query('SELECT id, wp_post_id FROM courses', { type: QueryTypes.SELECT });
     const wpPostIdToCourseId = {};
@@ -1677,39 +1787,33 @@ async function migratePlanCourses(src, tgt) {
         if (c.wp_post_id != null) wpPostIdToCourseId[Number(c.wp_post_id)] = c.id;
     });
 
-    // Group source courses by tier.
     const scCourses = await src.query('SELECT id, wp_post_id, course_type, title FROM sc_courses', { type: QueryTypes.SELECT });
-    const coursesByTier = { basic: [], premium: [], ultimate: [] };
-    for (const c of scCourses) {
-        // Skip membership product posts themselves (they are not learning courses).
-        const title = String(c.title || '');
-        if (/^DUP /i.test(title)) continue;
-        if (/membership plan/i.test(title)) continue;
-        const tier = courseTypeToTier(c.course_type);
-        if (!tier) continue;
-        const targetCourseId = (c.wp_post_id != null && wpPostIdToCourseId[Number(c.wp_post_id)]) || (courseIdSet.has(Number(c.id)) ? Number(c.id) : null);
-        if (!targetCourseId) continue;
-        coursesByTier[tier].push(targetCourseId);
-    }
+    const coursesByTier = groupMembershipCoursesByTier(scCourses, {
+        getTitle: (c) => c.title,
+        getType: (c) => c.course_type,
+        getId: (c) =>
+            (c.wp_post_id != null && wpPostIdToCourseId[Number(c.wp_post_id)])
+            || (courseIdSet.has(Number(c.id)) ? Number(c.id) : null),
+    });
 
-    await tgt.query('DELETE FROM plan_courses', { raw: true });
+    await writeTierPlanCourseLinks(tgt, slugToPlanId, coursesByTier);
+}
 
-    let inserted = 0;
-    for (const [slug, includedTiers] of Object.entries(TIER_INCLUDES)) {
-        const planId = slugToPlanId[slug];
-        if (!planId) {
-            console.log(`   ⚠️  No premium_plans row for slug '${slug}'; skipping its course links.`);
-            continue;
-        }
-        const courseIds = new Set();
-        includedTiers.forEach((t) => coursesByTier[t].forEach((cid) => courseIds.add(cid)));
-        if (courseIds.size === 0) continue;
-        const values = [...courseIds].map((cid) => `(${planId}, ${cid})`).join(',');
-        await tgt.query(`INSERT IGNORE INTO plan_courses (plan_id, course_id) VALUES ${values}`, { raw: true });
-        inserted += courseIds.size;
-        console.log(`   plan '${slug}' (#${planId}): ${courseIds.size} courses`);
-    }
-    console.log(`   ✅ ${inserted} plan–course links (tier-based)`);
+/** Rebuild plan_courses from the target courses table (used when links were wiped post-migration). */
+async function rebuildPlanCoursesFromTarget(tgt) {
+    await ensureTierPlans(tgt);
+    const planRows = await tgt.query('SELECT id, slug FROM premium_plans', { type: QueryTypes.SELECT });
+    const slugToPlanId = {};
+    (planRows || []).forEach((p) => { slugToPlanId[String(p.slug || '').toLowerCase()] = p.id; });
+
+    const courseRows = await tgt.query('SELECT id, title, course_type FROM courses', { type: QueryTypes.SELECT });
+    const coursesByTier = groupMembershipCoursesByTier(courseRows, {
+        getId: (c) => c.id,
+        getTitle: (c) => c.title,
+        getType: (c) => c.course_type,
+    });
+
+    await writeTierPlanCourseLinks(tgt, slugToPlanId, coursesByTier);
 }
 
 async function migrateCategories(src, tgt) {
@@ -2103,7 +2207,11 @@ async function migrateOrders(src, tgt) {
             const orderId = esc(`ORD_${msId}`);
             const courseId = mapCid(o.course_id);
             const userId = mapUid(o.user_id);
-            const type = courseId != null ? 'course' : 'membership';
+            // Use WP item_post_type from sc_orders (set in stage 1) to decide order type.
+            // Only orders whose itemid points to a WP 'courses' post are course orders.
+            // All others (e.g. 'page' for membership plans) are classified as 'membership'.
+            const itemPostType = String(o.item_post_type || '').toLowerCase().trim();
+            const type = itemPostType === 'courses' ? 'course' : (courseId != null ? 'course' : 'membership');
             const entityId = courseId != null ? esc(String(courseId)) : 'NULL';
             const originalAmount = o.original_amount != null ? o.original_amount : (o.amount || 'NULL');
             const couponCode = o.coupon_code ? esc(o.coupon_code) : 'NULL';
@@ -2601,7 +2709,9 @@ async function migrateUserCourses(src, tgt) {
         const courseId = mapCid(e.course_id);
         const key = `${userId}-${courseId}`;
         const wpStatus = String(e.wp_post_status || '').toLowerCase().trim();
-        const isActive = wpStatus !== 'draft'; // publish/empty/unknown => treat as active
+        // Only WP 'publish' orders give active course access.
+        // 'draft' = expired, 'pending' = payment incomplete → treat as expired/no-access.
+        const isActive = wpStatus === 'publish';
         const existing = byKey.get(key);
         if (!existing) {
             byKey.set(key, { userId, courseId, orderId: e.order_id, isActive });
@@ -2655,21 +2765,29 @@ async function applyPostMigrationDataPatches(tgt) {
              WHERE o.user_id IS NULL AND o.buyer_email IS NOT NULL AND TRIM(o.buyer_email) != ''`,
             { raw: true }
         );
+        // Only backfill enrollments for orders whose course_id exists in the courses table.
+        // Deleted-course orders (course_id = raw WP id with no courses row) are excluded.
         const [c5] = await tgt.query(
             `INSERT IGNORE INTO enrollments (user_id, course_id, order_id, enrolled_at)
              SELECT o.user_id, o.course_id, o.id, COALESCE(o.created_at, NOW())
              FROM orders o
+             INNER JOIN courses c ON c.id = o.course_id
              WHERE o.user_id IS NOT NULL AND o.course_id IS NOT NULL AND o.status = 'paid'
              AND NOT EXISTS (
                SELECT 1 FROM enrollments e WHERE e.user_id = o.user_id AND e.course_id = o.course_id
              )`,
             { raw: true }
         );
+        // Backfill any user_courses rows missing after migrateUserCourses.
+        // Respect wp_post_status: 'draft' = expired (set past timestamp), 'publish' = active (NULL expires_at).
+        // 'pending' orders are NOT included — incomplete payments don't grant access.
         const [c6] = await tgt.query(
-            `INSERT IGNORE INTO user_courses (user_id, course_id, order_id)
-             SELECT o.user_id, o.course_id, o.order_id
+            `INSERT IGNORE INTO user_courses (user_id, course_id, order_id, expires_at)
+             SELECT o.user_id, o.course_id, o.order_id,
+               CASE WHEN o.wp_post_status = 'draft' THEN '2000-01-01 00:00:00' ELSE NULL END
              FROM orders o
-             WHERE o.user_id IS NOT NULL AND o.course_id IS NOT NULL AND o.status = 'paid'
+             WHERE o.user_id IS NOT NULL AND o.course_id IS NOT NULL
+               AND o.status = 'paid' AND o.wp_post_status IN ('publish','draft')
              AND NOT EXISTS (
                SELECT 1 FROM user_courses uc WHERE uc.user_id = o.user_id AND uc.course_id = o.course_id
              )`,
@@ -2681,6 +2799,8 @@ async function applyPostMigrationDataPatches(tgt) {
         console.log(`   orders user_id linked by email: ${c4?.affectedRows ?? 0}`);
         console.log(`   enrollments backfilled: ${c5?.affectedRows ?? 0}`);
         console.log(`   user_courses backfilled: ${c6?.affectedRows ?? 0}`);
+
+        await verifyAndRepairPlanCourses(tgt);
     } catch (e) {
         if (e.message && e.message.includes("doesn't exist")) {
             console.log('   ⏭️  Patch skipped (tables not ready)');
@@ -2913,18 +3033,19 @@ async function deriveAffiliateEarningsFromOrders(src, tgt) {
         let histId = 0;
         const histValues = [];
         for (const o of rows) {
+            // Only count earnings from successfully paid orders; pending/draft orders are excluded.
+            const isPaid = String(o.status || '').toLowerCase() === 'paid';
+            if (!isPaid) continue;
             const affiliateMsId = mapUid(parseInt(o.affiliate, 10));
             if (!affiliateMsId) continue;
             const buyerMsId = mapUid(o.user_id);
             if (!buyerMsId) continue;
-            const isPaid = String(o.status || '').toLowerCase() === 'paid';
             const commission = hasCommission && o.affiliate_commission != null ? Number(o.affiliate_commission) : 0;
             if (!(commission > 0)) continue;
             const courseId = mapCid(o.course_id);
             const orderRef = `ORD_${o.id}`;
-            const histStatus = isPaid ? 'confirmed' : 'pending';
-            histValues.push(`(${++histId}, ${courseId || 'NULL'}, 'course', ${courseId ? esc(String(courseId)) : 'NULL'}, ${buyerMsId}, ${affiliateMsId}, ${esc(orderRef)}, ${o.amount != null ? o.amount : 'NULL'}, ${commission}, ${esc(histStatus)}, ${escDate(o.created_at)})`);
-            if (isPaid) balances.set(affiliateMsId, (balances.get(affiliateMsId) || 0) + commission);
+            histValues.push(`(${++histId}, ${courseId || 'NULL'}, 'course', ${courseId ? esc(String(courseId)) : 'NULL'}, ${buyerMsId}, ${affiliateMsId}, ${esc(orderRef)}, ${o.amount != null ? o.amount : 'NULL'}, ${commission}, 'confirmed', ${escDate(o.created_at)})`);
+            balances.set(affiliateMsId, (balances.get(affiliateMsId) || 0) + commission);
         }
 
         for (let i = 0; i < histValues.length; i += BATCH) {
@@ -2953,7 +3074,25 @@ async function deriveAffiliateEarningsFromOrders(src, tgt) {
 }
 
 // ──── Run ────
-main().catch(err => {
-    console.error('❌ Migration failed:', err);
-    process.exit(1);
-});
+async function repairPlanCoursesOnly() {
+    const tgt = new Sequelize(TGT_CONFIG.database, TGT_CONFIG.user, TGT_CONFIG.password, {
+        host: TGT_CONFIG.host, port: TGT_CONFIG.port, dialect: 'mysql', logging: false,
+    });
+    _tgt = tgt;
+    await tgt.authenticate();
+    console.log(`✅ Connected to TARGET (${TGT_CONFIG.host}:${TGT_CONFIG.port}/${TGT_CONFIG.database})`);
+    await rebuildPlanCoursesFromTarget(tgt);
+    await tgt.close();
+}
+
+if (process.argv.includes('--repair-plan-courses')) {
+    repairPlanCoursesOnly().catch((err) => {
+        console.error('❌ plan_courses repair failed:', err);
+        process.exit(1);
+    });
+} else {
+    main().catch(err => {
+        console.error('❌ Migration failed:', err);
+        process.exit(1);
+    });
+}
