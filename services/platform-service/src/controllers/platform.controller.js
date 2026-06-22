@@ -579,7 +579,10 @@ const getContactInquiryInternal = asyncHandler(async (req, res) => {
 // ── SEO Metadata ───────────────────────────────────────────────────
 
 const getSeoMetadataInternal = asyncHandler(async (req, res) => {
-  const data = await platformService.seo.getSeoMetadataInternal();
+  const includeModulePaths =
+    req.query.include_module_paths === '1'
+    || req.query.include_module_paths === 'true';
+  const data = await platformService.seo.getSeoMetadataInternal({ includeModulePaths });
   sendSuccess(res, data);
 });
 
@@ -627,9 +630,8 @@ const deleteSeoMetadata = asyncHandler(async (req, res) => {
 });
 
 const syncModuleSeoMetadata = asyncHandler(async (req, res) => {
-  const data = await platformService.seo.syncModuleSeoMetadataInternal(req.body);
-  if (!data) throw new AppError('SEO metadata sync failed', 400);
-  sendSuccess(res, data);
+  await platformService.seo.syncModuleSeoMetadataInternal(req.body);
+  sendSuccess(res, { ok: true });
 });
 
 const listSiteSeoRoutesInternal = asyncHandler(async (req, res) => {

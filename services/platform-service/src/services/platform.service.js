@@ -2415,9 +2415,6 @@ async function createArticle(data) {
   if (court_ids.length) await ArticleCourtMap.bulkCreate(court_ids.map((court_id) => ({ article_id: articleId, court_id })));
 
   const out = await getArticleByIdInternal(articleId);
-  await syncArticleSeoMetadata(out).catch((err) => {
-    logger.error('[createArticle] sync SEO metadata failed', { error: err.message });
-  });
   logger.info('[createArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
   await articleScheduling.syncArticlePublishJob(out).catch((err) => {
     logger.error('[createArticle] sync schedule failed', { error: err.message, stack: err.stack });
@@ -2436,7 +2433,6 @@ async function updateArticle(id, data) {
     ...patch
   } = data && typeof data === 'object' ? data : {};
   const cur = row.get({ plain: true });
-  const previousSlug = cur.slug;
   const nextStatus = patch.status !== undefined ? normalizeArticleAdminStatus(patch.status) : cur.status;
 
   let nextScheduled = cur.scheduled_publish_at;
@@ -2541,23 +2537,6 @@ async function updateArticle(id, data) {
     if (ids.length) await ArticleCourtMap.bulkCreate(ids.map((court_id) => ({ article_id: id, court_id })));
   }
   const out = await getArticleByIdInternal(id);
-  const slugChanged = patch.slug !== undefined && String(previousSlug) !== String(out?.slug);
-  const seoFieldsTouched =
-    patch.meta_title !== undefined ||
-    patch.meta_description !== undefined ||
-    patch.meta_keywords !== undefined ||
-    patch.canonical_url !== undefined ||
-    patch.robots !== undefined ||
-    patch.og_title !== undefined ||
-    patch.og_description !== undefined ||
-    patch.og_image_url !== undefined ||
-    patch.title !== undefined ||
-    slugChanged;
-  if (seoFieldsTouched) {
-    await syncArticleSeoMetadata(out, slugChanged ? previousSlug : null).catch((err) => {
-      logger.error('[updateArticle] sync SEO metadata failed', { error: err.message });
-    });
-  }
   logger.info('[updateArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
   await articleScheduling.syncArticlePublishJob(out).catch((err) => {
     logger.error('[updateArticle] sync schedule failed', { error: err.message, stack: err.stack });
@@ -2570,9 +2549,6 @@ async function deleteArticle(id) {
     attributes: ['id', 'slug'],
   });
   if (!row) return false;
-  if (row.slug) {
-    await deleteSeoMetadataByPaths(articleDetailSeoPaths(row.get({ plain: true }))).catch(() => {});
-  }
   await articleScheduling.removeScheduledPublishJob(id).catch(() => {});
   await row.destroy();
   return true;
@@ -2751,12 +2727,6 @@ function isModuleDetailSeoPath(pageSlug) {
   );
 }
 
-/** SEO + lookups: canonical .html path only (legacy /blogs/* still resolved on read). */
-function articleDetailSeoPaths(article) {
-  const path = articleCanonicalPublicPath(article);
-  return path ? [canonicalSlug(path)] : [];
-}
-
 function courseDetailSeoPath(slug) {
   const s = String(slug || '').trim();
   return s ? canonicalSlug(`/course/${s}`) : '';
@@ -2802,69 +2772,74 @@ async function findSeoMetadataRowByPaths(paths) {
   return rows[0] || null;
 }
 
-async function upsertSeoMetadataForPaths(paths, data) {
-  const uniquePaths = [...new Set((paths || []).map(canonicalSlug).filter(Boolean))];
-  if (!uniquePaths.length) return null;
-
-  const primaryPath = uniquePaths[0];
-  const metaTitle = String(data?.meta_title || data?.page_name || '').trim();
-  if (!metaTitle) return null;
-
-  const payload = {
-    page_name: String(data?.page_name || metaTitle).trim() || metaTitle,
-    page_slug: primaryPath,
-    meta_title: metaTitle,
-    meta_description: data?.meta_description ?? null,
-    meta_keywords: data?.meta_keywords ?? null,
-    canonical_url: data?.canonical_url ?? null,
-    og_title: data?.og_title ?? null,
-    og_description: data?.og_description ?? null,
-    og_image_url: data?.og_image_url ?? null,
-    robots: data?.robots || 'index, follow',
+function seoMetadataRowFromModule(path, seo) {
+  const pageSlug = canonicalSlug(path);
+  return {
+    page_slug: pageSlug,
+    page_name: seo.page_name,
+    meta_title: seo.meta_title,
+    meta_description: seo.meta_description ?? null,
+    meta_keywords: seo.meta_keywords ?? null,
+    canonical_url: seo.canonical_url ?? null,
+    og_title: seo.og_title ?? null,
+    og_description: seo.og_description ?? null,
+    og_image_url: seo.og_image_url ?? null,
+    robots: seo.robots || 'index, follow',
   };
-
-  const existing = await findSeoMetadataRowByPaths(uniquePaths);
-  if (existing) {
-    await existing.update(payload);
-    return existing.get({ plain: true });
-  }
-
-  const row = await SeoMetadata.create(payload);
-  return row.get({ plain: true });
 }
 
-async function syncArticleSeoMetadata(article, previousSlug) {
-  if (!article?.slug) return null;
-  if (previousSlug && String(previousSlug).trim() !== String(article.slug).trim()) {
-    await deleteSeoMetadataByPaths(
-      articleDetailSeoPaths({ slug: previousSlug, id: article.id })
-    );
+async function resolveSeoFromArticlePath(path) {
+  const key = canonicalSlug(path);
+  let pathKey = null;
+
+  const blogMatch = key.match(ARTICLE_DETAIL_PATH_RE);
+  if (blogMatch) pathKey = blogMatch[1];
+  else {
+    const htmlMatch = key.match(WP_ARTICLE_HTML_PATH_RE);
+    if (htmlMatch) pathKey = htmlMatch[1];
   }
-  const paths = articleDetailSeoPaths(article);
-  const canonicalPath = articleCanonicalPublicPath(article);
-  const seo = seoPayloadFromModuleFields(article, {
-    page_name: article.title,
-    title: article.title,
-  });
+  if (!pathKey) return null;
+
+  const row = await findPublishedArticleRowByPublicPathKey(pathKey);
+  if (!row) return null;
+
+  const plain = row.get({ plain: true });
+  const canonicalPath = articleCanonicalPublicPath(plain) || key;
+  const seo = seoPayloadFromModuleFields(plain, { page_name: plain.title, title: plain.title });
   if (!seo.canonical_url && canonicalPath) {
     seo.canonical_url = canonicalPath;
   }
-  return upsertSeoMetadataForPaths(paths, seo);
-}
-
-async function syncCourseSeoMetadata(course) {
-  const path = courseDetailSeoPath(course?.slug);
-  if (!path) return null;
-  const seo = seoPayloadFromModuleFields(course, { page_name: course.title, title: course.title });
-  return upsertSeoMetadataForPaths([path], seo);
-}
-
-async function syncModuleSeoMetadataInternal(data) {
-  if (Array.isArray(data?.remove_paths) && data.remove_paths.length) {
-    await deleteSeoMetadataByPaths(data.remove_paths);
+  if (!seo.og_image_url && plain.thumbnail_url) {
+    seo.og_image_url = plain.thumbnail_url;
   }
-  const paths = Array.isArray(data?.paths) ? data.paths : [];
-  return upsertSeoMetadataForPaths(paths, data);
+  return seoMetadataRowFromModule(canonicalPath, seo);
+}
+
+async function resolveSeoFromCoursePath(path) {
+  const key = canonicalSlug(path);
+  const courseMatch = key.match(COURSE_DETAIL_PATH_RE);
+  if (!courseMatch) return null;
+
+  const slugSegment = courseMatch[1];
+  const candidates = normalizeSlugCandidates(slugSegment);
+  const courseRows = await sequelize.query(
+    `SELECT id, title, slug, meta_title, meta_description, meta_keywords,
+            canonical_url, robots, og_title, og_description, og_image_url, thumbnail_url
+     FROM courses WHERE slug IN (:slugs) AND ${sqlDeletedAtIsNull()} LIMIT 1`,
+    { replacements: { slugs: candidates.length ? candidates : [slugSegment] }, type: QueryTypes.SELECT }
+  );
+  const row = courseRows?.[0];
+  if (!row) return null;
+
+  const coursePath = courseDetailSeoPath(row.slug);
+  const seo = seoPayloadFromModuleFields(row, { page_name: row.title, title: row.title });
+  if (!seo.canonical_url && coursePath) {
+    seo.canonical_url = coursePath;
+  }
+  if (!seo.og_image_url && row.thumbnail_url) {
+    seo.og_image_url = row.thumbnail_url;
+  }
+  return seoMetadataRowFromModule(coursePath, seo);
 }
 
 async function resolveSeoLookupPaths(path) {
@@ -2894,44 +2869,12 @@ async function resolveSeoLookupPaths(path) {
   return out;
 }
 
-async function buildSeoFromArticlePath(path) {
-  const key = canonicalSlug(path);
-  let pathKey = null;
-
-  const blogMatch = key.match(ARTICLE_DETAIL_PATH_RE);
-  if (blogMatch) pathKey = blogMatch[1];
-  else {
-    const htmlMatch = key.match(WP_ARTICLE_HTML_PATH_RE);
-    if (htmlMatch) pathKey = htmlMatch[1];
+/** Legacy sync endpoint — only removes stale module rows; no longer upserts. */
+async function syncModuleSeoMetadataInternal(data) {
+  if (Array.isArray(data?.remove_paths) && data.remove_paths.length) {
+    await deleteSeoMetadataByPaths(data.remove_paths);
   }
-  if (!pathKey) return null;
-
-  const row = await findPublishedArticleRowByPublicPathKey(pathKey);
-  if (!row) return null;
-
-  const plain = row.get({ plain: true });
-  const paths = articleDetailSeoPaths(plain);
-  const seo = seoPayloadFromModuleFields(plain, { page_name: plain.title, title: plain.title });
-  return upsertSeoMetadataForPaths(paths, seo);
-}
-
-async function buildSeoFromCoursePath(path) {
-  const key = canonicalSlug(path);
-  const courseMatch = key.match(COURSE_DETAIL_PATH_RE);
-  if (!courseMatch) return null;
-
-  const slugSegment = courseMatch[1];
-  const candidates = normalizeSlugCandidates(slugSegment);
-  const courseRows = await sequelize.query(
-    `SELECT id, title, slug, meta_title, meta_description, meta_keywords,
-            canonical_url, robots, og_title, og_description, og_image_url
-     FROM courses WHERE slug IN (:slugs) AND ${sqlDeletedAtIsNull()} LIMIT 1`,
-    { replacements: { slugs: candidates.length ? candidates : [slugSegment] }, type: QueryTypes.SELECT }
-  );
-  const row = courseRows?.[0];
-  if (!row) return null;
-
-  return syncCourseSeoMetadata(row);
+  return null;
 }
 
 function normalizeSlugCandidates(slug) {
@@ -3089,9 +3032,13 @@ async function checkSlugNotUsedByModule(slug) {
   return { conflict: false };
 }
 
-async function getSeoMetadataInternal() {
+async function getSeoMetadataInternal(options = {}) {
   const rows = await SeoMetadata.findAll({ order: [['id', 'DESC']] });
-  return rows.map((r) => r.get({ plain: true }));
+  const mapped = rows.map((r) => r.get({ plain: true }));
+  if (options.includeModulePaths) {
+    return mapped;
+  }
+  return mapped.filter((r) => !isModuleDetailSeoPath(r.page_slug));
 }
 
 async function getSeoMetadataByIdInternal(id) {
@@ -3100,6 +3047,17 @@ async function getSeoMetadataByIdInternal(id) {
 }
 
 async function getSeoMetadataBySlugPublic(slug) {
+  const key = canonicalSlug(slug);
+
+  if (ARTICLE_DETAIL_PATH_RE.test(key) || WP_ARTICLE_HTML_PATH_RE.test(key)) {
+    const fromArticle = await resolveSeoFromArticlePath(key);
+    if (fromArticle) return fromArticle;
+  }
+  if (COURSE_DETAIL_PATH_RE.test(key)) {
+    const fromCourse = await resolveSeoFromCoursePath(key);
+    if (fromCourse) return fromCourse;
+  }
+
   const lookupPaths = await resolveSeoLookupPaths(slug);
   const candidates = lookupPaths.length
     ? lookupPaths
@@ -3107,14 +3065,6 @@ async function getSeoMetadataBySlugPublic(slug) {
 
   const row = await findSeoMetadataRowByPaths(candidates);
   if (row) return row.get({ plain: true });
-
-  const key = canonicalSlug(slug);
-  if (ARTICLE_DETAIL_PATH_RE.test(key) || WP_ARTICLE_HTML_PATH_RE.test(key)) {
-    return buildSeoFromArticlePath(key);
-  }
-  if (COURSE_DETAIL_PATH_RE.test(key)) {
-    return buildSeoFromCoursePath(key);
-  }
 
   return null;
 }
@@ -3124,10 +3074,10 @@ async function createSeoMetadata(data) {
   if (conflict.conflict) {
     const hint =
       conflict.type === 'article'
-        ? `/{slug}-${conflict.slug}.html (use article id in path)`
-        : `/course/${conflict.slug}`;
+        ? 'Articles → Create/Edit → SEO & Open Graph'
+        : 'Courses → Create/Edit → SEO & Meta';
     throw new AppError(
-      `Slug '${conflict.slug}' is already used by a ${conflict.type}. Use path '${hint}' in SEO metadata (synced automatically when saving the ${conflict.type}).`,
+      `Path '${data.page_slug}' belongs to a ${conflict.type}. Manage SEO from ${hint}, not SEO Metadata.`,
       409
     );
   }
@@ -3159,18 +3109,25 @@ async function updateSeoMetadata(id, data) {
   const row = await SeoMetadata.findByPk(id);
   if (!row) return null;
 
+  const existingSlug = row.get('page_slug');
+  if (isModuleDetailSeoPath(existingSlug)) {
+    throw new AppError(
+      'This SEO record belongs to an article or course. Manage SEO from Articles or Courses, not SEO Metadata.',
+      409
+    );
+  }
+
   if (data.page_slug !== undefined) {
-    const existingSlug = row.get('page_slug');
     const slugUnchanged = canonicalSlug(existingSlug) === canonicalSlug(data.page_slug);
     if (!slugUnchanged) {
       const conflict = await checkSlugNotUsedByModule(data.page_slug);
       if (conflict.conflict) {
         const hint =
           conflict.type === 'article'
-            ? `/{slug}-{articleId}.html`
-            : `/course/${conflict.slug}`;
+            ? 'Articles → Create/Edit → SEO & Open Graph'
+            : 'Courses → Create/Edit → SEO & Meta';
         throw new AppError(
-          `Slug '${conflict.slug}' is already used by a ${conflict.type}. Use path '${hint}' in SEO metadata (synced automatically when saving the ${conflict.type}).`,
+          `Path '${data.page_slug}' belongs to a ${conflict.type}. Manage SEO from ${hint}, not SEO Metadata.`,
           409
         );
       }
@@ -3308,7 +3265,7 @@ module.exports = {
     updateSeoMetadata,
     deleteSeoMetadata,
     syncModuleSeoMetadataInternal,
-    syncCourseSeoMetadata,
+    isModuleDetailSeoPath,
   },
   siteSeoRoutes: {
     listSiteSeoRoutesInternal,

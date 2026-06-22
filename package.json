@@ -40,7 +40,10 @@
     "migrate:email-verified": "cross-env PORT=4001 npm run migrate:email-verified --prefix services/auth-service",
     "migrate:gst": "node scripts/check-gst-column.js",
     "check:gst": "node scripts/check-gst-column.js",
-    "migrate:article-type-of-tax": "node scripts/add-article-type-of-tax-column.js"
+    "migrate:article-type-of-tax": "node scripts/add-article-type-of-tax-column.js",
+    "seo:cleanup-module-metadata": "node scripts/cleanup-module-seo-metadata.js",
+    "seo:audit-migration": "node scripts/audit-article-course-seo-migration.js",
+    "seo:backfill-entity-fields": "node scripts/backfill-article-course-seo-fields.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

@@ -8,8 +8,12 @@
  *     are refreshed from source on every run.
  *   - Admin-managed tables (home_sections, faqs, testimonials, cms_pages,
  *     footer_data, states, payment_config, admin_logs, batch_enrollments,
- *     materials, payments, outbox_events, roles) are NEVER truncated;
+ *     materials, payments, outbox_events, roles, seo_metadata) are NEVER truncated;
  *     data you add via the admin panel is preserved across runs.
+ *
+ * Post-sync SEO (automatic, safe to re-run):
+ *   - Backfills canonical/robots/OG on articles & courses (entity tables only)
+ *   - Removes article/course duplicate rows from seo_metadata (static routes kept)
  *
  * Media: single `media` table (WordPress sc_media → media with category=library).
  * Legacy `media_assets` (admin icons) is merged after WP media import, then dropped.
@@ -2739,7 +2743,34 @@ async function migrateUserCourses(src, tgt) {
     console.log(`   ✅ ${pairs.length} user_courses (${expiredCount} expired)`);
 }
 
-/** Enroll purchased users into the first batch per course so dashboard videos are accessible. */
+/** Backfill article/course SEO on entity tables and remove module rows from seo_metadata. */
+async function applyEntitySeoMigrationSteps(tgt) {
+    const {
+        backfillEntitySeoFields,
+        cleanupModuleSeoMetadata,
+    } = require('./seo-migration-utils');
+
+    const runQuery = async (sql, params) => {
+        const result = await tgt.query(sql, { replacements: params, raw: true });
+        return Array.isArray(result) ? result[0] : result;
+    };
+
+    console.log('🔍 Applying entity SEO migration steps...');
+    try {
+        const backfill = await backfillEntitySeoFields(runQuery, { dryRun: false });
+        console.log(`   article/course SEO fields backfilled: articles=${backfill.updated.articles}, courses=${backfill.updated.courses}`);
+
+        const cleanup = await cleanupModuleSeoMetadata(runQuery, { dryRun: false });
+        console.log(`   module seo_metadata rows removed: ${cleanup.deleted}`);
+    } catch (e) {
+        if (e.message && (e.message.includes("doesn't exist") || e.message.includes('Unknown column'))) {
+            console.log('   ⏭️  Entity SEO steps skipped (tables/columns not ready)');
+            return;
+        }
+        throw e;
+    }
+}
+
 /** Correct legacy rows after upsert sync (safe to re-run). */
 async function applyPostMigrationDataPatches(tgt) {
     console.log('🔧 Applying post-migration data patches...');
@@ -2801,6 +2832,7 @@ async function applyPostMigrationDataPatches(tgt) {
         console.log(`   user_courses backfilled: ${c6?.affectedRows ?? 0}`);
 
         await verifyAndRepairPlanCourses(tgt);
+        await applyEntitySeoMigrationSteps(tgt);
     } catch (e) {
         if (e.message && e.message.includes("doesn't exist")) {
             console.log('   ⏭️  Patch skipped (tables not ready)');
