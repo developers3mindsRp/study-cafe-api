@@ -409,28 +409,102 @@ function calculateDiscount(coupon, amount) {
   return Math.max(0, Math.min(discount, amount));
 }
 
-function buildCouponResult(coupon, amount, typeUpper) {
-  const now = new Date();
+function normalizeCouponCodeInput(code) {
+  return String(code || '').trim().toLowerCase();
+}
+
+function isCouponPublished(status) {
+  if (status == null || String(status).trim() === '') return false;
+  const s = String(status).toLowerCase().trim();
+  return s === 'publish' || s === 'published' || s === 'active';
+}
+
+/** Expire date is inclusive through end of that calendar day (UTC). */
+function couponExpireEndInstant(expireDateRaw) {
+  if (!expireDateRaw) return null;
+  const d = new Date(expireDateRaw);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCHours(23, 59, 59, 999);
+  return d;
+}
+
+function getCouponDateState(coupon, now = new Date()) {
   const startDate = coupon.start_date ? new Date(coupon.start_date) : null;
-  const expireDate = coupon.expire_date ? new Date(coupon.expire_date) : null;
-  const published = coupon.status === 'publish';
+  const expireEnd = couponExpireEndInstant(coupon.expire_date);
+  const notYetActive =
+    startDate && !Number.isNaN(startDate.getTime()) && now < startDate;
+  const expired = expireEnd && now > expireEnd;
+  const dateValid = !notYetActive && !expired;
+  return { notYetActive, expired, dateValid };
+}
+
+async function findCouponByCode(rawCode) {
+  const normalizedCode = normalizeCouponCodeInput(rawCode);
+  if (!normalizedCode) return null;
+
+  const coupon = await Coupon.findOne({
+    where: sequelize.where(sequelize.fn('lower', sequelize.col('code')), normalizedCode),
+  });
+  if (coupon) return coupon;
+
+  // Legacy rows may have stray whitespace in code (fallback only).
+  try {
+    return await Coupon.findOne({
+      where: sequelize.where(
+        sequelize.fn('lower', sequelize.fn('trim', sequelize.col('code'))),
+        normalizedCode,
+      ),
+    });
+  } catch (err) {
+    logger.warn(`[orders] findCouponByCode trim fallback failed: ${err.message}`);
+    return null;
+  }
+}
+
+function resolveCouponInactiveReason(coupon, amount, typeUpper) {
   const validType = isCouponTypeValid(coupon, typeUpper);
+  if (!validType) return 'Coupon not applicable for selected type';
+
+  const { notYetActive, expired } = getCouponDateState(coupon);
+  if (notYetActive) return 'Coupon not active yet';
+  if (expired) return 'Coupon has expired';
+
+  const published = isCouponPublished(coupon.status);
+  if (!published) return 'Coupon is not published';
+
   const meetsMinOrder = amount >= parseAmount(coupon.min_order);
-  const dateValid = (!startDate || now >= startDate) && (!expireDate || now <= expireDate);
+  if (!meetsMinOrder) {
+    return `Minimum order value ₹${parseAmount(coupon.min_order)} required`;
+  }
+
+  return null;
+}
+
+function couponInactiveReasonToMessage(inactiveReason) {
+  switch (inactiveReason) {
+    case 'Coupon has expired':
+      return 'Coupon expired';
+    case 'Coupon not active yet':
+      return 'This coupon is not active yet';
+    case 'Coupon is not published':
+      return 'This coupon is no longer valid';
+    case 'Coupon not applicable for selected type':
+      return 'This coupon does not apply to this purchase';
+    default:
+      return inactiveReason || 'Coupon cannot be applied';
+  }
+}
+
+function throwIfCouponCannotApply(result) {
+  if (result.canApply) return;
+  throw new AppError(result.inactiveReason || 'Coupon cannot be applied', 400);
+}
+
+function buildCouponResult(coupon, amount, typeUpper) {
+  const inactiveReason = resolveCouponInactiveReason(coupon, amount, typeUpper);
   const discountAmount = calculateDiscount(coupon, amount);
   const finalAmount = Number((amount - discountAmount).toFixed(2));
-  const canApply = published && validType && dateValid && meetsMinOrder;
-  let inactiveReason = null;
-
-  if (!validType) {
-    inactiveReason = 'Coupon not applicable for selected type';
-  } else if (!published) {
-    inactiveReason = 'Coupon is not published';
-  } else if (!dateValid) {
-    inactiveReason = startDate && now < startDate ? 'Coupon not active yet' : 'Coupon has expired';
-  } else if (!meetsMinOrder) {
-    inactiveReason = `Minimum order value ₹${parseAmount(coupon.min_order)} required`;
-  }
+  const canApply = !inactiveReason;
 
   return {
     id: coupon.id,
@@ -449,7 +523,7 @@ function buildCouponResult(coupon, amount, typeUpper) {
     discountAmount,
     finalAmount,
     canApply,
-    inactiveReason,
+    inactiveReason: inactiveReason ? couponInactiveReasonToMessage(inactiveReason) : null,
   };
 }
 
@@ -459,19 +533,15 @@ function buildCouponResult(coupon, amount, typeUpper) {
  * Does NOT record usage — call recordCouponUsage() after order is created.
  */
 async function validateCouponForOrder(userId, couponCode, amount, typeUpper) {
-  const normalizedCode = String(couponCode || '').trim().toLowerCase();
+  const normalizedCode = normalizeCouponCodeInput(couponCode);
   if (!normalizedCode) return null;
 
-  const coupon = await Coupon.findOne({
-    where: sequelize.where(sequelize.fn('lower', sequelize.col('code')), normalizedCode),
-  });
+  const coupon = await findCouponByCode(normalizedCode);
   if (!coupon) throw new AppError('Coupon not found', 404);
 
   const c = coupon.get({ plain: true });
   const result = buildCouponResult(c, amount, typeUpper);
-  if (!result.canApply) {
-    throw new AppError(`Coupon cannot be applied: ${result.inactiveReason}`, 400);
-  }
+  throwIfCouponCannotApply(result);
 
   // ── Usage limit check ────────────────────────────────────────────────────
   // Total usage across all users
@@ -484,9 +554,11 @@ async function validateCouponForOrder(userId, couponCode, amount, typeUpper) {
 
   // Per-user limit (default 1: one-time use per user)
   const perUserLimit = c.per_user_limit ?? 1;
-  const userUsed = await CouponUsage.count({ where: { coupon_id: c.id, user_id: userId } });
-  if (userUsed >= perUserLimit) {
-    throw new AppError('You have already used this coupon', 400);
+  if (userId != null && userId !== '') {
+    const userUsed = await CouponUsage.count({ where: { coupon_id: c.id, user_id: userId } });
+    if (userUsed >= perUserLimit) {
+      throw new AppError('You have already used this coupon', 400);
+    }
   }
 
   return { coupon, discountAmount: result.discountAmount, finalAmount: result.finalAmount };
@@ -2679,20 +2751,16 @@ async function getCouponsForEntity(userId, type, entityId) {
 // applyCoupon — preview only (no usage recorded). Real enforcement is in createOrder.
 async function applyCoupon(userId, { couponCode, type, id }) {
   const typeUpper = normalizeOrderType(type);
-  const amount = await resolveAmountForEntity(typeUpper, id);
-  const normalizedCode = String(couponCode || '').trim().toLowerCase();
+  const normalizedCode = normalizeCouponCodeInput(couponCode);
   if (!normalizedCode) throw new AppError('Coupon code is required', 400);
 
-  const coupon = await Coupon.findOne({
-    where: sequelize.where(sequelize.fn('lower', sequelize.col('code')), normalizedCode),
-  });
-  if (!coupon) throw new AppError('Coupon not found', 404);
+  const amount = await resolveAmountForEntity(typeUpper, id);
 
+  const coupon = await findCouponByCode(normalizedCode);
+  if (!coupon) throw new AppError('Coupon not found', 404);
   const c = coupon.get({ plain: true });
   const result = buildCouponResult(c, amount, typeUpper);
-  if (!result.canApply) {
-    throw new AppError(`Coupon cannot be applied: ${result.inactiveReason}`, 400);
-  }
+  throwIfCouponCannotApply(result);
 
   // Check per-user limit for the preview as well so UI shows accurate state
   const perUserLimit = c.per_user_limit ?? 1;
