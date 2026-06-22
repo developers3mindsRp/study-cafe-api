@@ -11,6 +11,7 @@ const {
   BatchEnrollment,
   Enrollment,
   UserCourse,
+  CurriculumMedia,
 } = require("../models");
 const { QueryTypes, Op } = require("sequelize");
 const axios = require("axios");
@@ -283,6 +284,83 @@ function parseCurriculumDays(curriculum) {
     }
   }
   return Array.isArray(cur) ? cur : [];
+}
+
+/**
+ * Bulk-fetch media metadata for a set of numeric IDs from the `media` table.
+ * Returns a Map<number, { id, url, label, mime_type }>.
+ */
+async function fetchMediaByIds(ids) {
+  const map = new Map();
+  if (!ids || ids.length === 0) return map;
+  const numericIds = [...new Set(ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+  if (numericIds.length === 0) return map;
+  try {
+    const rows = await CurriculumMedia.findAll({
+      where: { id: { [Op.in]: numericIds } },
+      attributes: ['id', 'url', 'label', 'mime_type'],
+      raw: true,
+    });
+    for (const row of rows) {
+      map.set(Number(row.id), row);
+    }
+  } catch (err) {
+    logger.warn('[courses] fetchMediaByIds failed:', { error: err.message });
+  }
+  return map;
+}
+
+/**
+ * Enrich curriculum file entries with media metadata from the `media` table.
+ *
+ * Entries that need enrichment (looked up by ID):
+ *   - Plain string/number IDs (oldest legacy format)
+ *   - Objects with _legacy:true or missing/empty url (new legacy placeholder format)
+ *
+ * Entries already complete (passed through as-is):
+ *   - Objects with a valid url (newly picked from media library)
+ */
+async function enrichCurriculumWithFiles(days) {
+  if (!Array.isArray(days) || days.length === 0) return days;
+
+  // Collect IDs that need a media lookup
+  const idsToFetch = [];
+  for (const day of days) {
+    if (!Array.isArray(day?.files)) continue;
+    for (const f of day.files) {
+      const needsLookup =
+        typeof f === 'string' ||
+        typeof f === 'number' ||
+        (f && typeof f === 'object' && (!f.url || f._legacy));
+      if (!needsLookup) continue;
+      const id = typeof f === 'object' ? Number(f.id) : Number(f);
+      if (Number.isFinite(id) && id > 0) idsToFetch.push(id);
+    }
+  }
+
+  const mediaMap = await fetchMediaByIds(idsToFetch);
+
+  return days.map((day) => {
+    if (!Array.isArray(day?.files) || day.files.length === 0) return day;
+    return {
+      ...day,
+      files: day.files.map((f) => {
+        // Already a complete media object — pass through
+        if (f && typeof f === 'object' && f.url && !f._legacy) return f;
+
+        // Determine the ID to look up
+        const id = Number(typeof f === 'object' ? f.id : f);
+        if (!Number.isFinite(id) || id <= 0) return f;
+
+        const media = mediaMap.get(id);
+        if (media) {
+          return { id: Number(media.id), url: media.url, label: media.label, mime_type: media.mime_type };
+        }
+        // Not found in media — return original (frontend shows legacy card)
+        return f;
+      }),
+    };
+  });
 }
 
 /**
@@ -670,7 +748,7 @@ const coursesService = {
     ]);
     const safeParseArray = (v) => { try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; } };
 
-    const result = withCourseComputedFields(withCourseMetaDetail({
+    const base = withCourseComputedFields(withCourseMetaDetail({
       ...enriched,
       batches,
       materials: materials.map((m) => m.get({ plain: true })),
@@ -678,6 +756,7 @@ const coursesService = {
       featured_in_logos: safeParseArray(featuredInRaw),
       alumni_logos: safeParseArray(alumniRaw),
     }));
+    const result = { ...base, curriculum: await enrichCurriculumWithFiles(base.curriculum) };
     if (!allowed) return stripCurriculumVideos(result);
     return result;
   },
@@ -735,7 +814,7 @@ const coursesService = {
     ]);
     const safeParseArray = (v) => { try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; } };
 
-    const result = withCourseComputedFields(withCourseMetaDetail({
+    const base = withCourseComputedFields(withCourseMetaDetail({
       ...enriched,
       batches,
       materials: materials.map((m) => m.get({ plain: true })),
@@ -743,6 +822,7 @@ const coursesService = {
       featured_in_logos: safeParseArray(featuredInRaw),
       alumni_logos: safeParseArray(alumniRaw),
     }));
+    const result = { ...base, curriculum: await enrichCurriculumWithFiles(base.curriculum) };
     if (!allowed) return stripCurriculumVideos(result);
     return result;
   },
