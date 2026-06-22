@@ -9,7 +9,9 @@ const list = asyncHandler(async (req, res) => {
 
 const listAdmin = asyncHandler(async (req, res) => {
   const { page, limit, search, category, sort, sortBy, sortOrder } = req.query;
-  const result = await filesService.listAdmin({ page, limit, search, category, sort, sortBy, sortOrder });
+  // Admin panel sends category_id (numeric); public list uses category (slug or id).
+  const resolvedCategory = req.query.category_id || category;
+  const result = await filesService.listAdmin({ page, limit, search, category: resolvedCategory, sort, sortBy, sortOrder });
   sendPaginated(res, result);
 });
 

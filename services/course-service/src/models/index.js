@@ -42,6 +42,7 @@ const UserCourseProgress = require('./UserCourseProgress')(sequelize);
 const UserCourse = require('./UserCourse')(sequelize);
 const CourseReview = require('./CourseReview')(sequelize);
 const MarketingPage = require('./MarketingPage')(sequelize);
+const CurriculumMedia = require('./CurriculumMedia')(sequelize);
 
 const models = { 
   Course, 
@@ -62,6 +63,7 @@ const models = {
   UserCourse,
   CourseReview,
   MarketingPage,
+  CurriculumMedia,
 };
 
 // Register associations
