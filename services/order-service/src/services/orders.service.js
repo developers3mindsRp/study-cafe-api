@@ -210,7 +210,7 @@ function buildMembershipPayload(order, plan, userContact = null) {
 
   if (plan && plan.is_lifetime) {
     const farFuture = new Date(now);
-    farFuture.setFullYear(farFuture.getFullYear() + 100);
+    farFuture.setFullYear(farFuture.getFullYear() + 10);
     payload.membershipType = plan.slug || 'lifetime';
     payload.startsAt = now.toISOString();
     payload.expiresAt = farFuture.toISOString();
