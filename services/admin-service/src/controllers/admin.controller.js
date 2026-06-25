@@ -410,16 +410,34 @@ function isUserCourseOrderPurchase(p) {
 const getUserEnrollments = asyncHandler(async (req, res) => {
   const userId = req.params.id;
 
-  // Internal purchases = same payload as GET /orders/my-purchases (paid orders only).
+  // Mirror exactly what the frontend profile page uses:
+  // 1. GET /orders/my-purchases  → listMyPurchases() with full accessStatus logic
+  // 2. GET /user/courses          → myCourses() from user_courses table (admin-granted rows)
+  // Both are fetched in parallel to match the frontend MyCoursesSection pipeline.
   let purchases = [];
+  let userCourses = [];
   try {
-    const { data: resData } = await orderClient.get(`/internal/users/${userId}/purchases`);
-    purchases = Array.isArray(resData) ? resData : (resData?.data || []);
+    const [purchasesRes, userCoursesRes] = await Promise.allSettled([
+      orderClient.get(`/internal/users/${userId}/purchases`),
+      authClient.get(`/internal/users/${userId}/courses`),
+    ]);
+    if (purchasesRes.status === 'fulfilled') {
+      const d = purchasesRes.value.data;
+      purchases = Array.isArray(d) ? d : (d?.data || []);
+    } else {
+      logger.warn(`Failed to fetch purchases from order-service for user ${userId}: ${purchasesRes.reason?.message}`);
+    }
+    if (userCoursesRes.status === 'fulfilled') {
+      const d = userCoursesRes.value.data;
+      userCourses = Array.isArray(d) ? d : (d?.data || []);
+    } else {
+      logger.warn(`Failed to fetch user courses from auth-service for user ${userId}: ${userCoursesRes.reason?.message}`);
+    }
   } catch (err) {
-    logger.warn(`Failed to fetch purchases from order-service for user ${userId}: ${err.message}`);
+    logger.warn(`Failed to fetch course data for user ${userId}: ${err.message}`);
   }
 
-  // Enrich from course-service (batch titles, enrollment ids). Course rows may still exist after refund if cleanup lagged — do not use this list alone.
+  // Enrich from course-service (batch titles, enrollment ids).
   let enrollments = [];
   try {
     const { data: resData } = await courseClient.get(`/internal/users/${userId}/enrollments`);
@@ -435,17 +453,22 @@ const getUserEnrollments = asyncHandler(async (req, res) => {
     }
   }
 
-  // Authoritative course list = paid course purchases only (matches user "My Purchases" / my-purchases).
-  const resultsMap = new Map();
+  // Build result list — one record per ORDER (not per course), matching frontend behaviour.
+  // Frontend does NOT deduplicate: a course repurchased twice shows two cards.
+  const results = [];
+
+  // Track which courseIds are covered by paid orders so admin-granted rows aren't double-counted.
+  const purchasedCourseIds = new Set();
+
   for (const p of purchases) {
     if (!p.course || p.courseId == null) continue;
     if (!isUserCourseOrderPurchase(p)) continue;
 
     const cid = String(p.courseId);
-    if (resultsMap.has(cid)) continue;
+    purchasedCourseIds.add(cid);
 
     const e = enrollmentByCourseId.get(cid);
-    resultsMap.set(cid, {
+    results.push({
       enrollment_id: e?.enrollment_id ?? null,
       course_id: Number(cid),
       course_title: e?.course_title ?? p.course?.title ?? 'Unknown Course',
@@ -454,15 +477,60 @@ const getUserEnrollments = asyncHandler(async (req, res) => {
       enrolled_at: e?.enrolled_at ?? p.purchaseDate ?? null,
       order_id: p.id != null ? String(p.id) : null,
       purchase_status: p.status ?? null,
+      // Mirror the exact accessStatus logic from frontend (listMyPurchases):
+      // wp_post_status is authoritative for legacy orders; user_courses.expires_at for native.
+      access_status: p.accessStatus ?? 'active',
+      access_expires_at: p.accessExpiresAt ?? null,
+      wp_post_status: p.wpPostStatus ?? null,
       from_purchase: true,
+      is_admin_granted: false,
     });
   }
 
-  sendSuccess(res, Array.from(resultsMap.values()).sort((a, b) => {
+  // Add admin-granted courses (order_id IS NULL in user_courses) not already in paid orders.
+  for (const uc of userCourses) {
+    if (!uc.isAdminGranted) continue;
+    const cid = String(uc.courseId);
+    if (purchasedCourseIds.has(cid)) continue;
+
+    const e = enrollmentByCourseId.get(cid);
+    results.push({
+      enrollment_id: e?.enrollment_id ?? null,
+      course_id: Number(cid),
+      course_title: uc.course?.title ?? e?.course_title ?? 'Unknown Course',
+      batch_id: e?.batch_id ?? null,
+      batch_name: e?.batch_name ?? null,
+      enrolled_at: e?.enrolled_at ?? null,
+      order_id: null,
+      purchase_status: 'admin-granted',
+      access_status: uc.accessStatus ?? 'active',
+      access_expires_at: uc.accessExpiresAt ?? null,
+      wp_post_status: null,
+      from_purchase: false,
+      is_admin_granted: true,
+    });
+  }
+
+  // Sort: active first (newest enrolled_at), then expired (newest enrolled_at).
+  results.sort((a, b) => {
+    const aExpired = a.access_status === 'expired' ? 1 : 0;
+    const bExpired = b.access_status === 'expired' ? 1 : 0;
+    if (aExpired !== bExpired) return aExpired - bExpired;
     const dateA = a.enrolled_at ? new Date(a.enrolled_at).getTime() : 0;
     const dateB = b.enrolled_at ? new Date(b.enrolled_at).getTime() : 0;
     return dateB - dateA;
-  }));
+  });
+
+  const active = results.filter((r) => r.access_status !== 'expired');
+  const expired = results.filter((r) => r.access_status === 'expired');
+
+  sendSuccess(res, {
+    active_count: active.length,
+    expired_count: expired.length,
+    total_count: results.length,
+    active_courses: active,
+    expired_courses: expired,
+  });
 });
 
 const getUserMemberships = asyncHandler(async (req, res) => {
