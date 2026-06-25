@@ -1126,6 +1126,9 @@ async function ensurePremiumPlansColumns(tgt) {
 // Tables managed via admin panel / other scripts — NEVER truncated by migration.
 // Data you add through the admin panel or other scripts is preserved across runs.
 const ADMIN_MANAGED_TABLES = new Set([
+    // Membership course mappings are curated in Admin > Memberships — never truncate/rebuild on re-run.
+    'plan_courses',
+    'plan_course_categories',
     // 'home_sections', 'faqs', 'testimonials', 'footer_data', 'states',
     // 'cms_pages', 'payment_config', 'admin_logs', 'batch_enrollments',
     // 'materials', 'outbox_events', 'payments', 'roles',
@@ -1634,20 +1637,47 @@ function expectedCountsFromTierBuckets(coursesByTier) {
     return expected;
 }
 
-/** Write tier-based plan_courses links (replaces all existing rows). */
-async function writeTierPlanCourseLinks(tgt, slugToPlanId, coursesByTier) {
-    await tgt.query('DELETE FROM plan_courses', { raw: true });
+/**
+ * Seed plan_courses for a plan only when it has zero links (first-time / empty DB).
+ * Uses published tier courses as defaults — admin panel is the source of truth thereafter.
+ */
+async function seedPlanCoursesIfEmpty(tgt, slugToPlanId, coursesByTier, { publishedOnly = true } = {}) {
+    let publishedSet = null;
+    if (publishedOnly) {
+        const publishedRows = await tgt.query(
+            'SELECT id FROM courses WHERE is_published = 1',
+            { type: QueryTypes.SELECT },
+        );
+        publishedSet = new Set((publishedRows || []).map((r) => Number(r.id)));
+    }
+
     let inserted = 0;
+    let skipped = 0;
     for (const [slug, includedTiers] of Object.entries(TIER_INCLUDES)) {
         const planId = slugToPlanId[slug];
         if (!planId) {
             console.log(`   ⚠️  No premium_plans row for slug '${slug}'; skipping its course links.`);
             continue;
         }
+        const [countRow] = await tgt.query(
+            'SELECT COUNT(*) AS c FROM plan_courses WHERE plan_id = ?',
+            { replacements: [planId], type: QueryTypes.SELECT },
+        );
+        const existing = Number(countRow?.c || 0);
+        if (existing > 0) {
+            console.log(`   plan '${slug}' (#${planId}): ${existing} courses (admin-managed — preserved)`);
+            skipped += 1;
+            continue;
+        }
+
         const courseIds = new Set();
-        includedTiers.forEach((t) => coursesByTier[t].forEach((cid) => courseIds.add(cid)));
+        includedTiers.forEach((t) => {
+            coursesByTier[t].forEach((cid) => {
+                if (!publishedOnly || publishedSet.has(cid)) courseIds.add(cid);
+            });
+        });
         if (courseIds.size === 0) {
-            console.log(`   ⚠️  No courses mapped for plan '${slug}'; skipping.`);
+            console.log(`   ⚠️  No published courses mapped for plan '${slug}'; skipping seed.`);
             continue;
         }
         const idList = [...courseIds];
@@ -1657,59 +1687,41 @@ async function writeTierPlanCourseLinks(tgt, slugToPlanId, coursesByTier) {
             await tgt.query(`INSERT IGNORE INTO plan_courses (plan_id, course_id) VALUES ${values}`, { raw: true });
         }
         inserted += idList.length;
-        console.log(`   plan '${slug}' (#${planId}): ${idList.length} courses`);
+        console.log(`   plan '${slug}' (#${planId}): seeded ${idList.length} published tier courses (empty plan)`);
     }
-    console.log(`   ✅ ${inserted} plan–course links (tier-based)`);
-    return inserted;
+    console.log(`   ✅ plan_courses seed: ${inserted} inserted, ${skipped} admin-managed plan(s) preserved`);
+    return { inserted, skipped };
 }
 
-async function countPlanCoursesByTierSlug(tgt) {
+/** Remove unpublished course links added by legacy tier migration (admin curates published only). */
+async function trimUnpublishedPlanCourseLinks(tgt) {
+    const [result] = await tgt.query(
+        `DELETE pc FROM plan_courses pc
+         INNER JOIN courses c ON c.id = pc.course_id
+         WHERE c.is_published = 0 OR c.is_published IS NULL`,
+        { raw: true },
+    );
+    const removed = result?.affectedRows ?? 0;
+    if (removed > 0) {
+        console.log(`   plan_courses: removed ${removed} unpublished link(s) (admin-curated mode)`);
+    }
+    return removed;
+}
+
+async function logPlanCourseCounts(tgt) {
     const rows = await tgt.query(
-        `SELECT LOWER(pp.slug) AS slug, COUNT(pc.course_id) AS c
+        `SELECT LOWER(pp.slug) AS slug, COUNT(pc.course_id) AS total,
+                SUM(CASE WHEN c.is_published = 1 THEN 1 ELSE 0 END) AS published
          FROM premium_plans pp
          LEFT JOIN plan_courses pc ON pc.plan_id = pp.id
+         LEFT JOIN courses c ON c.id = pc.course_id
          WHERE LOWER(pp.slug) IN ('basic', 'premium', 'ultimate')
          GROUP BY pp.id, pp.slug`,
         { type: QueryTypes.SELECT },
     );
-    const counts = { basic: 0, premium: 0, ultimate: 0 };
     (rows || []).forEach((r) => {
-        const slug = String(r.slug || '').toLowerCase();
-        if (slug in counts) counts[slug] = Number(r.c || 0);
+        console.log(`   plan_courses '${r.slug}': ${r.total} linked (${r.published ?? 0} published)`);
     });
-    return counts;
-}
-
-async function expectedTierPlanCountsFromTargetCourses(tgt) {
-    const courseRows = await tgt.query('SELECT id, title, course_type FROM courses', { type: QueryTypes.SELECT });
-    const coursesByTier = groupMembershipCoursesByTier(courseRows, {
-        getId: (c) => c.id,
-        getTitle: (c) => c.title,
-        getType: (c) => c.course_type,
-    });
-    return expectedCountsFromTierBuckets(coursesByTier);
-}
-
-/** Compare plan_courses against courses.course_type tier logic; rebuild if any tier is wrong. */
-async function verifyAndRepairPlanCourses(tgt) {
-    const [actual, expected] = await Promise.all([
-        countPlanCoursesByTierSlug(tgt),
-        expectedTierPlanCountsFromTargetCourses(tgt),
-    ]);
-    const mismatches = [];
-    for (const slug of Object.keys(TIER_INCLUDES)) {
-        if (actual[slug] !== expected[slug]) {
-            mismatches.push({ slug, actual: actual[slug], expected: expected[slug] });
-        }
-    }
-    if (!mismatches.length) {
-        console.log('   plan_courses: all tier plans match expected counts (basic/premium/ultimate).');
-        return { repaired: false, actual, expected };
-    }
-    console.log('   plan_courses: tier mismatch — rebuilding from courses.course_type:');
-    mismatches.forEach((m) => console.log(`     ${m.slug}: have ${m.actual}, expected ${m.expected}`));
-    await rebuildPlanCoursesFromTarget(tgt);
-    return { repaired: true, mismatches, actual, expected };
 }
 
 /**
@@ -1751,20 +1763,12 @@ async function ensureTierPlans(tgt) {
 }
 
 /**
- * Migrate plan_courses: which courses are included in each membership plan.
- *
- * StudyCafe membership access is TIER-BASED on each course's `type`, not on a
- * per-plan course list (the legacy `rel_course` meta is effectively unused — only
- * a handful of non-empty rows). Each course is tagged Basic/Advanced/Premium and
- * a membership unlocks all courses at-or-below its tier:
- *   basic    → Basic courses
- *   premium  → Basic + Advanced courses
- *   ultimate → Basic + Advanced + Premium courses
- * This rebuilds plan_courses from sc_courses.course_type so every tier (including
- * Basic) gets the correct, complete course set.
+ * Seed plan_courses when a plan has no admin-assigned links yet.
+ * Admin > Memberships is the source of truth — existing mappings are never overwritten.
+ * Empty plans get a published-only tier default (Basic / Premium / Ultimate buckets).
  */
 async function migratePlanCourses(src, tgt) {
-    console.log('🔗 Migrating plan–course relations (tier-based)...');
+    console.log('🔗 Seeding plan–course relations (admin-managed; empty plans only)...');
     const tables = await src.query(
         "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sc_courses'",
         { type: QueryTypes.SELECT }
@@ -1800,11 +1804,11 @@ async function migratePlanCourses(src, tgt) {
             || (courseIdSet.has(Number(c.id)) ? Number(c.id) : null),
     });
 
-    await writeTierPlanCourseLinks(tgt, slugToPlanId, coursesByTier);
+    await seedPlanCoursesIfEmpty(tgt, slugToPlanId, coursesByTier, { publishedOnly: true });
 }
 
-/** Rebuild plan_courses from the target courses table (used when links were wiped post-migration). */
-async function rebuildPlanCoursesFromTarget(tgt) {
+/** Seed empty tier plans from target courses.course_type (published only). Does not touch existing links. */
+async function seedEmptyPlanCoursesFromTarget(tgt) {
     await ensureTierPlans(tgt);
     const planRows = await tgt.query('SELECT id, slug FROM premium_plans', { type: QueryTypes.SELECT });
     const slugToPlanId = {};
@@ -1817,7 +1821,8 @@ async function rebuildPlanCoursesFromTarget(tgt) {
         getType: (c) => c.course_type,
     });
 
-    await writeTierPlanCourseLinks(tgt, slugToPlanId, coursesByTier);
+    await seedPlanCoursesIfEmpty(tgt, slugToPlanId, coursesByTier, { publishedOnly: true });
+    await logPlanCourseCounts(tgt);
 }
 
 async function migrateCategories(src, tgt) {
@@ -2831,7 +2836,8 @@ async function applyPostMigrationDataPatches(tgt) {
         console.log(`   enrollments backfilled: ${c5?.affectedRows ?? 0}`);
         console.log(`   user_courses backfilled: ${c6?.affectedRows ?? 0}`);
 
-        await verifyAndRepairPlanCourses(tgt);
+        await trimUnpublishedPlanCourseLinks(tgt);
+        await logPlanCourseCounts(tgt);
         await applyEntitySeoMigrationSteps(tgt);
     } catch (e) {
         if (e.message && e.message.includes("doesn't exist")) {
@@ -3106,20 +3112,37 @@ async function deriveAffiliateEarningsFromOrders(src, tgt) {
 }
 
 // ──── Run ────
-async function repairPlanCoursesOnly() {
+async function seedEmptyPlanCoursesOnly() {
     const tgt = new Sequelize(TGT_CONFIG.database, TGT_CONFIG.user, TGT_CONFIG.password, {
         host: TGT_CONFIG.host, port: TGT_CONFIG.port, dialect: 'mysql', logging: false,
     });
     _tgt = tgt;
     await tgt.authenticate();
     console.log(`✅ Connected to TARGET (${TGT_CONFIG.host}:${TGT_CONFIG.port}/${TGT_CONFIG.database})`);
-    await rebuildPlanCoursesFromTarget(tgt);
+    await seedEmptyPlanCoursesFromTarget(tgt);
     await tgt.close();
 }
 
-if (process.argv.includes('--repair-plan-courses')) {
-    repairPlanCoursesOnly().catch((err) => {
-        console.error('❌ plan_courses repair failed:', err);
+async function trimPlanCoursesOnly() {
+    const tgt = new Sequelize(TGT_CONFIG.database, TGT_CONFIG.user, TGT_CONFIG.password, {
+        host: TGT_CONFIG.host, port: TGT_CONFIG.port, dialect: 'mysql', logging: false,
+    });
+    _tgt = tgt;
+    await tgt.authenticate();
+    console.log(`✅ Connected to TARGET (${TGT_CONFIG.host}:${TGT_CONFIG.port}/${TGT_CONFIG.database})`);
+    await trimUnpublishedPlanCourseLinks(tgt);
+    await logPlanCourseCounts(tgt);
+    await tgt.close();
+}
+
+if (process.argv.includes('--trim-plan-courses')) {
+    trimPlanCoursesOnly().catch((err) => {
+        console.error('❌ plan_courses trim failed:', err);
+        process.exit(1);
+    });
+} else if (process.argv.includes('--repair-plan-courses') || process.argv.includes('--seed-empty-plan-courses')) {
+    seedEmptyPlanCoursesOnly().catch((err) => {
+        console.error('❌ plan_courses seed failed:', err);
         process.exit(1);
     });
 } else {
