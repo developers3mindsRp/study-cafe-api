@@ -425,7 +425,7 @@ async function requestLoginOtp({ email }) {
   });
 
   if (!user) {
-    return { ok: true, message: 'If an account exists for this email, a sign-in code was sent.' };
+    throw new AppError('No account found for this email. Please sign up first.', 404);
   }
 
   const otp = generateSixDigitOtp();
