@@ -3,7 +3,7 @@ const { Op, Sequelize, QueryTypes } = require('sequelize');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const fs = require('fs');
-const { AppError, logger, parseTrashedMode, trashedSequelizeOptions, withTrashedWhere } = require('../../../../shared');
+const { AppError, logger, parseTrashedMode, trashedSequelizeOptions, withTrashedWhere, buildCreatedAtRange } = require('../../../../shared');
 
 /** Admin list role filter values → roles.name (and users.role legacy column). */
 const ROLE_FILTER_ALIASES = {
@@ -327,19 +327,8 @@ async function buildListQueryContext(query = {}) {
 
     logger.info('[users.list] date filter', { joined_from, joined_to, full_query: query });
 
-    const createdRange = {};
-    if (joined_from) {
-        const d = new Date(joined_from);
-        if (!Number.isNaN(d.getTime())) createdRange[Op.gte] = d;
-    }
-    if (joined_to) {
-        const d = new Date(joined_to);
-        if (!Number.isNaN(d.getTime())) {
-            d.setHours(23, 59, 59, 999);
-            createdRange[Op.lte] = d;
-        }
-    }
-    if (Object.keys(createdRange).length > 0) {
+    const createdRange = buildCreatedAtRange(joined_from, joined_to, Op);
+    if (createdRange) {
         andConditions.push({ created_at: createdRange });
     }
 

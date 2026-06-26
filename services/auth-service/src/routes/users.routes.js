@@ -1,14 +1,15 @@
 const express = require('express');
 const usersController = require('../controllers/users.controller');
 const { internalAuth } = require('../middleware');
+const { requireAuth } = require('../middleware/requireAuth');
 
 const router = express.Router();
 
 router.post('/', usersController.create);
-router.post('/export', usersController.startExportJob);
-router.get('/export/:jobId/status', usersController.getExportJobStatus);
-router.get('/export/:jobId/download', usersController.downloadExportJob);
-router.get('/export.csv', usersController.exportCsv);
+router.post('/export', requireAuth, usersController.startExportJob);
+router.get('/export/:jobId/status', requireAuth, usersController.getExportJobStatus);
+router.get('/export/:jobId/download', requireAuth, usersController.downloadExportJob);
+router.get('/export.csv', requireAuth, usersController.exportCsv);
 router.get('/', usersController.list);
 // Must be registered before /:id so the literal path is not captured as a param
 router.get('/distinct-states', internalAuth, usersController.distinctStates);

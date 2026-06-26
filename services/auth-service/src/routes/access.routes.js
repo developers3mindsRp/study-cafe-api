@@ -45,6 +45,12 @@ function register(router) {
     sendSuccess(res, user.get({ plain: true }));
   }));
 
+  router.get('/internal/users/:id/courses', requireGrantAuth, asyncHandler(async (req, res) => {
+    const accountService = require('../services/account.service');
+    const data = await accountService.myCourses(req.params.id);
+    sendSuccess(res, data);
+  }));
+
   router.get('/internal/users/:id/active-membership', requireGrantAuth, asyncHandler(async (req, res) => {
     const activeMembership = await accessService.getActiveMembership(req.params.id);
     sendSuccess(res, activeMembership);

@@ -377,7 +377,7 @@ async function fetchPlanLinkedCoursesFromDb(slug) {
 
 /**
  * Fetch courses by IDs + category IDs from course-service.
- * Membership plans include draft/unpublished migrated courses — pass includeUnpublished.
+ * IDs come from plan_courses / plan_course_categories (admin-managed).
  */
 async function fetchCoursesByIdsOrCatIds(ids, cat_ids, order = 'ASC', { includeUnpublished = false } = {}) {
   if (ids.length === 0 && cat_ids.length === 0) return [];
@@ -442,8 +442,9 @@ async function getMembershipCourses(userId) {
     const course_ids = Array.isArray(plan?.course_ids) ? plan.course_ids : [];
     const course_cat_ids = Array.isArray(plan?.course_cat_ids) ? plan.course_cat_ids : [];
 
+    // Admin curates published membership courses; do not expose draft/unpublished links to users.
     const courses = await fetchCoursesByIdsOrCatIds(course_ids, course_cat_ids, 'DESC', {
-      includeUnpublished: true,
+      includeUnpublished: false,
     });
 
     results.push({

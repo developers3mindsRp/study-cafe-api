@@ -27,6 +27,7 @@ const {
   withTrashedWhere,
   whereHasClauses,
 } = require('./softDelete');
+const { buildCreatedAtRange } = require('./istDateRange');
 
 module.exports = {
     logger,
@@ -50,4 +51,5 @@ module.exports = {
     trashedSequelizeOptions,
     withTrashedWhere,
     whereHasClauses,
+    buildCreatedAtRange,
 };

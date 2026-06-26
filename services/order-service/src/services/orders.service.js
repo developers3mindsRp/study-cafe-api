@@ -210,7 +210,7 @@ function buildMembershipPayload(order, plan, userContact = null) {
 
   if (plan && plan.is_lifetime) {
     const farFuture = new Date(now);
-    farFuture.setFullYear(farFuture.getFullYear() + 100);
+    farFuture.setFullYear(farFuture.getFullYear() + 10);
     payload.membershipType = plan.slug || 'lifetime';
     payload.startsAt = now.toISOString();
     payload.expiresAt = farFuture.toISOString();
@@ -1858,6 +1858,58 @@ function parseAmountFilter(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Admin YYYY-MM-DD filters are inclusive calendar days in Asia/Kolkata (IST). */
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+
+function parseYmdDateParts(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || '').trim());
+  if (!m) return null;
+  return { y: Number(m[1]), mo: Number(m[2]) - 1, d: Number(m[3]) };
+}
+
+function istDayStartInstant(dateStr) {
+  const p = parseYmdDateParts(dateStr);
+  if (!p) return null;
+  const d = new Date(Date.UTC(p.y, p.mo, p.d, 0, 0, 0, 0) - IST_OFFSET_MS);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function istDayEndInstant(dateStr) {
+  const p = parseYmdDateParts(dateStr);
+  if (!p) return null;
+  const d = new Date(Date.UTC(p.y, p.mo, p.d, 23, 59, 59, 999) - IST_OFFSET_MS);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function resolveFilterRangeStart(value) {
+  if (value == null || value === '') return null;
+  const s = String(value).trim();
+  const ist = istDayStartInstant(s);
+  if (ist) return ist;
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function resolveFilterRangeEnd(value) {
+  if (value == null || value === '') return null;
+  const s = String(value).trim();
+  const ist = istDayEndInstant(s);
+  if (ist) return ist;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCHours(23, 59, 59, 999);
+  return d;
+}
+
+function applyCreatedAtRangeToWhere(where, dateFrom, dateTo) {
+  if (!dateFrom && !dateTo) return;
+  where.created_at = {};
+  const start = resolveFilterRangeStart(dateFrom);
+  if (start) where.created_at[Op.gte] = start;
+  const end = resolveFilterRangeEnd(dateTo);
+  if (end) where.created_at[Op.lte] = end;
+}
+
 async function listAllOrders({
   limit = 100,
   offset = 0,
@@ -1949,20 +2001,7 @@ async function listAllOrders({
     }
   }
 
-  if (dateFrom || dateTo) {
-    where.created_at = {};
-    if (dateFrom) {
-      const start = new Date(dateFrom);
-      if (!Number.isNaN(start.getTime())) where.created_at[Op.gte] = start;
-    }
-    if (dateTo) {
-      const end = new Date(dateTo);
-      if (!Number.isNaN(end.getTime())) {
-        end.setHours(23, 59, 59, 999);
-        where.created_at[Op.lte] = end;
-      }
-    }
-  }
+  applyCreatedAtRangeToWhere(where, dateFrom, dateTo);
 
   if (courseId) {
     where.entity_id = String(courseId);
@@ -2300,20 +2339,7 @@ async function listCouponUsages({
     where.type = String(type).trim().toLowerCase();
   }
 
-  if (dateFrom || dateTo) {
-    where.created_at = {};
-    if (dateFrom) {
-      const start = new Date(dateFrom);
-      if (!Number.isNaN(start.getTime())) where.created_at[Op.gte] = start;
-    }
-    if (dateTo) {
-      const end = new Date(dateTo);
-      if (!Number.isNaN(end.getTime())) {
-        end.setHours(23, 59, 59, 999);
-        where.created_at[Op.lte] = end;
-      }
-    }
-  }
+  applyCreatedAtRangeToWhere(where, dateFrom, dateTo);
 
   if (search && String(search).trim()) {
     const term = `%${String(search).trim()}%`;
@@ -3300,9 +3326,8 @@ async function getRevenueTimeSeries({ dateFrom, dateTo, bucket = 'day' } = {}) {
       ? "CONCAT('Week ', WEEK(created_at, 3) - WEEK(MIN(created_at) OVER(), 3) + 1)"
       : "DATE_FORMAT(created_at, '%a')";
 
-  const start = dateFrom ? new Date(dateFrom) : null;
-  const end = dateTo ? new Date(dateTo) : null;
-  if (end) end.setHours(23, 59, 59, 999);
+  const start = resolveFilterRangeStart(dateFrom);
+  const end = resolveFilterRangeEnd(dateTo);
 
   const replacements = [];
   let whereSql = "WHERE status = 'paid'";
@@ -3345,20 +3370,7 @@ async function getRevenueTimeSeries({ dateFrom, dateTo, bucket = 'day' } = {}) {
  */
 async function getOrderStats({ dateFrom, dateTo } = {}) {
   const where = { status: 'paid' };
-  if (dateFrom || dateTo) {
-    where.created_at = {};
-    if (dateFrom) {
-      const start = new Date(dateFrom);
-      if (!Number.isNaN(start.getTime())) where.created_at[Op.gte] = start;
-    }
-    if (dateTo) {
-      const end = new Date(dateTo);
-      if (!Number.isNaN(end.getTime())) {
-        end.setHours(23, 59, 59, 999);
-        where.created_at[Op.lte] = end;
-      }
-    }
-  }
+  applyCreatedAtRangeToWhere(where, dateFrom, dateTo);
   const result = await Order.findOne({
     where,
     attributes: [
