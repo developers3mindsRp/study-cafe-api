@@ -45,7 +45,8 @@
     "migrate:article-type-of-tax": "node scripts/add-article-type-of-tax-column.js",
     "seo:cleanup-module-metadata": "node scripts/cleanup-module-seo-metadata.js",
     "seo:audit-migration": "node scripts/audit-article-course-seo-migration.js",
-    "seo:backfill-entity-fields": "node scripts/backfill-article-course-seo-fields.js"
+    "seo:backfill-entity-fields": "node scripts/backfill-article-course-seo-fields.js",
+    "ensure-site-seo-routes": "node scripts/ensure-site-seo-routes-table.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

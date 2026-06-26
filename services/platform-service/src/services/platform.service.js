@@ -2908,6 +2908,25 @@ async function findConflictingSeoMetadataRow(pageSlug, excludeId) {
   return null;
 }
 
+/** Canonical paths already covered by a static (non article/course) seo_metadata row. */
+async function loadAssignedStaticSeoPathKeys() {
+  const rows = await SeoMetadata.findAll({
+    attributes: ['page_slug'],
+    raw: true,
+  });
+  const keys = new Set();
+  for (const r of rows) {
+    if (isModuleDetailSeoPath(r.page_slug)) continue;
+    const key = canonicalSlug(r.page_slug);
+    if (!key) continue;
+    keys.add(key);
+    for (const c of normalizeSlugCandidates(key)) {
+      keys.add(canonicalSlug(c));
+    }
+  }
+  return keys;
+}
+
 async function getSeoEligiblePagesInternal() {
   const rows = await SiteSeoRoute.findAll({
     order: [
@@ -2916,10 +2935,14 @@ async function getSeoEligiblePagesInternal() {
     ],
     raw: true,
   });
-  const mapped = rows.map((r) => ({
-    path: canonicalSlug(r.path),
-    label: String(r.label || '').trim() || canonicalSlug(r.path),
-  }));
+  const assigned = await loadAssignedStaticSeoPathKeys();
+  const mapped = rows
+    .filter((r) => !isModuleDetailSeoPath(r.path))
+    .filter((r) => !assigned.has(canonicalSlug(r.path)))
+    .map((r) => ({
+      path: canonicalSlug(r.path),
+      label: String(r.label || '').trim() || canonicalSlug(r.path),
+    }));
   return mapped.sort((a, b) => {
     if (a.path === '/') return -1;
     if (b.path === '/') return 1;
