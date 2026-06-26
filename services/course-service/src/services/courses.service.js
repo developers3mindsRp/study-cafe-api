@@ -144,6 +144,13 @@ function enrichCurriculumWithDurations(curriculum) {
       const n = parseInt(String(sec.duration ?? ""), 10);
       if (Number.isFinite(n) && n > 0) total += n;
     }
+    // Legacy flat days have no `sections`; their single duration is stored on
+    // the day as `minutes`. Fall back to it so `total_duration` is the one
+    // field the frontend can read for both old and new courses.
+    if (total === 0) {
+      const legacy = parseInt(String(day.minutes ?? ""), 10);
+      if (Number.isFinite(legacy) && legacy > 0) total = legacy;
+    }
     return { ...day, total_duration: total > 0 ? total : null };
   });
 }
