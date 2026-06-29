@@ -10,6 +10,8 @@ const sequelize = new Sequelize(
     port: config.mysql.port,
     dialect: "mysql",
     logging: false,
+    timezone: "+05:30",
+    dialectOptions: { timezone: "+05:30" },
     pool: {
       max: config.mysql.connectionLimit || 10,
       min: 0,
