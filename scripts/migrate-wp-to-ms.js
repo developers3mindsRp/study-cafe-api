@@ -97,6 +97,7 @@ async function main() {
     await migrateCourseCats(src, tgt);
     await migrateFileCats(src, tgt);
     await migrateArticles(src, tgt);
+    await migrateArticleSections(src, tgt);
     await migrateArticleJunctions(src, tgt);
     await migrateComments(src, tgt);
     await migrateCourses(src, tgt);
@@ -370,6 +371,17 @@ async function createAllTables(tgt) {
       court_id BIGINT UNSIGNED,
       PRIMARY KEY (article_id, court_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    CREATE TABLE IF NOT EXISTS article_sections (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      article_id BIGINT UNSIGNED NOT NULL,
+      title VARCHAR(1000) NULL,
+      content LONGTEXT NULL,
+      sort_order INT NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_article_sections_article_id (article_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     -- Comments (platform-service)
     CREATE TABLE IF NOT EXISTS comments (
@@ -1091,6 +1103,7 @@ async function ensurePremiumPlansColumns(tgt) {
         // users
         "ALTER TABLE users ADD COLUMN gst VARCHAR(100) NULL AFTER youtube",
         "ALTER TABLE users ADD COLUMN account_status VARCHAR(50) NULL AFTER gst",
+        "ALTER TABLE users ADD COLUMN bio TEXT NULL AFTER account_status",
         "ALTER TABLE users ADD COLUMN referral_code VARCHAR(32) UNIQUE",
         "ALTER TABLE users ADD COLUMN referred_by BIGINT UNSIGNED NULL",
         "ALTER TABLE users ADD COLUMN referred_at DATETIME NULL",
@@ -1143,7 +1156,7 @@ async function clearTargetDatabase(tgt) {
         'coupons', 'orders',
         'enrollments', 'course_authors', 'forum_topics', 'media', 'redirections', 'pages', 'file_categories', 'files',
         'file_cats', 'course_categories', 'course_cats', 'courses', 'comments', 'article_courts', 'article_types_map', 'article_tags',
-        'article_categories', 'articles', 'courts', 'article_types', 'tags', 'categories', 'user_memberships', 'user_courses', 'users',
+        'article_sections', 'article_categories', 'articles', 'courts', 'article_types', 'tags', 'categories', 'user_memberships', 'user_courses', 'users',
     ];
     await tgt.query('SET FOREIGN_KEY_CHECKS = 0', { raw: true });
     try {
@@ -1257,6 +1270,7 @@ async function migrateUsers(src, tgt) {
           name=VALUES(name), display_name=VALUES(display_name), login=VALUES(login),
           first_name=VALUES(first_name), last_name=VALUES(last_name), phone=VALUES(phone),
           membership=VALUES(membership), plan=VALUES(plan), status=VALUES(status),
+          bio=VALUES(bio),
           email_verified_at=COALESCE(email_verified_at, VALUES(email_verified_at)),
           updated_at=VALUES(updated_at)`, { raw: true });
         process.stdout.write(`   ${Math.min(i + BATCH, allUsers.length)}/${allUsers.length}\r`);
@@ -2057,6 +2071,41 @@ async function migrateArticleJunctions(src, tgt) {
     }
     console.log(`   courts: ${courts.length}`);
     console.log('   ✅ all article junctions');
+}
+
+async function migrateArticleSections(src, tgt) {
+    console.log('📑 Migrating article sections (table of contents)...');
+
+    const srcTable = await src.query(
+        "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sc_article_sections'",
+        { type: QueryTypes.SELECT }
+    );
+    if (!srcTable.length) {
+        console.log('   ⚠️  sc_article_sections not found in source — skipping');
+        return;
+    }
+
+    const total = await src.query('SELECT COUNT(*) as c FROM sc_article_sections', { type: QueryTypes.SELECT });
+    if (!total[0].c) { console.log('   ✅ 0 article sections'); return; }
+
+    const articleIdMap = await buildScArticleSurrogateToMsArticleIdMap(src);
+    const mapAid = (surrogateId) => articleIdMap[surrogateId] ?? surrogateId;
+
+    const rows = await src.query('SELECT * FROM sc_article_sections ORDER BY article_id, sort_order', { type: QueryTypes.SELECT });
+
+    for (let i = 0; i < rows.length; i += BATCH) {
+        const chunk = rows.slice(i, i + BATCH);
+        const values = chunk.map(r =>
+            `(${mapAid(r.article_id)}, ${esc(r.title, 1000)}, ${escUploadContent(r.content)}, ${r.sort_order != null ? Number(r.sort_order) : 0}, ${escDate(r.created_at)}, ${escDate(r.updated_at)})`
+        ).join(',');
+        await tgt.query(
+            `INSERT INTO article_sections (article_id, title, content, sort_order, created_at, updated_at) VALUES ${values}`,
+            { raw: true }
+        );
+        process.stdout.write(`   ${Math.min(i + BATCH, rows.length)}/${rows.length}\r`);
+    }
+
+    console.log(`   ✅ ${rows.length} article sections`);
 }
 
 async function migrateComments(src, tgt) {
