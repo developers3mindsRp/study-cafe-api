@@ -404,8 +404,19 @@ function totalCurriculumDurationMinutes(curriculum) {
   return total > 0 ? total : null;
 }
 
+/** Format a minute count as a human string, e.g. 960 -> "1 hr 20 min", 45 -> "45 min". */
+function formatDurationLabel(minutes) {
+  const n = parseInt(String(minutes ?? ""), 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const h = Math.floor(n / 60);
+  const m = n % 60;
+  if (h > 0 && m > 0) return `${h} hr ${m} min`;
+  if (h > 0) return `${h} hr`;
+  return `${m} min`;
+}
+
 function withListingDuration(plain) {
-  const duration = totalCurriculumDurationMinutes(plain.curriculum);
+  const duration = formatDurationLabel(totalCurriculumDurationMinutes(plain.curriculum));
   const out = { ...plain, duration };
   delete out.curriculum;
   return out;
