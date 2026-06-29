@@ -31,6 +31,7 @@ const ArticleTypeMap = require("./ArticleTypeMap")(sequelize);
 const ArticleCourtMap = require("./ArticleCourtMap")(sequelize);
 
 const Article = require("./Article")(sequelize);
+const ArticleSection = require("./ArticleSection")(sequelize);
 const Comment = require("./Comment")(sequelize);
 
 const CmsPage = require("./CmsPage")(sequelize);
@@ -63,10 +64,13 @@ Article.associate({
   ArticleTagMap,
   ArticleTypeMap,
   ArticleCourtMap,
+  ArticleSection,
 });
+ArticleSection.associate({ Article });
 
 const models = {
   Article,
+  ArticleSection,
   Comment,
   Category,
   Tag,
@@ -99,6 +103,9 @@ const models = {
 
 async function connect() {
   await sequelize.authenticate();
+  // Ensure the article_sections child table exists (created via model only — no migration script).
+  // Idempotent: creates the table if missing, no-op when present. Scoped to this one table.
+  await ArticleSection.sync();
 }
 
 module.exports = {

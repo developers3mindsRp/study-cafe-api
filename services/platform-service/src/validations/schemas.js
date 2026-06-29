@@ -343,6 +343,12 @@ const articleWriteBody = {
     noti_no: Joi.string().max(200).allow('', null),
     noti_date: Joi.string().max(100).allow('', null),
     type_of_tax: Joi.string().valid(...ARTICLE_TAX_TYPE_VALUES).allow('', null),
+    /** Ordered article sections (title + rich content); drive the TOC + composed body. */
+    sections: Joi.array().items(Joi.object({
+        title: Joi.string().allow('', null),
+        content: Joi.string().allow('', null),
+        sort_order: Joi.number().integer().optional(),
+    })).optional(),
 };
 
 const createArticle = {

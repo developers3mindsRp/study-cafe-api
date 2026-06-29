@@ -60,6 +60,9 @@ module.exports = (sequelize) => {
   );
   Article.associate = (models) => {
     Article.hasMany(models.Comment, { foreignKey: 'article_id' });
+    if (models.ArticleSection) {
+      Article.hasMany(models.ArticleSection, { foreignKey: 'article_id' });
+    }
     Article.belongsToMany(models.Category, { through: models.ArticleCategoryMap, foreignKey: 'article_id', otherKey: 'category_id' });
     Article.belongsToMany(models.Tag, { through: models.ArticleTagMap, foreignKey: 'article_id', otherKey: 'tag_id' });
     Article.belongsToMany(models.ArticleType, { through: models.ArticleTypeMap, foreignKey: 'article_id', otherKey: 'article_type_id' });

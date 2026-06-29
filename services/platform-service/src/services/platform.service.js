@@ -128,6 +128,7 @@ const {
   NewsletterTemplate,
   Faq,
   Article,
+  ArticleSection,
   ArticleCategoryMap,
   ArticleTagMap,
   ArticleTypeMap,
@@ -1843,20 +1844,59 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
   if (!isPreview && row.deleted_at) return null;
   const p = row.get({ plain: true });
   
-  // Extract TOC and inject anchor IDs into the content
+  // Build TOC + body. When the article has explicit sections, the TOC is generated from the
+  // section titles and the body is composed from the intro content followed by each section
+  // (each title becomes an anchored <h2>). Otherwise fall back to the legacy behavior of
+  // parsing <h2>/<h3> headings out of the content (keeps existing articles working).
   const tocItems = [];
   let htmlWithIds = p.content || '';
-  if (typeof htmlWithIds === 'string') {
+  const slugifyHeading = (text) => String(text)
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .trim();
+
+  const sectionRows = await ArticleSection.findAll({
+    where: { article_id: p.id },
+    order: [['sort_order', 'ASC'], ['id', 'ASC']],
+    attributes: ['id', 'title', 'content', 'sort_order'],
+    raw: true,
+  });
+
+  if (sectionRows.length) {
+    // Section-driven: TOC from section titles; body = intro content + composed sections.
+    const usedIds = new Set();
+    const parts = [];
+    const intro = typeof p.content === 'string' ? p.content : '';
+    if (intro.trim()) parts.push(intro);
+
+    sectionRows.forEach((s, idx) => {
+      const title = (s.title ?? '').trim();
+      const content = s.content ?? '';
+      if (title) {
+        let id = slugifyHeading(title) || `section-${idx + 1}`;
+        // Dedupe so anchor ids stay unique (append -2, -3, … on collision).
+        if (usedIds.has(id)) {
+          let n = 2;
+          while (usedIds.has(`${id}-${n}`)) n += 1;
+          id = `${id}-${n}`;
+        }
+        usedIds.add(id);
+        tocItems.push({ id, text: title, level: 2 });
+        parts.push(`<h2 id="${id}">${escapeHtmlText(title)}</h2>`);
+      }
+      if (content) parts.push(content);
+    });
+
+    htmlWithIds = parts.join('\n');
+  } else if (typeof htmlWithIds === 'string') {
+    // Legacy fallback: parse <h2>/<h3> from content and inject anchor ids.
     htmlWithIds = htmlWithIds.replace(/<(h[23])(?:\s+[^>]*)?>([\s\S]*?)<\/h[23]>/gi, (match, tag, inner) => {
       const rawText = inner.replace(/<[^>]*>?/gm, "").trim();
       if (rawText) {
-        const id = rawText
-          .toLowerCase()
-          .replace(/[^\w\s-]/g, "")
-          .replace(/\s+/g, "-")
-          .replace(/-+/g, "-")
-          .trim();
-        
+        const id = slugifyHeading(rawText);
+
         tocItems.push({
           id,
           text: rawText,
@@ -2284,11 +2324,17 @@ async function getArticleByIdInternal(id) {
     }
   }
 
-  const [catRows, tagRows, typeRows, courtRows, authorName] = await Promise.all([
+  const [catRows, tagRows, typeRows, courtRows, sectionRows, authorName] = await Promise.all([
     ArticleCategoryMap.findAll({ where: { article_id: id }, attributes: ['category_id'] }),
     ArticleTagMap.findAll({ where: { article_id: id }, attributes: ['tag_id'] }),
     ArticleTypeMap.findAll({ where: { article_id: id }, attributes: ['article_type_id'] }),
     ArticleCourtMap.findAll({ where: { article_id: id }, attributes: ['court_id'] }),
+    ArticleSection.findAll({
+      where: { article_id: id },
+      order: [['sort_order', 'ASC'], ['id', 'ASC']],
+      attributes: ['id', 'title', 'content', 'sort_order'],
+      raw: true,
+    }),
     getAuthorDisplayName(p.author_id),
   ]);
   const tagIds = tagRows.map((r) => Number(r.tag_id));
@@ -2307,6 +2353,12 @@ async function getArticleByIdInternal(id) {
     tags,
     article_type_ids: typeRows.map((r) => Number(r.article_type_id)),
     court_ids: courtRows.map((r) => Number(r.court_id)),
+    sections: sectionRows.map((s) => ({
+      id: Number(s.id),
+      title: s.title ?? '',
+      content: s.content ?? '',
+      sort_order: Number(s.sort_order) || 0,
+    })),
     author_name: authorName ?? null,
   };
   if (relatedArticles.length) result.related_articles = relatedArticles;
@@ -2351,6 +2403,25 @@ async function mergeArticleTagIdsFromPayload({ tag_ids: chipIdsRaw, tag_labels: 
     if (tid != null) fromLabels.push(tid);
   }
   return [...new Set([...chipIds, ...fromLabels])];
+}
+
+/**
+ * Replace all sections for an article (destroy + bulkCreate), preserving payload order.
+ * `sort_order` is derived from array index so the stored order matches the editor.
+ * Blank rows (no title and no content) are skipped.
+ */
+async function replaceArticleSections(articleId, sections) {
+  await ArticleSection.destroy({ where: { article_id: articleId } });
+  if (!Array.isArray(sections) || !sections.length) return;
+  const rows = sections
+    .map((s, index) => ({
+      article_id: articleId,
+      title: s && s.title != null ? String(s.title) : null,
+      content: s && s.content != null ? String(s.content) : null,
+      sort_order: index,
+    }))
+    .filter((r) => (r.title && r.title.trim()) || (r.content && r.content.trim()));
+  if (rows.length) await ArticleSection.bulkCreate(rows);
 }
 
 async function createArticle(data) {
@@ -2413,6 +2484,7 @@ async function createArticle(data) {
   if (mergedTagIds.length) await ArticleTagMap.bulkCreate(mergedTagIds.map((tag_id) => ({ article_id: articleId, tag_id })));
   if (article_type_ids.length) await ArticleTypeMap.bulkCreate(article_type_ids.map((article_type_id) => ({ article_id: articleId, article_type_id })));
   if (court_ids.length) await ArticleCourtMap.bulkCreate(court_ids.map((court_id) => ({ article_id: articleId, court_id })));
+  if (Array.isArray(data.sections)) await replaceArticleSections(articleId, data.sections);
 
   const out = await getArticleByIdInternal(articleId);
   logger.info('[createArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
@@ -2536,6 +2608,7 @@ async function updateArticle(id, data) {
     const ids = Array.isArray(patch.court_ids) ? patch.court_ids : [];
     if (ids.length) await ArticleCourtMap.bulkCreate(ids.map((court_id) => ({ article_id: id, court_id })));
   }
+  if (patch.sections !== undefined) await replaceArticleSections(id, patch.sections);
   const out = await getArticleByIdInternal(id);
   logger.info('[updateArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
   await articleScheduling.syncArticlePublishJob(out).catch((err) => {
