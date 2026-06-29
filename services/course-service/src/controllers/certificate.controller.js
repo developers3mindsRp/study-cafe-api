@@ -20,37 +20,37 @@ const getCertificatePayload = asyncHandler(async (req, res) => {
 
   // Fire-and-forget: send "certificate ready" email to the learner.
   // This endpoint is called when user opens/downloads the certificate in the UI.
-  (async () => {
-    try {
-      const contactRes = await axios.get(`${config.authServiceUrl}/internal/users/${userId}/contact`, {
-        headers: { 'x-internal-api-key': config.internalApiKey },
-        timeout: 8000,
-      });
-      const contact = contactRes?.data?.data || contactRes?.data;
-      const to = contact?.email;
-      if (!to) return;
+  // (async () => {
+  //   try {
+  //     const contactRes = await axios.get(`${config.authServiceUrl}/internal/users/${userId}/contact`, {
+  //       headers: { 'x-internal-api-key': config.internalApiKey },
+  //       timeout: 8000,
+  //     });
+  //     const contact = contactRes?.data?.data || contactRes?.data;
+  //     const to = contact?.email;
+  //     if (!to) return;
 
-      await axios.post(
-        `${config.authServiceUrl}/internal/send-course-completion-certificate-email`,
-        {
-          to,
-          name: payload.studentName,
-          courseTitle: payload.courseTitle,
-          completionDate: payload.completionDate,
-          // Used by auth-service to fetch and attach the PDF certificate.
-          userId,
-          courseId: Number(req.params.courseId),
-        },
-        { headers: { 'x-internal-api-key': config.internalApiKey }, timeout: 15000 }
-      );
-    } catch (err) {
-      logger.warn('[certificate-email] failed to send', {
-        userId,
-        courseId: req.params.courseId,
-        err: err?.message || String(err),
-      });
-    }
-  })();
+  //     await axios.post(
+  //       `${config.authServiceUrl}/internal/send-course-completion-certificate-email`,
+  //       {
+  //         to,
+  //         name: payload.studentName,
+  //         courseTitle: payload.courseTitle,
+  //         completionDate: payload.completionDate,
+  //         // Used by auth-service to fetch and attach the PDF certificate.
+  //         userId,
+  //         courseId: Number(req.params.courseId),
+  //       },
+  //       { headers: { 'x-internal-api-key': config.internalApiKey }, timeout: 15000 }
+  //     );
+  //   } catch (err) {
+  //     logger.warn('[certificate-email] failed to send', {
+  //       userId,
+  //       courseId: req.params.courseId,
+  //       err: err?.message || String(err),
+  //     });
+  //   }
+  // })();
 
   sendSuccess(res, payload);
 });
