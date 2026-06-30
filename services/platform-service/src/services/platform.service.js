@@ -155,20 +155,35 @@ function buildAuthorLabel(r) {
     || null;
 }
 
-/** Get display label for one author from users table (same DB). */
-async function getAuthorDisplayName(authorId) {
+/** Get author info (name + bio + profile) for one author from users table. */
+async function getAuthorInfo(authorId) {
   if (authorId == null) return null;
-  const rows = await sequelize.query(
-    `SELECT first_name, last_name, display_name, name, email FROM users WHERE id = ? AND ${sqlDeletedAtIsNull()} LIMIT 1`,
+  const AUTHOR_FIELDS = `first_name, last_name, display_name, name, email, bio, profession, designation, profile_pic_url`;
+  let row = (await sequelize.query(
+    `SELECT ${AUTHOR_FIELDS} FROM users WHERE id = ? AND ${sqlDeletedAtIsNull()} LIMIT 1`,
     { replacements: [authorId], type: QueryTypes.SELECT }
-  );
-  if (rows[0]) return buildAuthorLabel(rows[0]);
+  ))[0];
   // Legacy articles may store wp_user_id in author_id while users.id differs.
-  const byWp = await sequelize.query(
-    `SELECT first_name, last_name, display_name, name, email FROM users WHERE wp_user_id = ? AND ${sqlDeletedAtIsNull()} LIMIT 1`,
-    { replacements: [authorId], type: QueryTypes.SELECT }
-  );
-  return byWp[0] ? buildAuthorLabel(byWp[0]) : null;
+  if (!row) {
+    row = (await sequelize.query(
+      `SELECT ${AUTHOR_FIELDS} FROM users WHERE wp_user_id = ? AND ${sqlDeletedAtIsNull()} LIMIT 1`,
+      { replacements: [authorId], type: QueryTypes.SELECT }
+    ))[0];
+  }
+  if (!row) return null;
+  return {
+    name: buildAuthorLabel(row),
+    bio: row.bio || null,
+    profession: row.profession || null,
+    designation: row.designation || null,
+    profile_pic_url: row.profile_pic_url || null,
+  };
+}
+
+/** @deprecated Use getAuthorInfo; kept for internal callers that only need the display label. */
+async function getAuthorDisplayName(authorId) {
+  const info = await getAuthorInfo(authorId);
+  return info ? info.name : null;
 }
 
 /** Get display label for many author ids; returns Map<authorId, label>. */
@@ -1099,7 +1114,7 @@ async function getArticlesPublic(options = {}) {
 async function getAuthorPublicProfile(authorId) {
   if (authorId == null) return null;
   const rows = await sequelize.query(
-    `SELECT id, first_name, last_name, display_name, name, profession, designation, company, city, state, country, profile_pic_url
+    `SELECT id, first_name, last_name, display_name, name, bio, profession, designation, company, city, state, country, profile_pic_url
      FROM users WHERE id = ? AND ${sqlDeletedAtIsNull()} LIMIT 1`,
     { replacements: [authorId], type: QueryTypes.SELECT },
   );
@@ -1109,6 +1124,7 @@ async function getAuthorPublicProfile(authorId) {
     id: Number(r.id),
     display_name: buildAuthorLabel(r),
     name: r.name || null,
+    bio: r.bio || null,
     profession: r.profession || null,
     designation: r.designation || null,
     company: r.company || null,
@@ -1946,7 +1962,7 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
   const access = isPreview
     ? { can_read_full: true, reason: 'preview' }
     : canReadFullArticle(blog_access_tier, viewer);
-  const authorName = await getAuthorDisplayName(p.author_id);
+  const authorInfo = await getAuthorInfo(p.author_id);
   const fullBody = sanitizeArticleHtml(await embedRelatedArticles(htmlWithIds));
   const related_articles = access.can_read_full ? [] : await getRelatedArticlesForArticle(p.id, 4);
   // const body = access.can_read_full ? fullBody : buildPremiumPreviewHtml(p.excerpt, htmlWithIds);
@@ -2023,7 +2039,11 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     type_of_tax: canViewPremiumMetadata ? (notification?.type_of_tax ?? null) : null,
     has_notification: canViewPremiumMetadata ? Boolean(notification) : false,
     cover_image_url: p.thumbnail_url,
-    author_name: authorName ?? null,
+    author_name: authorInfo?.name ?? null,
+    author_bio: authorInfo?.bio ?? null,
+    author_profession: authorInfo?.profession ?? null,
+    author_designation: authorInfo?.designation ?? null,
+    author_pic: authorInfo?.profile_pic_url ?? null,
     download_url: p.rel_download_url || p.upload_url || null,
     whatsapp_link,
     telegram_link,

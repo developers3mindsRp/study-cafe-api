@@ -71,7 +71,7 @@ function buildPasswordResetMailboxHtml({ resetUrl, siteUrl, ttlMinutes }) {
           <tr>
             <td style="padding:24px 40px 32px;border-top:1px solid #e5e7eb;">
               <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;line-height:1.6;">
-                This is an automated security message from Study Cafe — please do not reply.<br />
+                This is an automated security message from Study Cafe - please do not reply.<br />
                 Need help? Visit <a href="${safeSiteUrl}" style="color:#6b7280;text-decoration:underline;">${siteHostnameForFooter(siteUrl)}</a>
               </p>
             </td>
@@ -85,7 +85,7 @@ function buildPasswordResetMailboxHtml({ resetUrl, siteUrl, ttlMinutes }) {
 }
 
 function buildPasswordResetPlainText({ resetUrl, siteUrl, ttlMinutes }) {
-  return `Reset your password — Study Cafe
+  return `Reset your password - Study Cafe
 
 We received a request to reset your Study Cafe password.
 

@@ -1,19 +1,15 @@
 const { PaymentConfig, PaymentGateway } = require('../models');
-const { logger } = require('../../../../shared');
+const { logger, encryptSecret, decryptSecret } = require('../../../../shared');
+const { decryptGatewayCredentials } = require('./paymentGateway.service');
 
 async function getPaymentConfig() {
   try {
-    // 1. Try to find the active razorpay gateway key
     const activeGateway = await PaymentGateway.findOne({
-      where: { gateway_name: 'razorpay', is_active: 1 }
+      where: { gateway_name: 'razorpay', is_active: 1 },
     });
 
     if (activeGateway) {
-      return {
-        key_id: activeGateway.key_id || '',
-        key_secret: activeGateway.key_secret || '',
-        webhook_secret: activeGateway.webhook_secret || ''
-      };
+      return decryptGatewayCredentials(activeGateway);
     }
   } catch (err) {
     logger.error('[paymentConfigService] Failed to load from payment_gateways', {
@@ -21,13 +17,12 @@ async function getPaymentConfig() {
     });
   }
 
-  // 2. Fallback to old payment_config table if database table doesn't have active keys
   const row = await PaymentConfig.findByPk(1);
   const c = row ? row.get({ plain: true }) : {};
-  return { 
-    key_id: c.razorpay_key_id || '', 
-    key_secret: c.razorpay_key_secret || '',
-    webhook_secret: ''
+  return {
+    key_id: decryptSecret(c.razorpay_key_id || ''),
+    key_secret: decryptSecret(c.razorpay_key_secret || ''),
+    webhook_secret: '',
   };
 }
 
@@ -37,11 +32,18 @@ async function updatePaymentConfig({ razorpay_key_id, razorpay_key_secret }) {
     defaults: { razorpay_key_id: null, razorpay_key_secret: null },
   });
   await row.update({
-    ...(razorpay_key_id !== undefined && { razorpay_key_id: razorpay_key_id || null }),
-    ...(razorpay_key_secret !== undefined && { razorpay_key_secret: razorpay_key_secret || null }),
+    ...(razorpay_key_id !== undefined && {
+      razorpay_key_id: razorpay_key_id ? encryptSecret(razorpay_key_id) : null,
+    }),
+    ...(razorpay_key_secret !== undefined && {
+      razorpay_key_secret: razorpay_key_secret ? encryptSecret(razorpay_key_secret) : null,
+    }),
   });
   const updated = await PaymentConfig.findByPk(1);
-  return { updated: true, key_id: updated?.razorpay_key_id || '' };
+  return {
+    updated: true,
+    key_id: decryptSecret(updated?.razorpay_key_id || ''),
+  };
 }
 
 module.exports = {

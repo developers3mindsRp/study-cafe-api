@@ -439,7 +439,7 @@ const coursesService = {
     if (userIds.length === 0) return [];
 
     const users = await Course.sequelize.query(
-      `SELECT id, name, designation, profession, profile_pic_url
+      `SELECT id, name, designation, profession, bio, profile_pic_url
        FROM users
        WHERE id IN (:userIds) AND ${sqlDeletedAtIsNull()}`,
       {
@@ -457,7 +457,7 @@ const coursesService = {
         sort_order: link.sort_order,
         name: user.name || null,
         role: user.designation || null,
-        bio: user.profession || null,
+        bio: user.bio || user.profession || null,
         image_url: user.profile_pic_url || null,
       };
     });

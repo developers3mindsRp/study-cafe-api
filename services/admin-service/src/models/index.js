@@ -1,6 +1,6 @@
 const { Sequelize } = require('sequelize');
 const config = require('../config');
-const { logger } = require('../../../../shared');
+const { logger, encryptSecret, isEncrypted } = require('../../../../shared');
 
 const sequelize = new Sequelize(
   config.mysql.database,
@@ -82,6 +82,69 @@ CREATE TABLE IF NOT EXISTS payment_gateways (
   } catch (err) {
     logger.error('[admin-service] payment_gateways bootstrap failed', { error: err.message });
     throw err;
+  }
+
+  const widenSecretColumn = async (table, column) => {
+    try {
+      await sequelize.query(
+        `ALTER TABLE ${table} MODIFY COLUMN ${column} VARCHAR(512) ${column === 'webhook_secret' ? 'NULL' : 'NOT NULL'}`
+      );
+    } catch (err) {
+      if (err?.parent?.errno !== 1060 && err?.original?.errno !== 1060) {
+        logger.warn(`[admin-service] widen ${table}.${column} skipped`, { error: err.message });
+      }
+    }
+  };
+
+  await widenSecretColumn('payment_gateways', 'key_id');
+  await widenSecretColumn('payment_gateways', 'key_secret');
+  try {
+    await sequelize.query('ALTER TABLE payment_gateways MODIFY COLUMN webhook_secret VARCHAR(512) NULL');
+  } catch (err) {
+    logger.warn('[admin-service] widen payment_gateways.webhook_secret skipped', { error: err.message });
+  }
+
+  try {
+    await sequelize.query('ALTER TABLE payment_config MODIFY COLUMN razorpay_key_id VARCHAR(512) NULL');
+    await sequelize.query('ALTER TABLE payment_config MODIFY COLUMN razorpay_key_secret VARCHAR(512) NULL');
+  } catch (err) {
+    logger.warn('[admin-service] widen payment_config columns skipped', { error: err.message });
+  }
+
+  await migratePlaintextPaymentSecrets();
+}
+
+async function migratePlaintextPaymentSecrets() {
+  try {
+    const gateways = await PaymentGateway.findAll();
+    for (const row of gateways) {
+      const updates = {};
+      for (const field of ['key_id', 'key_secret', 'webhook_secret']) {
+        const value = row[field];
+        if (value && !isEncrypted(value)) {
+          updates[field] = encryptSecret(value);
+        }
+      }
+      if (Object.keys(updates).length > 0) {
+        await row.update(updates);
+      }
+    }
+
+    const legacy = await PaymentConfig.findByPk(1);
+    if (legacy) {
+      const updates = {};
+      if (legacy.razorpay_key_id && !isEncrypted(legacy.razorpay_key_id)) {
+        updates.razorpay_key_id = encryptSecret(legacy.razorpay_key_id);
+      }
+      if (legacy.razorpay_key_secret && !isEncrypted(legacy.razorpay_key_secret)) {
+        updates.razorpay_key_secret = encryptSecret(legacy.razorpay_key_secret);
+      }
+      if (Object.keys(updates).length > 0) {
+        await legacy.update(updates);
+      }
+    }
+  } catch (err) {
+    logger.error('[admin-service] payment secret encryption migration failed', { error: err.message });
   }
 }
 

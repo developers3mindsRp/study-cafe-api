@@ -71,7 +71,7 @@ function buildPasswordChangedEmailHtml({ name, email, siteUrl }) {
           <tr>
             <td style="padding:24px 40px 32px;border-top:1px solid #e5e7eb;">
               <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;line-height:1.6;">
-                This is an automated security message from Study Cafe — please do not reply to this email.<br />
+                This is an automated security message from Study Cafe - please do not reply to this email.<br />
                 Need help? Visit <a href="${safeUrl}" style="color:#6b7280;text-decoration:underline;">${siteHostnameForFooter(siteUrl)}</a>
               </p>
             </td>
@@ -87,7 +87,7 @@ function buildPasswordChangedEmailHtml({ name, email, siteUrl }) {
 
 function buildPasswordChangedEmailPlainText({ name, email, siteUrl }) {
   const safeName = name || 'there';
-  return `Your password was changed — Study Cafe\n\nHi ${safeName},\n\nThe password for your account (${email}) was changed successfully.\n\nIf you did not make this change, please reset your password or contact support immediately.\n\n${siteUrl}\n`;
+  return `Your password was changed - Study Cafe\n\nHi ${safeName},\n\nThe password for your account (${email}) was changed successfully.\n\nIf you did not make this change, please reset your password or contact support immediately.\n\n${siteUrl}\n`;
 }
 
 module.exports = { buildPasswordChangedEmailHtml, buildPasswordChangedEmailPlainText };

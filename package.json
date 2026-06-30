@@ -46,7 +46,8 @@
     "seo:cleanup-module-metadata": "node scripts/cleanup-module-seo-metadata.js",
     "seo:audit-migration": "node scripts/audit-article-course-seo-migration.js",
     "seo:backfill-entity-fields": "node scripts/backfill-article-course-seo-fields.js",
-    "ensure-site-seo-routes": "node scripts/ensure-site-seo-routes-table.js"
+    "ensure-site-seo-routes": "node scripts/ensure-site-seo-routes-table.js",
+    "test:payment-gateway": "node scripts/test-payment-gateway.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

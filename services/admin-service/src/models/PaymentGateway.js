@@ -7,9 +7,9 @@ module.exports = (sequelize) => {
       id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
       name: { type: DataTypes.STRING(100), allowNull: false },
       gateway_name: { type: DataTypes.STRING(50), allowNull: false, defaultValue: 'razorpay' },
-      key_id: { type: DataTypes.STRING(255), allowNull: false },
-      key_secret: { type: DataTypes.STRING(255), allowNull: false },
-      webhook_secret: { type: DataTypes.STRING(255), allowNull: true },
+      key_id: { type: DataTypes.STRING(512), allowNull: false },
+      key_secret: { type: DataTypes.STRING(512), allowNull: false },
+      webhook_secret: { type: DataTypes.STRING(512), allowNull: true },
       is_active: { type: DataTypes.TINYINT(1), allowNull: false, defaultValue: 0 },
     },
     {

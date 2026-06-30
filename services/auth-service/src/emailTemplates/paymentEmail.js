@@ -180,7 +180,7 @@ function buildPaymentEmailHtml(opts) {
           <tr>
             <td style="padding:24px 40px 32px;border-top:1px solid #e5e7eb;">
               <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;line-height:1.6;">
-                This is an automated receipt from Study Cafe — please do not reply to this email.<br />
+                This is an automated receipt from Study Cafe - please do not reply to this email.<br />
                 Need help? Visit <a href="${safeUrl}" style="color:#6b7280;text-decoration:underline;">${siteHostnameForFooter(opts.siteUrl)}</a>
               </p>
             </td>
@@ -201,7 +201,7 @@ function buildPaymentEmailPlainText(opts) {
   const itemName = opts.itemName || capitalize(opts.type || 'Purchase');
   const amount = formatCurrency(opts.amount, opts.currency);
 
-  let text = `${title} — Study Cafe\n\nHi ${name},\n\n`;
+  let text = `${title} - Study Cafe\n\nHi ${name},\n\n`;
   if (isSuccess) {
     text += `Your payment of ${amount} for "${itemName}" has been confirmed.\n`;
     text += `Order ID: ${opts.orderId}\n`;
