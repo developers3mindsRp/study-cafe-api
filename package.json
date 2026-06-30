@@ -46,6 +46,7 @@
     "seo:cleanup-module-metadata": "node scripts/cleanup-module-seo-metadata.js",
     "seo:audit-migration": "node scripts/audit-article-course-seo-migration.js",
     "seo:backfill-entity-fields": "node scripts/backfill-article-course-seo-fields.js",
+    "seo:backfill-meta-descriptions": "node scripts/backfill-article-meta-descriptions.js",
     "ensure-site-seo-routes": "node scripts/ensure-site-seo-routes-table.js",
     "migrate:api-request-logs": "node scripts/create-api-request-logs-table.js"
   },

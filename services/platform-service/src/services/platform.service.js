@@ -111,6 +111,7 @@ const {
   withTrashedWhere,
   whereHasClauses,
 } = require('../../../../shared');
+const { resolveModuleMetaDescription } = require('../../../../shared/seoMetaDescription');
 const articleScheduling = require('./article-scheduling.service');
 const {
   sequelize,
@@ -2862,14 +2863,17 @@ function courseDetailSeoPath(slug) {
 function seoPayloadFromModuleFields(source, defaults = {}) {
   const title = String(source?.title || defaults.title || '').trim();
   const metaTitle = String(source?.meta_title || '').trim() || title;
+  const metaDescription = resolveModuleMetaDescription(source);
+  const ogDescription =
+    String(source?.og_description || '').trim() || metaDescription || null;
   return {
     page_name: String(defaults.page_name || title || metaTitle).trim() || metaTitle,
     meta_title: metaTitle,
-    meta_description: source?.meta_description ?? null,
+    meta_description: metaDescription,
     meta_keywords: source?.meta_keywords ?? null,
     canonical_url: source?.canonical_url ?? null,
     og_title: source?.og_title ?? null,
-    og_description: source?.og_description ?? null,
+    og_description: ogDescription,
     og_image_url: source?.og_image_url ?? null,
     robots: source?.robots ?? 'index, follow',
   };

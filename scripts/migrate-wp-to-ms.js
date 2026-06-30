@@ -1202,8 +1202,8 @@ const ARTICLE_UPSERT_TAIL = `
 ON DUPLICATE KEY UPDATE
   wp_post_id=VALUES(wp_post_id), title=VALUES(title), slug=VALUES(slug), content=VALUES(content),
   excerpt=VALUES(excerpt), sub_heading=VALUES(sub_heading), author_id=VALUES(author_id),
-  thumbnail_url=VALUES(thumbnail_url), views=VALUES(views), meta_title=VALUES(meta_title),
-  meta_description=VALUES(meta_description), meta_keywords=VALUES(meta_keywords),
+  thumbnail_url=VALUES(thumbnail_url),   views=VALUES(views), meta_title=VALUES(meta_title),
+  meta_description=COALESCE(VALUES(meta_description), meta_description), meta_keywords=VALUES(meta_keywords),
   case_name=VALUES(case_name), citation=VALUES(citation), appeal_number=VALUES(appeal_number),
   judgement_date=VALUES(judgement_date), assessment_year=VALUES(assessment_year),
   court_name=VALUES(court_name), section=VALUES(section), noti_no=VALUES(noti_no),
