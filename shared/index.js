@@ -28,6 +28,7 @@ const {
   whereHasClauses,
 } = require('./softDelete');
 const { buildCreatedAtRange } = require('./istDateRange');
+const { encryptSecret, decryptSecret, isEncrypted } = require('./secretCrypto');
 
 module.exports = {
     logger,
@@ -52,4 +53,7 @@ module.exports = {
     withTrashedWhere,
     whereHasClauses,
     buildCreatedAtRange,
+    encryptSecret,
+    decryptSecret,
+    isEncrypted,
 };

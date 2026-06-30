@@ -54,7 +54,7 @@ function buildWelcomeEmail(email, unsubscribeToken) {
                 <li>Tips to boost your exam preparation</li>
               </ul>
               <p style="margin:0 0 32px;color:#374151;font-size:15px;line-height:1.6;">
-                Stay tuned — great content is coming your way!
+                Stay tuned - great content is coming your way!
               </p>
               <div style="text-align:center;">
                 <a href="https://studycafe.in" style="display:inline-block;background-color:#1e3a5f;color:#ffffff;text-decoration:none;padding:12px 32px;border-radius:6px;font-size:15px;font-weight:600;">

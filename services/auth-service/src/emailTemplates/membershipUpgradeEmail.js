@@ -37,11 +37,11 @@ function buildMembershipUpgradeEmailHtml(opts) {
   const dateRows = `
     <tr>
       <td style="padding:8px 0;color:#6b7280;font-size:13px;vertical-align:top;">Starts</td>
-      <td style="padding:8px 0;color:#374151;font-size:14px;font-weight:600;text-align:right;vertical-align:top;">${startsAt || '—'}</td>
+      <td style="padding:8px 0;color:#374151;font-size:14px;font-weight:600;text-align:right;vertical-align:top;">${startsAt || '-'}</td>
     </tr>
     <tr>
       <td style="padding:8px 0;color:#6b7280;font-size:13px;vertical-align:top;">Expires</td>
-      <td style="padding:8px 0;color:#374151;font-size:14px;font-weight:600;text-align:right;vertical-align:top;">${expiresAt || '—'}</td>
+      <td style="padding:8px 0;color:#374151;font-size:14px;font-weight:600;text-align:right;vertical-align:top;">${expiresAt || '-'}</td>
     </tr>
   `;
 
@@ -102,7 +102,7 @@ function buildMembershipUpgradeEmailHtml(opts) {
           <tr>
             <td style="padding:24px 40px 32px;border-top:1px solid #e5e7eb;">
               <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;line-height:1.6;">
-                This is an automated membership receipt from Study Cafe — please do not reply to this email.<br />
+                This is an automated membership receipt from Study Cafe - please do not reply to this email.<br />
                 Need help? Visit <a href="${safeUrl}" style="color:#6b7280;text-decoration:underline;">${siteHostnameForFooter(safeUrl)}</a>
               </p>
             </td>
@@ -120,11 +120,11 @@ function buildMembershipUpgradeEmailPlainText(opts) {
   const plan = opts.membershipPlanName || 'Membership';
   const orderId = opts.orderId || '';
   const email = opts.email || '';
-  const startsAt = opts.startsAt ? new Date(opts.startsAt).toISOString().slice(0, 10) : '—';
-  const expiresAt = opts.expiresAt ? new Date(opts.expiresAt).toISOString().slice(0, 10) : '—';
+  const startsAt = opts.startsAt ? new Date(opts.startsAt).toISOString().slice(0, 10) : '-';
+  const expiresAt = opts.expiresAt ? new Date(opts.expiresAt).toISOString().slice(0, 10) : '-';
   const siteUrl = opts.siteUrl || '';
 
-  return `Membership upgrade confirmed — Study Cafe\n\nHi ${name},\n\nYour membership upgrade to "${plan}" is confirmed.\n\nOrder ID: ${orderId}\nEmail: ${email}\nStarts: ${startsAt}\nExpires: ${expiresAt}\n\nGo to your Dashboard: ${siteUrl}/dashboard\n`;
+  return `Membership upgrade confirmed - Study Cafe\n\nHi ${name},\n\nYour membership upgrade to "${plan}" is confirmed.\n\nOrder ID: ${orderId}\nEmail: ${email}\nStarts: ${startsAt}\nExpires: ${expiresAt}\n\nGo to your Dashboard: ${siteUrl}/dashboard\n`;
 }
 
 module.exports = { buildMembershipUpgradeEmailHtml, buildMembershipUpgradeEmailPlainText };

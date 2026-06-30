@@ -38,7 +38,7 @@ function buildOtpMailboxHtml({ otp, purpose, siteUrl, ttlMinutes }) {
     : 'Thanks for joining Study Cafe. Enter this code on the verification page to activate your account and unlock your dashboard.';
 
   const ignoreLine = isLogin
-    ? "If you didn't request this code, you can safely ignore this email — your password is still protected."
+    ? "If you didn't request this code, you can safely ignore this email - your password is still protected."
     : "If you didn't create an account with Study Cafe, you can ignore this email.";
 
   return `<!DOCTYPE html>
@@ -90,11 +90,11 @@ function buildOtpMailboxHtml({ otp, purpose, siteUrl, ttlMinutes }) {
             </td>
           </tr>
 
-          <!-- Footer (transactional — no unsubscribe) -->
+          <!-- Footer (transactional - no unsubscribe) -->
           <tr>
             <td style="padding:24px 40px 32px;border-top:1px solid #e5e7eb;">
               <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;line-height:1.6;">
-                This is an automated security message from Study Cafe — please do not reply to this email.<br />
+                This is an automated security message from Study Cafe - please do not reply to this email.<br />
                 Need help? Visit <a href="${safeUrl}" style="color:#6b7280;text-decoration:underline;">${siteHostnameForFooter(siteUrl)}</a>
               </p>
             </td>
@@ -114,7 +114,7 @@ function buildOtpPlainText({ otp, purpose, siteUrl, ttlMinutes }) {
   const line = isLogin
     ? `Your one-time sign-in code is ${otp}. It expires in ${ttlMinutes} minutes. If you didn't request this, you can ignore this email.`
     : `Your email verification code is ${otp}. It expires in ${ttlMinutes} minutes. If you didn't create an account, ignore this message.`;
-  return `${title} — Study Cafe\n\n${line}\n\n${siteUrl}\n`;
+  return `${title} - Study Cafe\n\n${line}\n\n${siteUrl}\n`;
 }
 
 module.exports = { buildOtpMailboxHtml, buildOtpPlainText };

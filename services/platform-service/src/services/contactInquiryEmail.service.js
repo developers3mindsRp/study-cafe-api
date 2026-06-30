@@ -51,7 +51,7 @@ async function sendContactInquiryEmails(inquiry) {
   if (userTo) {
     results.user = await sendMail({
       to: userTo,
-      subject: 'We received your enquiry — Study Cafe',
+      subject: 'We received your enquiry - Study Cafe',
       html: buildUserEnquiryConfirmationHtml(inquiry, siteUrl),
       text: buildUserEnquiryConfirmationPlainText(inquiry, siteUrl),
     });

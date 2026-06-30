@@ -157,7 +157,7 @@ function buildWithdrawalEmailHtml(opts) {
           <tr>
             <td style="padding:24px 40px 32px;border-top:1px solid #e5e7eb;">
               <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;line-height:1.6;">
-                This is an automated message from Study Cafe — please do not reply to this email.<br />
+                This is an automated message from Study Cafe - please do not reply to this email.<br />
                 Questions? Visit <a href="${safeUrl}" style="color:#6b7280;text-decoration:underline;">${siteHostnameForFooter(opts.siteUrl)}</a>
               </p>
             </td>
@@ -175,7 +175,7 @@ function buildWithdrawalEmailPlainText(opts) {
   const name = opts.name || 'there';
   const amount = formatCurrency(opts.amount, opts.currency);
   const id = opts.requestId;
-  let text = `${statusMeta(opts.status).title} — Study Cafe\n\nHi ${name},\n\n`;
+  let text = `${statusMeta(opts.status).title} - Study Cafe\n\nHi ${name},\n\n`;
   if (opts.status === 'created') {
     text += `Your withdrawal request #${id} for ${amount} has been submitted and is pending review.\n`;
   } else if (opts.status === 'approved') {

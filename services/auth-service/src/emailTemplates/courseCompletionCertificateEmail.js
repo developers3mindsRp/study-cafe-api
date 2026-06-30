@@ -83,7 +83,7 @@ function buildCourseCompletionCertificateEmailHtml(opts) {
           <tr>
             <td style="padding:24px 40px 32px;border-top:1px solid #e5e7eb;">
               <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;line-height:1.6;">
-                This is an automated learning confirmation from Study Cafe — please do not reply to this email.<br />
+                This is an automated learning confirmation from Study Cafe - please do not reply to this email.<br />
                 Need help? Visit <a href="${safeUrl}" style="color:#6b7280;text-decoration:underline;">${siteHostnameForFooter(safeUrl)}</a>
               </p>
             </td>
@@ -102,7 +102,7 @@ function buildCourseCompletionCertificateEmailPlainText(opts) {
   const courseTitle = opts.courseTitle || 'Course';
   const completionDate = opts.completionDate || '';
   const siteUrl = opts.siteUrl || '';
-  return `Course completed — Study Cafe\n\nHi ${name},\n\nCongratulations! You completed "${courseTitle}".\nYour certificate is ready. Open the course page and click Certificate to print / save as PDF.\n\nCompleted on: ${completionDate}\nGo to my account: ${siteUrl}/account\n`;
+  return `Course completed - Study Cafe\n\nHi ${name},\n\nCongratulations! You completed "${courseTitle}".\nYour certificate is ready. Open the course page and click Certificate to print / save as PDF.\n\nCompleted on: ${completionDate}\nGo to my account: ${siteUrl}/account\n`;
 }
 
 module.exports = {
