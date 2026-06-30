@@ -29,6 +29,7 @@ const {
 } = require('./softDelete');
 const { buildCreatedAtRange } = require('./istDateRange');
 const { encryptSecret, decryptSecret, isEncrypted } = require('./secretCrypto');
+const apiRequestLogger = require('./apiRequestLogger');
 
 module.exports = {
     logger,
@@ -56,4 +57,5 @@ module.exports = {
     encryptSecret,
     decryptSecret,
     isEncrypted,
+    apiRequestLogger,
 };

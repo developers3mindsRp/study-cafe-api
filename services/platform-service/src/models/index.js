@@ -1,5 +1,6 @@
 const { Sequelize } = require("sequelize");
 const config = require("../config");
+const { attachQueryCollector } = require("../../../../shared/apiRequestLogger");
 
 const sequelize = new Sequelize(
   config.mysql.database,
@@ -21,6 +22,8 @@ const sequelize = new Sequelize(
     define: { underscored: true },
   },
 );
+
+attachQueryCollector(sequelize);
 
 const Category = require("./Category")(sequelize);
 const Tag = require("./Tag")(sequelize);

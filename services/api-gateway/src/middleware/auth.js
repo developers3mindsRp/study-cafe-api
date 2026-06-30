@@ -1,5 +1,6 @@
 const axios = require('axios');
 const config = require('../config');
+const { markGatewayOnlyLog } = require('../../../../shared/apiRequestLogger');
 
 /** Skip JWT for CORS preflight — browser sends OPTIONS without Authorization. */
 function validateJWTUnlessOptions(req, res, next) {
@@ -10,6 +11,7 @@ function validateJWTUnlessOptions(req, res, next) {
 async function validateJWT(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith('Bearer ')) {
+    markGatewayOnlyLog(req);
     return res.status(401).json({ error: 'Missing or invalid authorization' });
   }
   const token = auth.slice(7);
@@ -26,6 +28,7 @@ async function validateJWT(req, res, next) {
     req.user = finalData;
     next();
   } catch (err) {
+    markGatewayOnlyLog(req);
     const status = err.response?.status || 500;
     const body = err.response?.data || { error: 'Validation failed' };
     res.status(status).json(body);
@@ -57,6 +60,7 @@ async function requireCourseAccess(req, res, next) {
   if (!courseId) return next();
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith('Bearer ')) {
+    markGatewayOnlyLog(req);
     return res.status(401).json({ error: 'Authorization required to access course content' });
   }
   try {
@@ -67,10 +71,12 @@ async function requireCourseAccess(req, res, next) {
     });
     const finalData = data.data || data;
     if (!finalData.allowed) {
+      markGatewayOnlyLog(req);
       return res.status(403).json({ error: 'Access denied to this course' });
     }
     next();
   } catch (err) {
+    markGatewayOnlyLog(req);
     const status = err.response?.status || 403;
     const body = err.response?.data || { error: 'Access check failed' };
     res.status(status).json(body);
