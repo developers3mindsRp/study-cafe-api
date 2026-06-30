@@ -709,7 +709,13 @@ const affiliateService = {
     const term = search && String(search).trim() ? String(search).trim() : '';
     const likeTerm = term ? `%${term}%` : null;
 
-    const courseWhere = { is_published: true, status: 'publish' };
+    // Match the same publish convention used across courses.service.js:
+    // a course is publicly listable when is_published=true and not hidden.
+    // NOTE: do NOT also require status='publish' — courses are published via
+    // the is_published flag and their `status` column stays at its 'draft'
+    // default (no code path sets it to 'publish'), which previously hid every
+    // newly created course from referral links.
+    const courseWhere = { is_published: true, hide_from_public: false };
     if (likeTerm) {
       courseWhere[Op.or] = [
         { title: { [Op.like]: likeTerm } },
