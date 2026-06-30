@@ -107,9 +107,9 @@ const apps = [
       PLATFORM_SERVICE_URL: platform,
       ADMIN_SERVICE_URL: admin,
       INTERNAL_API_KEY: required('INTERNAL_API_KEY'),
-      RAZORPAY_KEY_ID: required('RAZORPAY_KEY_ID'),
-      RAZORPAY_KEY_SECRET: required('RAZORPAY_KEY_SECRET'),
-      RAZORPAY_WEBHOOK_SECRET: required('RAZORPAY_WEBHOOK_SECRET'),
+      RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID,
+      RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET,
+      RAZORPAY_WEBHOOK_SECRET: process.env.RAZORPAY_WEBHOOK_SECRET,
     }),
   },
   {

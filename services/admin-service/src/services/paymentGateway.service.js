@@ -17,11 +17,19 @@ function encryptGatewayPayload(data) {
 
 function decryptGatewayCredentials(row) {
   const plain = row?.get ? row.get({ plain: true }) : { ...row };
-  return {
-    key_id: decryptSecret(plain.key_id || ''),
-    key_secret: decryptSecret(plain.key_secret || ''),
-    webhook_secret: decryptSecret(plain.webhook_secret || ''),
-  };
+  const key_id = decryptSecret(plain.key_id || '', { soft: true });
+  const key_secret = decryptSecret(plain.key_secret || '', { soft: true });
+  const webhookRaw = plain.webhook_secret || '';
+  let webhook_secret = '';
+  if (webhookRaw) {
+    webhook_secret = decryptSecret(webhookRaw, { soft: true }) ?? '';
+  }
+  if (!key_id || !key_secret) {
+    const err = new Error('Failed to decrypt payment credential');
+    err.code = 'PAYMENT_CREDENTIAL_DECRYPT_FAILED';
+    throw err;
+  }
+  return { key_id, key_secret, webhook_secret };
 }
 
 /** Admin API: never return raw secrets — only metadata and decrypted key_id for display. */
