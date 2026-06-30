@@ -1,7 +1,17 @@
 const { Op } = require('sequelize');
 const { File, FileCat, FileCategory, sequelize } = require('../models');
 const { AppError, paginate } = require('../../../../shared');
-const { slugify } = require('../utils/slugify');
+const { slugify, buildSlugLookupCandidates } = require('../utils/slugify');
+
+// Build the where-clause for an id-or-slug lookup. Numeric → id match.
+// Otherwise match the slug against decoded + percent-encoded candidates so
+// Hindi (and other non-Latin) slugs resolve whether stored decoded or, as with
+// legacy WP imports, percent-encoded.
+function buildIdOrSlugWhere(idOrSlug) {
+  if (/^\d+$/.test(String(idOrSlug))) return { id: Number(idOrSlug) };
+  const candidates = buildSlugLookupCandidates(idOrSlug);
+  return { slug: { [Op.in]: candidates } };
+}
 
 /**
  * Columns safe to expose to anonymous / non-member users.
@@ -122,8 +132,7 @@ const filesService = {
   },
 
   async getByIdOrSlug(idOrSlug) {
-    const isNumeric = /^\d+$/.test(String(idOrSlug));
-    const where = isNumeric ? { id: Number(idOrSlug) } : { slug: String(idOrSlug) };
+    const where = buildIdOrSlugWhere(idOrSlug);
 
     const file = await File.findOne({
       where,
@@ -143,8 +152,7 @@ const filesService = {
    * @returns {{ views: number }}
    */
   async incrementViewCount(idOrSlug) {
-    const isNumeric = /^\d+$/.test(String(idOrSlug));
-    const where = isNumeric ? { id: Number(idOrSlug) } : { slug: String(idOrSlug) };
+    const where = buildIdOrSlugWhere(idOrSlug);
 
     const file = await File.findOne({
       where,
@@ -165,8 +173,7 @@ const filesService = {
    * Throws 404 if the file does not exist or is not published.
    */
   async getSecureDownloadUrl(idOrSlug) {
-    const isNumeric = /^\d+$/.test(String(idOrSlug));
-    const where = isNumeric ? { id: Number(idOrSlug) } : { slug: String(idOrSlug) };
+    const where = buildIdOrSlugWhere(idOrSlug);
 
     const file = await File.findOne({
       where,

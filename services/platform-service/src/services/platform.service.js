@@ -1827,22 +1827,56 @@ function articleCanonicalPublicPath(article) {
   return path.startsWith('/') ? path : `/${path}`;
 }
 
+/**
+ * Build the set of slug strings to look up for a slug segment coming off the URL.
+ * Legacy WP slugs for non-Latin titles (e.g. Hindi) are stored percent-encoded —
+ * WordPress writes them lowercase (`%e0%a4%8f...`), while the router hands us the
+ * decoded Devanagari. Return the decoded form plus lower/upper percent-encoded
+ * variants so the lookup stays an indexed equality match against `slug`.
+ */
+function buildSlugLookupCandidates(urlSlug) {
+  const raw = String(urlSlug ?? '').trim();
+  if (!raw) return [];
+  const set = new Set([raw]);
+  // Decode first in case the caller already sent an encoded slug.
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    // Malformed sequence — keep raw as-is.
+  }
+  set.add(decoded);
+  // Per-segment encode (keep the `-` word separators readable, like WP post_name).
+  try {
+    const encoded = decoded.split('-').map((seg) => encodeURIComponent(seg)).join('-');
+    set.add(encoded);
+    set.add(encoded.toLowerCase());
+    set.add(encoded.toUpperCase());
+  } catch {
+    // Ignore — decoded already covers the common case.
+  }
+  return [...set];
+}
+
 async function findPublishedArticleRowByPublicPathKey(raw) {
   const { slugOnly, articleId } = parsePublicArticlePathKey(raw);
   if (articleId != null && Number.isFinite(articleId) && articleId > 0) {
+    // The id is the unique key — once it matches, the article is found. The slug
+    // segment is decorative; a mismatch (legacy/encoded slug) is corrected by the
+    // frontend's canonical redirect, so never 404 just because slugs differ.
     const row = await Article.findOne({
       where: publishedActiveArticleWhere({ id: articleId }),
     });
-    if (!row) return null;
-    if (slugOnly) {
-      const plain = row.get({ plain: true });
-      if (plain.slug !== slugOnly) return null;
-    }
-    return row;
+    return row || null;
   }
   if (!slugOnly) return null;
+  // Try the slug as given, plus the percent-encoded variants, since legacy WP slugs
+  // for non-Latin titles are stored percent-encoded (usually lowercase) while the
+  // router hands us the decoded form. This stays an indexed equality lookup — no
+  // full-table scan.
+  const slugCandidates = buildSlugLookupCandidates(slugOnly);
   return Article.findOne({
-    where: publishedActiveArticleWhere({ slug: slugOnly }),
+    where: publishedActiveArticleWhere({ slug: { [Op.in]: slugCandidates } }),
   });
 }
 

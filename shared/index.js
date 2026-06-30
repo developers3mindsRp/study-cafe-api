@@ -30,6 +30,7 @@ const {
 const { buildCreatedAtRange } = require('./istDateRange');
 const { encryptSecret, decryptSecret, isEncrypted } = require('./secretCrypto');
 const apiRequestLogger = require('./apiRequestLogger');
+const { detectRazorpayKeyMode, razorpayKeyModeLabel } = require('./razorpayKeyMode');
 
 module.exports = {
     logger,
@@ -58,4 +59,6 @@ module.exports = {
     decryptSecret,
     isEncrypted,
     apiRequestLogger,
+    detectRazorpayKeyMode,
+    razorpayKeyModeLabel,
 };
