@@ -71,6 +71,14 @@ function formatPaymentMethodLabel(gateway, { amount, hasRazorpayPayment } = {}) 
 // ─── Internal service helpers ─────────────────────────────────────────────────
 
 async function fetchPlanDetails(entityId) {
+  // The internal numeric endpoint only resolves numeric plan ids. Admin-granted
+  // membership orders store the plan *slug* (e.g. "basic") as entity_id, so when
+  // entity_id isn't numeric, resolve it via the public slug endpoint instead.
+  const raw = entityId == null ? '' : String(entityId).trim();
+  const isNumericId = /^\d+$/.test(raw);
+  if (!isNumericId) {
+    return fetchPlanBySlug(raw);
+  }
   try {
     const { data } = await axios.get(
       `${config.platformServiceUrl}/internal/platform/plans/${entityId}`,
@@ -220,9 +228,13 @@ function buildMembershipPayload(order, plan, userContact = null) {
     const expires = new Date(now.getTime() + plan.duration_days * 86400000);
     payload.expiresAt = expires.toISOString();
   } else {
+    // Fallback when the plan couldn't be resolved or has no duration metadata.
+    // Never fabricate a membership tier here — use the slug actually stored on the
+    // order (admin grants store the plan slug as entity_id) so we don't silently
+    // overwrite the granted plan with a bogus tier.
     const expires = new Date(now);
     expires.setFullYear(expires.getFullYear() + 1);
-    payload.membershipType = 'annual';
+    payload.membershipType = plan?.slug || order.entity_id;
     payload.startsAt = now.toISOString();
     payload.expiresAt = expires.toISOString();
   }
@@ -730,8 +742,11 @@ async function emitPurchaseOutbox(locked, t, options = {}) {
       { transaction: t }
     );
 
-    // Auto-assign courses linked to this membership plan
-    const { course_ids = [], course_cat_ids = [] } = await fetchPlanLinkedCourses(locked.entity_id);
+    // Auto-assign courses linked to this membership plan.
+    // entity_id may be a slug (admin grants) — use the resolved plan's numeric id
+    // since the linked-courses endpoint is numeric-only.
+    const linkedCoursesPlanRef = plan?.id != null ? plan.id : locked.entity_id;
+    const { course_ids = [], course_cat_ids = [] } = await fetchPlanLinkedCourses(linkedCoursesPlanRef);
 
     // 1. Handle explicit course IDs
     const courseSet = new Set(course_ids.map(Number).filter(Boolean));
