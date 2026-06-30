@@ -2,14 +2,17 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { logger } = require('../../../shared');
+const { createApiRequestLoggerMiddleware } = require('../../../shared/apiRequestLogger');
 const routes = require('./routes');
 const { errorHandler } = require('./middleware');
 const { uploadsDir } = require('./middleware/upload');
 
 function createApp() {
   const app = express();
+  app.set('trust proxy', true);
   app.use(cors());
   app.use(express.json({ limit: '15mb' }));
+  app.use(createApiRequestLoggerMiddleware());
   app.use(logger.requestLogger);
 
   // Serve uploaded files at /platform/uploads (gateway rewrites /api/uploads → here).

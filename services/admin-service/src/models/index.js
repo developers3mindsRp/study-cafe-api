@@ -1,6 +1,7 @@
 const { Sequelize } = require('sequelize');
 const config = require('../config');
 const { logger, encryptSecret, isEncrypted } = require('../../../../shared');
+const { attachQueryCollector } = require('../../../../shared/apiRequestLogger');
 
 const sequelize = new Sequelize(
   config.mysql.database,
@@ -22,6 +23,8 @@ const sequelize = new Sequelize(
     define: { underscored: true },
   }
 );
+
+attachQueryCollector(sequelize);
 
 const AdminLog = require('./AdminLog')(sequelize);
 const PaymentConfig = require('./PaymentConfig')(sequelize);

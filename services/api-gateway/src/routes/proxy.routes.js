@@ -131,6 +131,7 @@ function register(app) {
   const injectUserId = (req, _res, next) => {
     const uid = req.user?.userId ?? req.user?.id;
     if (uid != null && uid !== '') req.headers['x-user-id'] = String(uid);
+    if (req.user?.email) req.headers['x-user-email'] = String(req.user.email);
     next();
   };
 
@@ -146,6 +147,7 @@ function register(app) {
   const injectOptionalUserId = (req, _res, next) => {
     const uid = req.user?.userId ?? req.user?.id;
     if (uid != null && uid !== '') req.headers['x-user-id'] = String(uid);
+    if (req.user?.email) req.headers['x-user-email'] = String(req.user.email);
     next();
   };
 
@@ -172,6 +174,7 @@ function register(app) {
   const injectOrderUserId = (req, _res, next) => {
     const uid = req.user?.userId ?? req.user?.id;
     if (uid != null && uid !== '') req.headers['x-user-id'] = String(uid);
+    if (req.user?.email) req.headers['x-user-email'] = String(req.user.email);
     next();
   };
   app.use('/api/orders', validateJWT, injectOrderUserId, orderProxy);
@@ -179,12 +182,14 @@ function register(app) {
   app.use('/api/affiliate', validateJWT, (req, _res, next) => {
     const uid = req.user?.userId ?? req.user?.id;
     if (uid != null && uid !== '') req.headers['x-user-id'] = String(uid);
+    if (req.user?.email) req.headers['x-user-email'] = String(req.user.email);
     if (req.user?.referral_code) req.headers['x-referral-code'] = req.user.referral_code;
     next();
   }, affiliateProxy);
   app.use('/api/admin', validateJWTUnlessOptions, (req, _res, next) => {
     const uid = req.user?.userId ?? req.user?.id;
     if (uid != null && uid !== '') req.headers['x-user-id'] = String(uid);
+    if (req.user?.email) req.headers['x-user-email'] = String(req.user.email);
     if (req.user?.role) req.headers['x-user-role'] = req.user.role;
     next();
   }, adminProxy);
@@ -213,6 +218,7 @@ function register(app) {
   app.use('/api/internal/downloads', validateJWT, (req, _res, next) => {
     const uid = req.user?.userId ?? req.user?.id;
     if (uid != null && uid !== '') req.headers['x-user-id'] = String(uid);
+    if (req.user?.email) req.headers['x-user-email'] = String(req.user.email);
     if (req.user?.role) req.headers['x-user-role'] = req.user.role;
     next();
   }, downloadsInternalProxy);

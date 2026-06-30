@@ -23,6 +23,11 @@
 const { logger } = require('./logger');
 
 function errorHandler(err, req, res, _next) {
+    req._apiLogException = {
+        message: err?.message || 'Unknown error',
+        stack: err?.stack || null,
+    };
+
     // 1. AppError — expected operational error
     if (err.isOperational) {
         const body = { success: false, error: err.message };

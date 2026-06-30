@@ -29,6 +29,7 @@ const {
 } = require('./softDelete');
 const { buildCreatedAtRange } = require('./istDateRange');
 const { encryptSecret, decryptSecret, isEncrypted } = require('./secretCrypto');
+const apiRequestLogger = require('./apiRequestLogger');
 const { detectRazorpayKeyMode, razorpayKeyModeLabel } = require('./razorpayKeyMode');
 
 module.exports = {
@@ -57,6 +58,7 @@ module.exports = {
     encryptSecret,
     decryptSecret,
     isEncrypted,
+    apiRequestLogger,
     detectRazorpayKeyMode,
     razorpayKeyModeLabel,
 };

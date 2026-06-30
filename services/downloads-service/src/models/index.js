@@ -1,6 +1,7 @@
 const { Sequelize } = require('sequelize');
 const config = require('../config');
 const { logger } = require('../../../../shared');
+const { attachQueryCollector } = require('../../../../shared/apiRequestLogger');
 
 const sequelize = new Sequelize(
   config.mysql.database,
@@ -25,6 +26,8 @@ const sequelize = new Sequelize(
     },
   }
 );
+
+attachQueryCollector(sequelize);
 
 const File = require('./File')(sequelize);
 const FileCat = require('./FileCat')(sequelize);

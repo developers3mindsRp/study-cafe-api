@@ -1,0 +1,36 @@
+-- Central API request/response audit log table
+-- Apply: node scripts/apply-mysql-sql-file.js scripts/create-api-request-logs-table.sql
+
+CREATE TABLE IF NOT EXISTS api_request_logs (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  request_id CHAR(36) NOT NULL,
+  user_id BIGINT UNSIGNED NULL,
+  user_email VARCHAR(255) NULL,
+  ip_address VARCHAR(45) NOT NULL,
+  http_method VARCHAR(10) NOT NULL,
+  full_url TEXT NOT NULL,
+  endpoint VARCHAR(512) NOT NULL,
+  route_name VARCHAR(255) NULL,
+  query_params JSON NULL,
+  request_headers JSON NULL,
+  request_body LONGTEXT NULL,
+  uploaded_files JSON NULL,
+  response_status INT NOT NULL,
+  response_body LONGTEXT NULL,
+  execution_time_ms INT NOT NULL,
+  database_queries LONGTEXT NULL,
+  database_query_count INT NOT NULL DEFAULT 0,
+  user_agent TEXT NULL,
+  referer TEXT NULL,
+  server_name VARCHAR(255) NULL,
+  environment VARCHAR(64) NULL,
+  exception_message TEXT NULL,
+  stack_trace LONGTEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_api_request_logs_created_at (created_at),
+  KEY idx_api_request_logs_user_email (user_email),
+  KEY idx_api_request_logs_ip_address (ip_address),
+  KEY idx_api_request_logs_endpoint (endpoint),
+  KEY idx_api_request_logs_response_status (response_status),
+  KEY idx_api_request_logs_request_id (request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
