@@ -362,7 +362,7 @@ async function findActiveUserByLoginIdentifier(identifier) {
   const raw = String(identifier || '').trim();
   if (!raw) return null;
 
-  const include = [{ model: Role, as: 'Role', attributes: ['name'] }];
+  const include = [roleIncludeForSession()];
   const attrs = SESSION_USER_ATTRS;
 
   if (raw.includes('@')) {

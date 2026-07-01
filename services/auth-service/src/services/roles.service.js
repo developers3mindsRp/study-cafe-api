@@ -1,4 +1,4 @@
-const { Op } = require('sequelize');
+const { Op, fn, col } = require('sequelize');
 const { Role, User } = require('../models');
 const {
   requireDynamicRoleSchema,
@@ -48,15 +48,17 @@ function roleToDto(role, userCount = 0) {
 
 async function countUsersByRoleIds(roleIds) {
   if (!roleIds.length) return new Map();
+  // Count in SQL with GROUP BY rather than loading every user row into memory
+  // (a role like the default student role can have hundreds of thousands of users).
   const rows = await User.findAll({
     where: { role_id: { [Op.in]: roleIds } },
-    attributes: ['role_id'],
+    attributes: ['role_id', [fn('COUNT', col('role_id')), 'count']],
+    group: ['role_id'],
     raw: true,
   });
   const counts = new Map();
   for (const row of rows) {
-    const id = row.role_id;
-    counts.set(id, (counts.get(id) ?? 0) + 1);
+    counts.set(row.role_id, Number(row.count) || 0);
   }
   return counts;
 }

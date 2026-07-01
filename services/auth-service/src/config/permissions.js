@@ -22,6 +22,7 @@ const ALL_PERMISSIONS = [
   'global_settings:list', 'global_settings:view', 'global_settings:edit',
   'admin:access',
   'admin_users:list', 'admin_users:view', 'admin_users:create', 'admin_users:edit', 'admin_users:delete',
+  'students:list', 'students:view', 'students:create', 'students:edit', 'students:delete',
   'roles:list', 'roles:view', 'roles:create', 'roles:edit', 'roles:delete',
   'users:course_allotment',
   'users:membership_allotment',
@@ -141,6 +142,12 @@ const MODULE_HIERARCHY = {
     ['admin_users:edit'],
     ['admin_users:create'],
     ['admin_users:delete'],
+  ],
+  students: [
+    ['students:list', 'students:view'],
+    ['students:edit'],
+    ['students:create'],
+    ['students:delete'],
   ],
   roles: [
     ['roles:list', 'roles:view'],
