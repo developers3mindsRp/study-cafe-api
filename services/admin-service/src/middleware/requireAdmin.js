@@ -24,7 +24,11 @@ async function requireAdmin(req, res, next) {
       timeout: 5000,
     });
     const finalData = data.data || data;
-    const allowed = finalData.role === 'admin' || finalData.role === 'super_admin';
+    const permissions = Array.isArray(finalData.permissions) ? finalData.permissions : [];
+    const allowed =
+      finalData.role === 'admin' ||
+      finalData.role === 'super_admin' ||
+      permissions.includes('admin:access');
     if (!allowed) {
       return res.status(403).json({ error: 'Admin access required' });
     }
