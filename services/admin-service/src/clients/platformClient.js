@@ -3,7 +3,10 @@ const config = require('../config');
 
 const platformClient = axios.create({
   baseURL: config.platformServiceUrl,
-  timeout: 10000,
+  // 30s: a large article create (content + taxonomy + section rows) can exceed the
+  // old 10s limit; when the proxy aborted mid-insert the client saw an error while
+  // platform-service still committed the row, causing duplicate articles on retry.
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
     'x-internal-api-key': config.internalApiKey,
