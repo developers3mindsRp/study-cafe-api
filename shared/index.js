@@ -31,6 +31,11 @@ const { buildCreatedAtRange } = require('./istDateRange');
 const { encryptSecret, decryptSecret, isEncrypted } = require('./secretCrypto');
 const apiRequestLogger = require('./apiRequestLogger');
 const { detectRazorpayKeyMode, razorpayKeyModeLabel } = require('./razorpayKeyMode');
+const {
+  expandEmbedMarkersInHtml,
+  collectEmbedScriptsForHtml,
+  prepareArticleHtmlForDisplay,
+} = require('./articleEmbedHtml');
 
 module.exports = {
     logger,
@@ -61,4 +66,7 @@ module.exports = {
     apiRequestLogger,
     detectRazorpayKeyMode,
     razorpayKeyModeLabel,
+    expandEmbedMarkersInHtml,
+    collectEmbedScriptsForHtml,
+    prepareArticleHtmlForDisplay,
 };
