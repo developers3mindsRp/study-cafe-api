@@ -411,14 +411,83 @@ const getTagsInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+const getTagByIdInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.tags.getTagById(req.params.id);
+  if (!data) throw new AppError('Tag not found', 404);
+  sendSuccess(res, data);
+});
+
+const createTag = asyncHandler(async (req, res) => {
+  const data = await platformService.tags.createTag(req.body);
+  sendCreated(res, data);
+});
+
+const updateTag = asyncHandler(async (req, res) => {
+  const data = await platformService.tags.updateTag(req.params.id, req.body);
+  if (!data) throw new AppError('Tag not found', 404);
+  sendSuccess(res, data);
+});
+
+const deleteTag = asyncHandler(async (req, res) => {
+  const ok = await platformService.tags.deleteTag(req.params.id);
+  if (!ok) throw new AppError('Tag not found', 404);
+  sendNoContent(res);
+});
+
 const getArticleTypesInternal = asyncHandler(async (req, res) => {
   const data = await platformService.articleTypes.getArticleTypesInternal();
   sendSuccess(res, data);
 });
 
+const getArticleTypeByIdInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.articleTypes.getArticleTypeById(req.params.id);
+  if (!data) throw new AppError('Article type not found', 404);
+  sendSuccess(res, data);
+});
+
+const createArticleType = asyncHandler(async (req, res) => {
+  const data = await platformService.articleTypes.createArticleType(req.body);
+  sendCreated(res, data);
+});
+
+const updateArticleType = asyncHandler(async (req, res) => {
+  const data = await platformService.articleTypes.updateArticleType(req.params.id, req.body);
+  if (!data) throw new AppError('Article type not found', 404);
+  sendSuccess(res, data);
+});
+
+const deleteArticleType = asyncHandler(async (req, res) => {
+  const ok = await platformService.articleTypes.deleteArticleType(req.params.id);
+  if (!ok) throw new AppError('Article type not found', 404);
+  sendNoContent(res);
+});
+
 const getCourtsInternal = asyncHandler(async (req, res) => {
   const data = await platformService.courts.getCourtsInternal();
   sendSuccess(res, data);
+});
+
+const getCourtByIdInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.courts.getCourtById(req.params.id);
+  if (!data) throw new AppError('Court not found', 404);
+  sendSuccess(res, data);
+});
+
+const createCourt = asyncHandler(async (req, res) => {
+  const data = await platformService.courts.createCourt(req.body);
+  sendCreated(res, data);
+});
+
+const updateCourt = asyncHandler(async (req, res) => {
+  const data = await platformService.courts.updateCourt(req.params.id, req.body);
+  if (!data) throw new AppError('Court not found', 404);
+  sendSuccess(res, data);
+});
+
+const deleteCourt = asyncHandler(async (req, res) => {
+  const ok = await platformService.courts.deleteCourt(req.params.id);
+  if (!ok) throw new AppError('Court not found', 404);
+  sendNoContent(res);
 });
 
 // ── CMS pages ───────────────────────────────────────────────────────
@@ -738,8 +807,20 @@ module.exports = {
   updateArticleCategory,
   deleteArticleCategory,
   getTagsInternal,
+  getTagByIdInternal,
+  createTag,
+  updateTag,
+  deleteTag,
   getArticleTypesInternal,
+  getArticleTypeByIdInternal,
+  createArticleType,
+  updateArticleType,
+  deleteArticleType,
   getCourtsInternal,
+  getCourtByIdInternal,
+  createCourt,
+  updateCourt,
+  deleteCourt,
   getCmsPageBySlug,
   getCmsPagesInternal,
   getCmsPageBySlugInternal,

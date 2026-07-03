@@ -2759,7 +2759,7 @@ async function deleteArticleCategory(id) {
 
 async function getTagsInternal() {
   const rows = await Tag.findAll({
-    order: [['name', 'ASC']],
+    order: [['id', 'DESC']],
     attributes: ['id', 'name', 'slug'],
   });
   return rows.map((r) => r.get({ plain: true }));
@@ -2767,7 +2767,7 @@ async function getTagsInternal() {
 
 async function getArticleTypesInternal() {
   const rows = await ArticleType.findAll({
-    order: [['name', 'ASC']],
+    order: [['id', 'DESC']],
     attributes: ['id', 'name', 'slug'],
   });
   return rows.map((r) => r.get({ plain: true }));
@@ -2775,10 +2775,138 @@ async function getArticleTypesInternal() {
 
 async function getCourtsInternal() {
   const rows = await Court.findAll({
-    order: [['name', 'ASC']],
+    order: [['id', 'DESC']],
     attributes: ['id', 'name', 'slug'],
   });
   return rows.map((r) => r.get({ plain: true }));
+}
+
+async function findTaxonomyByNameInsensitive(Model, name, excludeId = null) {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  const nameClause = sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), lower);
+  const where = excludeId != null ? { [Op.and]: [nameClause, { id: { [Op.ne]: excludeId } }] } : nameClause;
+  return Model.findOne({ where });
+}
+
+async function ensureUniqueTaxonomySlug(Model, baseSlug, excludeId = null) {
+  let slug = baseSlug || 'item';
+  let candidate = slug;
+  let n = 2;
+  while (true) {
+    const existing = await Model.findOne({
+      where: {
+        slug: candidate,
+        ...(excludeId != null && { id: { [Op.ne]: excludeId } }),
+      },
+    });
+    if (!existing) return candidate;
+    candidate = `${slug}-${n}`;
+    n += 1;
+  }
+}
+
+function makeTaxonomyCrud(Model, JunctionModel, junctionFkField, entityLabel) {
+  async function getById(id) {
+    const row = await Model.findByPk(id);
+    return row ? row.get({ plain: true }) : null;
+  }
+
+  async function create(data) {
+    const name = String(data.name || '').trim();
+    if (!name) throw new AppError('Name is required', 400);
+    const duplicate = await findTaxonomyByNameInsensitive(Model, name);
+    if (duplicate) {
+      throw new AppError(`A ${entityLabel} with this name already exists`, 409);
+    }
+    const baseSlug = data.slug ? slugify(data.slug) : slugify(name);
+    const slugVal = await ensureUniqueTaxonomySlug(Model, baseSlug || `item-${Date.now()}`);
+    const row = await Model.create({ name, slug: slugVal });
+    return row.get({ plain: true });
+  }
+
+  async function update(id, data) {
+    const row = await Model.findByPk(id);
+    if (!row) return null;
+    const updates = {};
+    if (data.name !== undefined) {
+      const name = String(data.name || '').trim();
+      if (!name) throw new AppError('Name is required', 400);
+      const duplicate = await findTaxonomyByNameInsensitive(Model, name, id);
+      if (duplicate) {
+        throw new AppError(`A ${entityLabel} with this name already exists`, 409);
+      }
+      updates.name = name;
+    }
+    if (data.slug !== undefined) {
+      const nextName = updates.name ?? row.get('name');
+      const baseSlug = data.slug ? slugify(data.slug) : slugify(nextName);
+      updates.slug = await ensureUniqueTaxonomySlug(Model, baseSlug || `item-${id}`, id);
+    }
+    if (Object.keys(updates).length) await row.update(updates);
+    return row.get({ plain: true });
+  }
+
+  async function remove(id) {
+    await JunctionModel.destroy({ where: { [junctionFkField]: id } });
+    const deleted = await Model.destroy({ where: { id } });
+    return deleted > 0;
+  }
+
+  return { getById, create, update, remove };
+}
+
+const tagCrud = makeTaxonomyCrud(Tag, ArticleTagMap, 'tag_id', 'tag');
+const articleTypeCrud = makeTaxonomyCrud(ArticleType, ArticleTypeMap, 'article_type_id', 'article type');
+const courtCrud = makeTaxonomyCrud(Court, ArticleCourtMap, 'court_id', 'court');
+
+async function getTagById(id) {
+  return tagCrud.getById(id);
+}
+
+async function createTag(data) {
+  return tagCrud.create(data);
+}
+
+async function updateTag(id, data) {
+  return tagCrud.update(id, data);
+}
+
+async function deleteTag(id) {
+  return tagCrud.remove(id);
+}
+
+async function getArticleTypeById(id) {
+  return articleTypeCrud.getById(id);
+}
+
+async function createArticleType(data) {
+  return articleTypeCrud.create(data);
+}
+
+async function updateArticleType(id, data) {
+  return articleTypeCrud.update(id, data);
+}
+
+async function deleteArticleType(id) {
+  return articleTypeCrud.remove(id);
+}
+
+async function getCourtById(id) {
+  return courtCrud.getById(id);
+}
+
+async function createCourt(data) {
+  return courtCrud.create(data);
+}
+
+async function updateCourt(id, data) {
+  return courtCrud.update(id, data);
+}
+
+async function deleteCourt(id) {
+  return courtCrud.remove(id);
 }
 
 async function getFaqsPublic() {
@@ -3500,9 +3628,27 @@ module.exports = {
     updateArticleCategory,
     deleteArticleCategory,
   },
-  tags: { getTagsInternal },
-  articleTypes: { getArticleTypesInternal },
-  courts: { getCourtsInternal },
+  tags: {
+    getTagsInternal,
+    getTagById,
+    createTag,
+    updateTag,
+    deleteTag,
+  },
+  articleTypes: {
+    getArticleTypesInternal,
+    getArticleTypeById,
+    createArticleType,
+    updateArticleType,
+    deleteArticleType,
+  },
+  courts: {
+    getCourtsInternal,
+    getCourtById,
+    createCourt,
+    updateCourt,
+    deleteCourt,
+  },
   cmsPages: {
     getCmsPagesInternal,
     getCmsPageBySlug,

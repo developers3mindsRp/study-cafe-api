@@ -5,6 +5,23 @@ const { AppError, logger, encryptSecret, decryptSecret, isEncrypted } = require(
 
 const SENSITIVE_FIELDS = ['key_id', 'key_secret', 'webhook_secret'];
 
+const CREDENTIAL_MASK_RE = /^[•*·.\-_\s]+$/u;
+
+function isCredentialMask(value) {
+  const s = String(value ?? '').trim();
+  if (!s) return false;
+  return CREDENTIAL_MASK_RE.test(s);
+}
+
+/** Apply credential field only when client sent a real new value (not mask / empty / unchanged sentinel). */
+function pickEncryptedCredential(field, value) {
+  if (value === undefined) return {};
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed || isCredentialMask(trimmed)) return {};
+  if (isEncrypted(trimmed)) return {};
+  return { [field]: encryptSecret(trimmed) };
+}
+
 function encryptGatewayPayload(data) {
   const out = { ...data };
   for (const field of SENSITIVE_FIELDS) {
@@ -131,13 +148,19 @@ async function updatePaymentGateway(id, data) {
     const updates = {
       ...(name !== undefined && { name }),
       ...(gateway_name !== undefined && { gateway_name }),
-      ...(key_id !== undefined && { key_id: encryptSecret(String(key_id).trim()) }),
-      ...(key_secret !== undefined && { key_secret: encryptSecret(String(key_secret).trim()) }),
-      ...(webhook_secret !== undefined && {
-        webhook_secret: webhook_secret ? encryptSecret(String(webhook_secret).trim()) : null,
-      }),
+      ...pickEncryptedCredential('key_id', key_id),
+      ...pickEncryptedCredential('key_secret', key_secret),
       ...(is_active !== undefined && { is_active: is_active ? 1 : 0 }),
     };
+
+    if (Object.prototype.hasOwnProperty.call(data, 'webhook_secret')) {
+      const wh = webhook_secret;
+      if (wh == null || String(wh).trim() === '') {
+        updates.webhook_secret = null;
+      } else if (!isCredentialMask(wh) && !isEncrypted(String(wh))) {
+        updates.webhook_secret = encryptSecret(String(wh).trim());
+      }
+    }
 
     const updated = await sequelize.transaction(async (t) => {
       if (is_active && !item.is_active) {
