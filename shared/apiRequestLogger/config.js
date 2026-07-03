@@ -1,7 +1,10 @@
 'use strict';
 
-const { requiredBool } = require('../env');
+const fs = require('fs');
+const path = require('path');
+const dotenv = require('dotenv');
 
+const ENV_FILE = path.resolve(__dirname, '../../.env');
 const DEFAULT_MAX_PAYLOAD_BYTES = 1048576;
 
 const STATIC_IGNORE_PATHS = [
@@ -25,9 +28,37 @@ const STATIC_EXTENSIONS = new Set([
   '.map',
 ]);
 
-function loadConfig() {
-  const enabled = requiredBool('API_REQUEST_LOGGER_ENABLED');
+let cachedLoggerEnabled;
+let cachedEnvMtimeMs;
 
+function parseEnabledValue(raw, fallback = false) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return fallback;
+  const normalized = String(raw).trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1') return true;
+  if (normalized === 'false' || normalized === '0') return false;
+  throw new Error(`Invalid boolean for API_REQUEST_LOGGER_ENABLED: ${raw}`);
+}
+
+/**
+ * Read logger toggle from repo-root .env so it is not stuck on a stale
+ * process.env value (dotenv does not override existing shell/PM2 vars).
+ */
+function isLoggingEnabled() {
+  try {
+    const stat = fs.statSync(ENV_FILE);
+    if (cachedEnvMtimeMs !== stat.mtimeMs) {
+      const parsed = dotenv.parse(fs.readFileSync(ENV_FILE));
+      cachedLoggerEnabled = parseEnabledValue(parsed.API_REQUEST_LOGGER_ENABLED, false);
+      cachedEnvMtimeMs = stat.mtimeMs;
+    }
+    return cachedLoggerEnabled;
+  } catch {
+    return parseEnabledValue(process.env.API_REQUEST_LOGGER_ENABLED, false);
+  }
+}
+
+function getConfig() {
+  const enabled = isLoggingEnabled();
   return {
     enabled,
     logResponse: enabled,
@@ -37,20 +68,8 @@ function loadConfig() {
   };
 }
 
-let cachedConfig;
-
-function getConfig() {
-  if (!cachedConfig) cachedConfig = loadConfig();
-  return cachedConfig;
-}
-
-function isLoggingEnabled() {
-  return getConfig().enabled;
-}
-
 function isQueryLoggingEnabled() {
-  const cfg = getConfig();
-  return cfg.enabled && cfg.logQueries;
+  return isLoggingEnabled();
 }
 
 function shouldSkipRequest(req) {

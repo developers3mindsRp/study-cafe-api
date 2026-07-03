@@ -159,7 +159,7 @@ function buildAuthorLabel(r) {
 /** Get author info (name + bio + profile) for one author from users table. */
 async function getAuthorInfo(authorId) {
   if (authorId == null) return null;
-  const AUTHOR_FIELDS = `first_name, last_name, display_name, name, email, bio, profession, designation, profile_pic_url`;
+  const AUTHOR_FIELDS = `first_name, last_name, display_name, name, email, bio, profession, designation, profile_pic_url, linkedin`;
   let row = (await sequelize.query(
     `SELECT ${AUTHOR_FIELDS} FROM users WHERE id = ? AND ${sqlDeletedAtIsNull()} LIMIT 1`,
     { replacements: [authorId], type: QueryTypes.SELECT }
@@ -178,6 +178,7 @@ async function getAuthorInfo(authorId) {
     profession: row.profession || null,
     designation: row.designation || null,
     profile_pic_url: row.profile_pic_url || null,
+    linkedin: row.linkedin || null,
   };
 }
 
@@ -1115,7 +1116,7 @@ async function getArticlesPublic(options = {}) {
 async function getAuthorPublicProfile(authorId) {
   if (authorId == null) return null;
   const rows = await sequelize.query(
-    `SELECT id, first_name, last_name, display_name, name, bio, profession, designation, company, city, state, country, profile_pic_url
+    `SELECT id, first_name, last_name, display_name, name, bio, profession, designation, company, city, state, country, profile_pic_url, linkedin
      FROM users WHERE id = ? AND ${sqlDeletedAtIsNull()} LIMIT 1`,
     { replacements: [authorId], type: QueryTypes.SELECT },
   );
@@ -1133,6 +1134,7 @@ async function getAuthorPublicProfile(authorId) {
     state: r.state || null,
     country: r.country || null,
     profile_pic_url: r.profile_pic_url || null,
+    linkedin: r.linkedin || null,
   };
 }
 
@@ -2045,6 +2047,7 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     author_profession: authorInfo?.profession ?? null,
     author_designation: authorInfo?.designation ?? null,
     author_pic: authorInfo?.profile_pic_url ?? null,
+    author_linkedin: authorInfo?.linkedin ?? null,
     download_url: p.rel_download_url || p.upload_url || null,
     whatsapp_link,
     telegram_link,
