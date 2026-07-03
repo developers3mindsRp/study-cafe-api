@@ -317,6 +317,7 @@ const getArticlesInternal = asyncHandler(async (req, res) => {
     : 'DESC';
   const category_id = req.query.category_id ? parseInt(req.query.category_id, 10) : undefined;
   const blog_access_tier = req.query.blog_access_tier || undefined;
+  const author = req.query.author ? String(req.query.author).trim() : undefined;
   const date_from = req.query.date_from || undefined;
   const date_to = req.query.date_to || undefined;
 
@@ -329,6 +330,7 @@ const getArticlesInternal = asyncHandler(async (req, res) => {
     sortOrder,
     category_id,
     blog_access_tier,
+    author: author || undefined,
     date_from,
     date_to,
     trashed: req.query.trashed,

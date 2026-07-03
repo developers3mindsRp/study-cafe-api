@@ -2261,6 +2261,7 @@ async function getArticlesInternal(options = {}) {
     date_from,
     date_to,
     trashed,
+    author,
   } = options;
 
   const trashMode = parseTrashedMode({ trashed });
@@ -2283,6 +2284,25 @@ async function getArticlesInternal(options = {}) {
     where.id = {
       [Op.in]: sequelize.literal(
         `(SELECT article_id FROM article_categories WHERE category_id = ${safeCatId})`
+      ),
+    };
+  }
+
+  // One free-text term matched against every field the author label can come
+  // from (see buildAuthorLabel) plus email. articles.author_id may hold either
+  // users.id or the legacy users.wp_user_id, so both are matched via UNION.
+  const authorTerm = author && String(author).trim();
+  if (authorTerm) {
+    const like = sequelize.escape(`%${authorTerm}%`);
+    const authorMatch = `(email LIKE ${like}
+        OR name LIKE ${like}
+        OR display_name LIKE ${like}
+        OR CONCAT_WS(' ', first_name, last_name) LIKE ${like})`;
+    where.author_id = {
+      [Op.in]: sequelize.literal(
+        `(SELECT id FROM users WHERE ${authorMatch} AND ${sqlDeletedAtIsNull()}
+          UNION
+          SELECT wp_user_id FROM users WHERE wp_user_id IS NOT NULL AND ${authorMatch} AND ${sqlDeletedAtIsNull()})`
       ),
     };
   }
