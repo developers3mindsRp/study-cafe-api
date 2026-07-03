@@ -185,6 +185,23 @@ const updateArticleCategory = {
     }),
 };
 
+// ── Article taxonomy masters (tags, types, courts) ─────────────────
+
+const createTaxonomyTerm = {
+    body: Joi.object({
+        name: Joi.string().max(200).required(),
+        slug: Joi.string().max(200).allow('', null),
+    }),
+};
+
+const updateTaxonomyTerm = {
+    params: idParam.params,
+    body: Joi.object({
+        name: Joi.string().max(200),
+        slug: Joi.string().max(200).allow('', null),
+    }),
+};
+
 // ── Footer ──────────────────────────────────────────────────────────
 
 const upsertFooter = {
@@ -554,6 +571,8 @@ module.exports = {
     releaseArticleEditLock,
     createArticleCategory,
     updateArticleCategory,
+    createTaxonomyTerm,
+    updateTaxonomyTerm,
     upsertCmsPage,
     createSeoMetadata,
     updateSeoMetadata,

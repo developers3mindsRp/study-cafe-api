@@ -38,6 +38,27 @@ function randomStepFromRange(randomValue) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+/** Canonical key for comparing random_value strings (e.g. "1 - 3" vs "1-3"). */
+function randomValueKey(randomValue) {
+  const { min, max } = parseRandomRange(randomValue);
+  if (max <= 0 && min <= 0) return '';
+  if (min === max) return String(min);
+  return `${min}-${max}`;
+}
+
+function totalSeatsKey(totalSeats) {
+  if (totalSeats == null || totalSeats === '') return 0;
+  const n = parseInt(String(totalSeats), 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function parseBoostAccumulator(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const acc = parseInt(String(value), 10);
+  if (!Number.isFinite(acc) || acc < 0) return null;
+  return acc;
+}
+
 /**
  * On each call (e.g. public checkout page load): add random step in range to persisted accumulator.
  * Display sold = paid orders + accumulator (capped by total_seats when > 0).
@@ -201,6 +222,8 @@ async function getPaymentLinkById(id) {
 async function createPaymentLink(body) {
   try {
     const payload = validatePayload(body, { partial: false });
+    const acc = parseBoostAccumulator(body.random_boost_accumulator);
+    payload.random_boost_accumulator = acc != null ? acc : 0;
     await assertSlugUnique(payload.slug);
     const created = await PaymentLink.create(payload);
     const plain = created.get({ plain: true });
@@ -225,16 +248,19 @@ async function updatePaymentLink(id, body) {
     delete patch.seats_booked;
     if (patch.slug) await assertSlugUnique(patch.slug, id);
     const rvChanged =
-      patch.random_value !== undefined && String(patch.random_value ?? '') !== String(prev.random_value ?? '');
+      Object.prototype.hasOwnProperty.call(body, 'random_value') &&
+      randomValueKey(body.random_value) !== randomValueKey(prev.random_value);
     const totalChanged =
-      patch.total_seats !== undefined && Number(patch.total_seats) !== Number(prev.total_seats);
+      Object.prototype.hasOwnProperty.call(body, 'total_seats') &&
+      totalSeatsKey(body.total_seats) !== totalSeatsKey(prev.total_seats);
+
     if (rvChanged || totalChanged) {
-      // Changing random_value or total_seats always resets accumulator to 0
-      patch.random_boost_accumulator = 0;
-    } else if (body.random_boost_accumulator !== undefined && body.random_boost_accumulator !== null) {
-      // Admin explicitly set the accumulator start value
-      const acc = parseInt(String(body.random_boost_accumulator), 10);
-      if (Number.isFinite(acc) && acc >= 0) {
+      // Changing random_value or total_seats resets accumulator unless admin set a new start in same request.
+      const acc = parseBoostAccumulator(body.random_boost_accumulator);
+      patch.random_boost_accumulator = acc != null ? acc : 0;
+    } else if (Object.prototype.hasOwnProperty.call(body, 'random_boost_accumulator')) {
+      const acc = parseBoostAccumulator(body.random_boost_accumulator);
+      if (acc != null) {
         patch.random_boost_accumulator = acc;
       }
     }
@@ -354,6 +380,9 @@ module.exports = {
   slugify,
   parseRandomRange,
   randomStepFromRange,
+  randomValueKey,
+  totalSeatsKey,
+  parseBoostAccumulator,
   countPaidOrdersForPaymentLink,
   listPaymentLinks,
   getPaymentLinkById,
