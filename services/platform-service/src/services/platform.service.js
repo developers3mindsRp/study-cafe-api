@@ -110,6 +110,8 @@ const {
   trashedSequelizeOptions,
   withTrashedWhere,
   whereHasClauses,
+  prepareArticleHtmlForDisplay,
+  collectEmbedScriptsForHtml,
 } = require('../../../../shared');
 const { resolveModuleMetaDescription } = require('../../../../shared/seoMetaDescription');
 const articleScheduling = require('./article-scheduling.service');
@@ -1680,8 +1682,8 @@ function sanitizeArticleHtml(html) {
   // removes the entire class attribute and flattens typography (bold/colour utilities).
   out = out.replace(/\s*class="[^"]*(?:flex|grid|gap-|grow|shrink|min-w|min-h|max-w-\(|pb-25|scroll-mt|focus:|pointer-events|z-0|agent-turn|text-message|text-token|dark:prose|markdown-new-styling|prose-invert|@w-)[^"]*"/gi, '');
 
-  // 2. Remove data-* attributes (data-testid, data-turn-id, data-message-*, etc.)
-  out = out.replace(/\s*data-[a-z][a-z0-9-]*="[^"]*"/gi, '');
+  // 2. Remove data-* attributes except embed storage markers (expanded before sanitise).
+  out = out.replace(/\s*data-(?!article-embed-b64)[a-z][a-z0-9-]*="[^"]*"/gi, '');
 
   // 3. Remove dir="auto" and tabindex attributes
   out = out.replace(/\s*dir="auto"/gi, '');
@@ -1967,10 +1969,18 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     ? { can_read_full: true, reason: 'preview' }
     : canReadFullArticle(blog_access_tier, viewer);
   const authorInfo = await getAuthorInfo(p.author_id);
-  const fullBody = sanitizeArticleHtml(await embedRelatedArticles(htmlWithIds));
+  // Same as admin ArticleContentRenderer: expandEmbedMarkersInHtml before display.
+  const htmlExpanded = prepareArticleHtmlForDisplay(htmlWithIds);
+  const fullBody = sanitizeArticleHtml(await embedRelatedArticles(htmlExpanded));
   const related_articles = access.can_read_full ? [] : await getRelatedArticlesForArticle(p.id, 4);
   // const body = access.can_read_full ? fullBody : buildPremiumPreviewHtml(p.excerpt, htmlWithIds);
   const body = access.can_read_full ? fullBody : buildPremiumPreviewHtml(p.excerpt, p.content);
+  const embed_scripts = collectEmbedScriptsForHtml(body);
+  const primaryEmbedScript = embed_scripts[0];
+  const bodyWithEmbedScript =
+    primaryEmbedScript && !body.includes(primaryEmbedScript)
+      ? `${body}\n<script async src="${primaryEmbedScript}" charset="utf-8"></script>`
+      : body;
 
   // Fetch all categories for this article (with social link fields)
   const [catMapRows, tagMapRows] = await Promise.all([
@@ -2034,7 +2044,12 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
       can_view_citation: canViewPremiumMetadata,
       can_view_notification: canViewPremiumMetadata,
     },
-    body,
+    /** Renderable HTML — embed markers expanded like admin ArticleContentRenderer. */
+    body: bodyWithEmbedScript,
+    /** Same as `body` for clients that read `content`. */
+    content: bodyWithEmbedScript,
+    /** Load with next/script after rendering `body` (mirrors admin hydrateSocialEmbeds). */
+    embed_scripts,
     toc: tocItems,
     citation: canViewPremiumMetadata ? buildArticleCitationFromRow(p) : null,
     notification: canViewPremiumMetadata ? notification : null,
