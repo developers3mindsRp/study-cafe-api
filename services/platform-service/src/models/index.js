@@ -37,6 +37,7 @@ const ArticleCourtMap = require("./ArticleCourtMap")(sequelize);
 
 const Article = require("./Article")(sequelize);
 const ArticleSection = require("./ArticleSection")(sequelize);
+const ArticleEditLock = require("./ArticleEditLock")(sequelize);
 const Comment = require("./Comment")(sequelize);
 
 const CmsPage = require("./CmsPage")(sequelize);
@@ -76,6 +77,7 @@ ArticleSection.associate({ Article });
 const models = {
   Article,
   ArticleSection,
+  ArticleEditLock,
   Comment,
   Category,
   Tag,
@@ -111,6 +113,8 @@ async function connect() {
   // Ensure the article_sections child table exists (created via model only — no migration script).
   // Idempotent: creates the table if missing, no-op when present. Scoped to this one table.
   await ArticleSection.sync();
+  // Same model-only pattern for the concurrent-editing lock table.
+  await ArticleEditLock.sync();
 }
 
 module.exports = {

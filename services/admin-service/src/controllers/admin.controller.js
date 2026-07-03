@@ -1053,7 +1053,20 @@ const platform = {
     return c.put(`/internal/platform/articles/${req.params.id}`, body).then((r) => ({ data: r.data }));
   }),
   deleteArticle: platformProxy((c, req) => c.delete(`/internal/platform/articles/${req.params.id}`).then(() => ({ status: 204 }))),
+  deleteArticlePermanently: platformProxy((c, req) => c.delete(`/internal/platform/articles/${req.params.id}/permanent`).then(() => ({ status: 204 }))),
   restoreArticle: platformProxy((c, req) => c.post(`/internal/platform/articles/${req.params.id}/restore`).then(() => ({ status: 204 }))),
+  getArticleEditLock: platformProxy((c, req) => c.get(`/internal/platform/articles/${req.params.id}/edit-lock`).then((r) => ({ data: r.data }))),
+  // Lock identity always comes from the JWT-derived admin id, never from the client payload.
+  acquireArticleEditLock: platformProxy((c, req) => {
+    const adminId = getAdminId(req);
+    if (!adminId) throw new AppError('Unable to resolve admin identity', 401);
+    return c.post(`/internal/platform/articles/${req.params.id}/edit-lock`, { user_id: adminId }).then((r) => ({ data: r.data }));
+  }),
+  releaseArticleEditLock: platformProxy((c, req) => {
+    const adminId = getAdminId(req);
+    if (!adminId) throw new AppError('Unable to resolve admin identity', 401);
+    return c.delete(`/internal/platform/articles/${req.params.id}/edit-lock`, { params: { user_id: adminId } }).then(() => ({ status: 204 }));
+  }),
   getArticleCategories: platformProxy((c) => c.get('/internal/platform/article-categories').then((r) => ({ data: r.data }))),
   getArticleCategory: platformProxy((c, req) => c.get(`/internal/platform/article-categories/${req.params.id}`).then((r) => ({ data: r.data }))),
   createArticleCategory: platformProxy((c, req) => c.post('/internal/platform/article-categories', req.body).then((r) => ({ data: r.data, status: 201 }))),

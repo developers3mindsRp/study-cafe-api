@@ -371,6 +371,33 @@ const restoreArticle = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+const deleteArticlePermanently = asyncHandler(async (req, res) => {
+  const result = await platformService.articles.deleteArticlePermanently(req.params.id);
+  if (!result.ok) {
+    if (result.reason === 'not_trashed') {
+      throw new AppError('Article must be moved to trash before permanent deletion', 400);
+    }
+    throw new AppError('Article not found', 404);
+  }
+  sendNoContent(res);
+});
+
+const getArticleEditLock = asyncHandler(async (req, res) => {
+  const data = await platformService.articles.getArticleEditLock(req.params.id);
+  sendSuccess(res, data);
+});
+
+const acquireArticleEditLock = asyncHandler(async (req, res) => {
+  const data = await platformService.articles.acquireArticleEditLock(req.params.id, req.body.user_id);
+  if (!data) throw new AppError('Article not found', 404);
+  sendSuccess(res, data);
+});
+
+const releaseArticleEditLock = asyncHandler(async (req, res) => {
+  await platformService.articles.releaseArticleEditLock(req.params.id, req.query.user_id);
+  sendNoContent(res);
+});
+
 // ── Lookups ────────────────────────────────────────────────────────
 
 const getArticleCategories = asyncHandler(async (req, res) => {
@@ -730,7 +757,11 @@ module.exports = {
   createArticle,
   updateArticle,
   deleteArticle,
+  deleteArticlePermanently,
   restoreArticle,
+  getArticleEditLock,
+  acquireArticleEditLock,
+  releaseArticleEditLock,
   getArticleCategories,
   getArticleCategoriesInternal,
   getArticleCategoryByIdInternal,
