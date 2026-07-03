@@ -21,6 +21,7 @@ async function paginate(model, options = {}) {
     limit = 10,
     sortBy,
     sortOrder = 'DESC',
+    order: orderOption,
     attributes,
     include,
     distinct,
@@ -33,8 +34,11 @@ async function paginate(model, options = {}) {
   const safeLimit = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 10));
   const offset = (safePage - 1) * safeLimit;
 
-  const order = [];
-  if (sortBy && typeof sortBy === 'string' && sortBy.trim()) {
+  let order = [];
+  if (Array.isArray(orderOption) && orderOption.length) {
+    // Caller supplied a pre-built Sequelize order (e.g. computed/literal expression).
+    order = orderOption;
+  } else if (sortBy && typeof sortBy === 'string' && sortBy.trim()) {
     const col = sortBy.trim();
     const dir = String(sortOrder).toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
     order.push([col, dir]);

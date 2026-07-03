@@ -102,8 +102,7 @@ function buildPaymentEmailHtml(opts) {
   }
 
   const ctaLabel = isSuccess ? 'Go to Dashboard' : 'Try Again';
-  const ctaUrl = isSuccess ? `${safeUrl}/dashboard/my-purchases` : safeUrl;
-
+  const ctaUrl = isSuccess ? `${safeUrl}/dashboard` : safeUrl;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>

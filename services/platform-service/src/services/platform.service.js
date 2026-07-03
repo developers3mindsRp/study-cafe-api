@@ -2165,7 +2165,12 @@ async function getUpNextArticlesBySlugPublic(slug, viewer = null, rawLimit) {
 }
 
 const ARTICLE_LIST_ATTRS = ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'status', 'published_at', 'scheduled_publish_at', 'created_at', 'updated_at', 'blog_access_tier'];
-const SORTABLE_ARTICLE_COLUMNS = ['id', 'title', 'slug', 'created_at', 'updated_at', 'status', 'published_at', 'scheduled_publish_at'];
+const SORTABLE_ARTICLE_COLUMNS = ['id', 'title', 'slug', 'created_at', 'updated_at', 'status', 'published_at', 'scheduled_publish_at', 'effective_date'];
+
+// The "effective" display time of an article, matching what the admin list shows per status:
+//   Scheduled -> scheduled_publish_at, Published -> published_at, Draft/other -> updated_at.
+// Ordering by this puts e.g. a scheduled-for 2:30 above a scheduled-for 1:30 regardless of status.
+const ARTICLE_EFFECTIVE_DATE_SQL = 'COALESCE(`scheduled_publish_at`, `published_at`, `updated_at`)';
 
 function normalizeArticleAdminStatus(raw) {
   if (raw === undefined || raw === null || raw === '') return 'draft';
@@ -2261,6 +2266,13 @@ async function getArticlesInternal(options = {}) {
     : withActiveArticleWhere(baseWhere);
   const orderColumn = normalizeSortColumn(sortBy);
   const orderDir = String(sortOrder).toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+  // For the admin list, order by the per-status "effective" display time by default.
+  // The panel currently sends sortBy=created_at, so treat that (and the explicit
+  // effective_date key) as the computed COALESCE(scheduled, published, updated) ordering.
+  const useEffectiveDate = orderColumn === 'effective_date' || orderColumn === 'created_at';
+  const computedOrder = useEffectiveDate
+    ? [[sequelize.literal(ARTICLE_EFFECTIVE_DATE_SQL), orderDir]]
+    : undefined;
 
   const safeCatId = category_id ? Number(category_id) : null;
   if (safeCatId && Number.isFinite(safeCatId)) {
@@ -2277,6 +2289,7 @@ async function getArticlesInternal(options = {}) {
     limit,
     sortBy: orderColumn,
     sortOrder: orderDir,
+    ...(computedOrder && { order: computedOrder }),
     attributes: ARTICLE_LIST_ATTRS,
     ...trashedSequelizeOptions(trashMode),
   });
@@ -2430,22 +2443,23 @@ async function getExistingArticleTagIds(articleId) {
 }
 
 /** Match/create Tag by human-readable name (case-insensitive) for comma-separated admin tags. */
-async function findOrCreateTagIdForLabel(rawLabel) {
+async function findOrCreateTagIdForLabel(rawLabel, t) {
   const name = String(rawLabel || '').trim();
   if (!name) return null;
   const lower = name.toLowerCase();
   const existing = await Tag.findOne({
     where: sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), lower),
     attributes: ['id'],
+    ...(t && { transaction: t }),
   });
   if (existing) return Number(existing.get('id'));
   let slug = slugify(name);
   if (!slug) slug = `tag-${Date.now()}`;
-  const row = await Tag.create({ name, slug });
+  const row = await Tag.create({ name, slug }, { ...(t && { transaction: t }) });
   return Number(row.get('id'));
 }
 
-async function mergeArticleTagIdsFromPayload({ tag_ids: chipIdsRaw, tag_labels: labelsRaw }) {
+async function mergeArticleTagIdsFromPayload({ tag_ids: chipIdsRaw, tag_labels: labelsRaw }, t) {
   const chipIds = (Array.isArray(chipIdsRaw) ? chipIdsRaw : [])
     .map((id) => Number(id))
     .filter((n) => Number.isFinite(n) && n > 0);
@@ -2454,7 +2468,7 @@ async function mergeArticleTagIdsFromPayload({ tag_ids: chipIdsRaw, tag_labels: 
     .filter(Boolean);
   const fromLabels = [];
   for (const label of labels) {
-    const tid = await findOrCreateTagIdForLabel(label);
+    const tid = await findOrCreateTagIdForLabel(label, t);
     if (tid != null) fromLabels.push(tid);
   }
   return [...new Set([...chipIds, ...fromLabels])];
@@ -2465,8 +2479,8 @@ async function mergeArticleTagIdsFromPayload({ tag_ids: chipIdsRaw, tag_labels: 
  * `sort_order` is derived from array index so the stored order matches the editor.
  * Blank rows (no title and no content) are skipped.
  */
-async function replaceArticleSections(articleId, sections) {
-  await ArticleSection.destroy({ where: { article_id: articleId } });
+async function replaceArticleSections(articleId, sections, t) {
+  await ArticleSection.destroy({ where: { article_id: articleId }, ...(t && { transaction: t }) });
   if (!Array.isArray(sections) || !sections.length) return;
   const rows = sections
     .map((s, index) => ({
@@ -2476,7 +2490,7 @@ async function replaceArticleSections(articleId, sections) {
       sort_order: index,
     }))
     .filter((r) => (r.title && r.title.trim()) || (r.content && r.content.trim()));
-  if (rows.length) await ArticleSection.bulkCreate(rows);
+  if (rows.length) await ArticleSection.bulkCreate(rows, { ...(t && { transaction: t }) });
 }
 
 async function createArticle(data) {
@@ -2497,49 +2511,55 @@ async function createArticle(data) {
     scheduled_publish_at = scheduledAt;
   }
 
-  const row = await Article.create({
-    title: data.title || '',
-    slug: slugVal,
-    excerpt: data.excerpt || null,
-    content: data.content ?? data.body ?? null,
-    thumbnail_url: data.thumbnail_url ?? data.cover_image_url ?? null,
-    thumbnail_alt: data.thumbnail_alt || null,
-    thumbnail_link_url: data.thumbnail_link_url || null,
-    thumbnail_caption: data.thumbnail_caption || null,
-    author_id: data.author_id ?? null,
-    sub_heading: data.sub_heading ?? null,
-    status: statusNorm,
-    published_at,
-    scheduled_publish_at,
-    meta_title: data.meta_title || null,
-    meta_description: data.meta_description || null,
-    meta_keywords: data.meta_keywords || null,
-    citation: serializeArticleCitationPayload(data.citation),
-    noti_no: normalizeNotificationField(data.noti_no),
-    noti_date: normalizeNotificationField(data.noti_date),
-    type_of_tax: normalizeNotificationField(data.type_of_tax),
-    canonical_url: data.canonical_url || null,
-    robots: data.robots || null,
-    og_title: data.og_title || null,
-    og_description: data.og_description || null,
-    og_image_url: data.og_image_url || null,
-    rel_download_url: data.rel_download_url ?? null,
-    blog_access_tier: normalizeBlogAccessTier(data.blog_access_tier),
-    rel_download_url: data.rel_download_url !== undefined ? (data.rel_download_url || null) : null,
+  // Insert the article and all of its taxonomy/section rows atomically. Without a
+  // transaction, Article.create auto-commits and a later throw (FK violation on a
+  // category/tag map, tag creation, sections, etc.) would leave the article row behind
+  // while the client sees an error and retries — creating duplicates.
+  const articleId = await sequelize.transaction(async (t) => {
+    const row = await Article.create({
+      title: data.title || '',
+      slug: slugVal,
+      excerpt: data.excerpt || null,
+      content: data.content ?? data.body ?? null,
+      thumbnail_url: data.thumbnail_url ?? data.cover_image_url ?? null,
+      thumbnail_alt: data.thumbnail_alt || null,
+      thumbnail_link_url: data.thumbnail_link_url || null,
+      thumbnail_caption: data.thumbnail_caption || null,
+      author_id: data.author_id ?? null,
+      sub_heading: data.sub_heading ?? null,
+      status: statusNorm,
+      published_at,
+      scheduled_publish_at,
+      meta_title: data.meta_title || null,
+      meta_description: data.meta_description || null,
+      meta_keywords: data.meta_keywords || null,
+      citation: serializeArticleCitationPayload(data.citation),
+      noti_no: normalizeNotificationField(data.noti_no),
+      noti_date: normalizeNotificationField(data.noti_date),
+      type_of_tax: normalizeNotificationField(data.type_of_tax),
+      canonical_url: data.canonical_url || null,
+      robots: data.robots || null,
+      og_title: data.og_title || null,
+      og_description: data.og_description || null,
+      og_image_url: data.og_image_url || null,
+      rel_download_url: data.rel_download_url !== undefined ? (data.rel_download_url || null) : null,
+      blog_access_tier: normalizeBlogAccessTier(data.blog_access_tier),
+    }, { transaction: t });
+    const id = row.id;
+    const category_ids = Array.isArray(data.category_ids) ? data.category_ids : [];
+    const mergedTagIds = await mergeArticleTagIdsFromPayload({
+      tag_ids: data.tag_ids,
+      tag_labels: data.tag_labels,
+    }, t);
+    const article_type_ids = Array.isArray(data.article_type_ids) ? data.article_type_ids : [];
+    const court_ids = Array.isArray(data.court_ids) ? data.court_ids : [];
+    if (category_ids.length) await ArticleCategoryMap.bulkCreate(category_ids.map((category_id) => ({ article_id: id, category_id })), { transaction: t });
+    if (mergedTagIds.length) await ArticleTagMap.bulkCreate(mergedTagIds.map((tag_id) => ({ article_id: id, tag_id })), { transaction: t });
+    if (article_type_ids.length) await ArticleTypeMap.bulkCreate(article_type_ids.map((article_type_id) => ({ article_id: id, article_type_id })), { transaction: t });
+    if (court_ids.length) await ArticleCourtMap.bulkCreate(court_ids.map((court_id) => ({ article_id: id, court_id })), { transaction: t });
+    if (Array.isArray(data.sections)) await replaceArticleSections(id, data.sections, t);
+    return id;
   });
-  const articleId = row.id;
-  const category_ids = Array.isArray(data.category_ids) ? data.category_ids : [];
-  const mergedTagIds = await mergeArticleTagIdsFromPayload({
-    tag_ids: data.tag_ids,
-    tag_labels: data.tag_labels,
-  });
-  const article_type_ids = Array.isArray(data.article_type_ids) ? data.article_type_ids : [];
-  const court_ids = Array.isArray(data.court_ids) ? data.court_ids : [];
-  if (category_ids.length) await ArticleCategoryMap.bulkCreate(category_ids.map((category_id) => ({ article_id: articleId, category_id })));
-  if (mergedTagIds.length) await ArticleTagMap.bulkCreate(mergedTagIds.map((tag_id) => ({ article_id: articleId, tag_id })));
-  if (article_type_ids.length) await ArticleTypeMap.bulkCreate(article_type_ids.map((article_type_id) => ({ article_id: articleId, article_type_id })));
-  if (court_ids.length) await ArticleCourtMap.bulkCreate(court_ids.map((court_id) => ({ article_id: articleId, court_id })));
-  if (Array.isArray(data.sections)) await replaceArticleSections(articleId, data.sections);
 
   const out = await getArticleByIdInternal(articleId);
   logger.info('[createArticle] calling syncArticlePublishJob', { id: out?.id, status: out?.status, scheduled_publish_at: out?.scheduled_publish_at });
