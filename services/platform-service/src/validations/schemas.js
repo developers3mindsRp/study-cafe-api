@@ -304,6 +304,7 @@ const articleListQuery = {
         sortOrder: Joi.string().valid('ASC', 'DESC', 'asc', 'desc').default('DESC'),
         category_id: Joi.number().integer().min(1).allow('', null),
         blog_access_tier: Joi.string().valid('free', 'premium').allow('', null),
+        author: Joi.string().max(255).allow('', null),
         date_from: Joi.string().isoDate().allow('', null),
         date_to: Joi.string().isoDate().allow('', null),
         trashed: Joi.string().valid('1', 'true', 'only').allow('', null),
