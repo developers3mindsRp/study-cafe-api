@@ -1174,8 +1174,25 @@ const deleteCourseReview = asyncHandler(async (req, res) => {
 // ── Affiliate proxy handlers ───────────────────────────────────────
 
 const getAffiliateHistory = asyncHandler(async (req, res) => {
-  const { data } = await courseClient.get('/internal/affiliate/history');
-  sendSuccess(res, data);
+  const { data: payload } = await courseClient.get('/internal/affiliate/history', { params: req.query });
+  if (payload && typeof payload === 'object' && payload.meta) {
+    sendPaginated(res, { data: payload.data, meta: payload.meta });
+    return;
+  }
+  sendSuccess(res, payload?.data ?? payload);
+});
+
+const exportAffiliateHistoryCsv = asyncHandler(async (req, res) => {
+  const response = await courseClient.get('/internal/affiliate/history/export.csv', {
+    params: req.query,
+    responseType: 'stream',
+    timeout: 120000,
+  });
+  res.setHeader('Content-Type', response.headers['content-type'] || 'text/csv; charset=utf-8');
+  if (response.headers['content-disposition']) {
+    res.setHeader('Content-Disposition', response.headers['content-disposition']);
+  }
+  response.data.pipe(res);
 });
 
 const getWithdrawalRequests = asyncHandler(async (req, res) => {
@@ -1388,6 +1405,7 @@ module.exports = {
   uploadImage,
   uploadFile,
   getAffiliateHistory,
+  exportAffiliateHistoryCsv,
   getWithdrawalRequests,
   getAffiliateBalance,
   createWithdrawalRequest,

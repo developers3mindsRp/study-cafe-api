@@ -2045,9 +2045,9 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
       can_view_notification: canViewPremiumMetadata,
     },
     /** Renderable HTML — embed markers expanded like admin ArticleContentRenderer. */
-    body: bodyWithEmbedScript,
+    body: body,
     /** Same as `body` for clients that read `content`. */
-    content: bodyWithEmbedScript,
+    content: body,
     /** Load with next/script after rendering `body` (mirrors admin hydrateSocialEmbeds). */
     embed_scripts,
     toc: tocItems,

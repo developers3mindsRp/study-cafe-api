@@ -198,6 +198,7 @@ function register(router) {
 
   // ── Affiliate routes ───────────────────────────────────────────────
   router.get('/admin/affiliate/history', requireAdmin, controller.getAffiliateHistory);
+  router.get('/admin/affiliate/history/export.csv', requireAdmin, controller.exportAffiliateHistoryCsv);
   router.get('/admin/affiliate/withdrawals', requireAdmin, controller.getWithdrawalRequests);
   router.get('/admin/affiliate/balance/:userId', requireAdmin, controller.getAffiliateBalance);
   router.post('/admin/affiliate/withdrawals', requireAdmin, controller.createWithdrawalRequest);

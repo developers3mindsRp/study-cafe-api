@@ -1,9 +1,13 @@
 const affiliateService = require('../services/affiliate.service');
-const { asyncHandler, sendSuccess, sendCreated, AppError } = require('../../../../shared');
+const { asyncHandler, sendSuccess, sendCreated, sendPaginated, AppError } = require('../../../../shared');
 
 const getHistory = asyncHandler(async (req, res) => {
-  const data = await affiliateService.getHistory();
-  sendSuccess(res, data);
+  const result = await affiliateService.listHistory(req.query);
+  sendPaginated(res, result);
+});
+
+const exportHistoryCsv = asyncHandler(async (req, res) => {
+  await affiliateService.exportHistoryCsvStream(req.query, res);
 });
 
 const getWithdrawals = asyncHandler(async (req, res) => {
@@ -81,6 +85,7 @@ const getMyWithdrawals = asyncHandler(async (req, res) => {
 
 module.exports = {
   getHistory,
+  exportHistoryCsv,
   getWithdrawals,
   getBalance,
   createWithdrawal,

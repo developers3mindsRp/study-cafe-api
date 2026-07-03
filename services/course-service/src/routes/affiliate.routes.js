@@ -4,6 +4,7 @@ const { internalAuth } = require('../middleware');
 function register(router) {
   // Internal routes for admin proxy
   router.get('/internal/affiliate/history', internalAuth, affiliateController.getHistory);
+  router.get('/internal/affiliate/history/export.csv', internalAuth, affiliateController.exportHistoryCsv);
   router.get('/internal/affiliate/withdrawals', internalAuth, affiliateController.getWithdrawals);
   router.get('/internal/affiliate/balance/:userId', internalAuth, affiliateController.getBalance);
   router.post('/internal/affiliate/withdrawals', internalAuth, affiliateController.createWithdrawal);

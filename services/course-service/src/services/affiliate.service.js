@@ -6,9 +6,174 @@ const {
   sequelize 
 } = require("../models");
 const { QueryTypes, Op } = require("sequelize");
-const { logger } = require("../../../../shared");
+const { logger, paginate } = require("../../../../shared");
+const { buildCreatedAtRange } = require("../../../../shared/istDateRange");
 const { notifyWithdrawalEmail } = require("./withdrawalEmail.service");
 const affiliateSettingsService = require("./affiliateSettings.service");
+
+function escapeCsvCell(value) {
+  if (value == null) return '';
+  const s = String(value);
+  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+const AFFILIATE_HISTORY_EXPORT_HEADERS = [
+  'ID',
+  'Affiliate Name',
+  'Affiliate Email',
+  'Buyer Name',
+  'Course',
+  'Order ID',
+  'Order Amount',
+  'Commission',
+  'Status',
+  'Created At',
+];
+
+function parseHistoryFilters(query = {}) {
+  return {
+    dateFrom: query.date_from || query.dateFrom || '',
+    dateTo: query.date_to || query.dateTo || '',
+    affiliateId: query.affiliate_id || query.affiliateId || '',
+    courseId: query.course_id || query.courseId || '',
+    commissionMin: query.commission_min ?? query.commissionMin ?? '',
+    commissionMax: query.commission_max ?? query.commissionMax ?? '',
+    search: query.search ? String(query.search).trim() : '',
+    page: query.page,
+    limit: query.limit,
+    sortBy: query.sortBy || 'created_at',
+    sortOrder: query.sortOrder || 'DESC',
+  };
+}
+
+async function buildHistoryWhere(filters) {
+  const where = {};
+  const createdAtRange = buildCreatedAtRange(filters.dateFrom, filters.dateTo, Op);
+  if (createdAtRange) where.created_at = createdAtRange;
+
+  if (filters.affiliateId) {
+    const id = Number(filters.affiliateId);
+    if (Number.isFinite(id) && id > 0) where.affiliate_id = id;
+  }
+
+  if (filters.courseId) {
+    const id = Number(filters.courseId);
+    if (Number.isFinite(id) && id > 0) where.course_id = id;
+  }
+
+  const min = parseFloat(filters.commissionMin);
+  const max = parseFloat(filters.commissionMax);
+  if (Number.isFinite(min) || Number.isFinite(max)) {
+    where.commission_amount = {};
+    if (Number.isFinite(min)) where.commission_amount[Op.gte] = min;
+    if (Number.isFinite(max)) where.commission_amount[Op.lte] = max;
+  }
+
+  if (filters.search) {
+    const q = `%${filters.search}%`;
+    const userRows = await sequelize.query(
+      'SELECT id FROM users WHERE name LIKE :q OR email LIKE :q',
+      { replacements: { q }, type: QueryTypes.SELECT },
+    );
+    const userIds = userRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
+
+    const courseRows = await Course.findAll({
+      where: { title: { [Op.like]: q } },
+      attributes: ['id'],
+      raw: true,
+    });
+    const courseIds = courseRows.map((c) => Number(c.id)).filter((n) => Number.isFinite(n) && n > 0);
+
+    const orClauses = [];
+    if (userIds.length) orClauses.push({ affiliate_id: { [Op.in]: userIds } });
+    if (courseIds.length) orClauses.push({ course_id: { [Op.in]: courseIds } });
+    if (orClauses.length) {
+      where[Op.or] = orClauses;
+    } else {
+      where.id = -1;
+    }
+  }
+
+  return where;
+}
+
+async function enrichHistoryRows(rows) {
+  if (!rows.length) return [];
+
+  const userIds = [...new Set([
+    ...rows.map((h) => h.user_id),
+    ...rows.map((h) => h.affiliate_id),
+  ])];
+  const courseIds = [...new Set(rows.map((h) => h.course_id).filter(Boolean))];
+
+  const users = userIds.length
+    ? await sequelize.query(
+      'SELECT id, name, email FROM users WHERE id IN (:userIds)',
+      { replacements: { userIds }, type: QueryTypes.SELECT },
+    )
+    : [];
+  const userMap = new Map(users.map((u) => [Number(u.id), u]));
+
+  const courses = courseIds.length
+    ? await Course.findAll({
+      where: { id: courseIds },
+      attributes: ['id', 'title'],
+    })
+    : [];
+  const courseMap = new Map(courses.map((c) => [Number(c.id), c]));
+
+  return rows.map((record) => {
+    const buyer = userMap.get(Number(record.user_id)) || {};
+    const affiliate = userMap.get(Number(record.affiliate_id)) || {};
+    const course = courseMap.get(Number(record.course_id)) || {};
+    return {
+      ...record,
+      buyer_name: buyer.name || 'Unknown',
+      affiliate_name: affiliate.name || 'Unknown',
+      affiliate_email: affiliate.email || '',
+      course_title: course.title || 'Unknown Course',
+    };
+  });
+}
+
+function historyRowToCsvLine(row) {
+  return [
+    row.id,
+    row.affiliate_name,
+    row.affiliate_email,
+    row.buyer_name,
+    row.course_title,
+    row.order_id,
+    row.order_amount,
+    row.commission_amount,
+    row.status,
+    row.created_at,
+  ].map(escapeCsvCell).join(',');
+}
+
+async function* iterateHistoryExportBatches(query) {
+  const filters = parseHistoryFilters(query);
+  const where = await buildHistoryWhere(filters);
+  const allowedSort = ['created_at', 'commission_amount', 'order_amount', 'id'];
+  const sortBy = allowedSort.includes(String(filters.sortBy)) ? filters.sortBy : 'created_at';
+  let page = 1;
+  const batchSize = 500;
+
+  for (;;) {
+    const { data } = await paginate(AffiliateHistory, {
+      where,
+      page,
+      limit: batchSize,
+      sortBy,
+      sortOrder: filters.sortOrder,
+    });
+    if (!data.length) break;
+    yield await enrichHistoryRows(data);
+    if (data.length < batchSize) break;
+    page += 1;
+  }
+}
 
 /** Match order-service normalization: trim + uppercase (referral hex codes are stored uppercase). */
 function normalizeReferralCodeInput(code) {
@@ -146,54 +311,54 @@ const affiliateService = {
   },
 
   /**
-   * Fetch affiliate history with details.
+   * Admin: paginated affiliate history with filters.
+   */
+  async listHistory(query = {}) {
+    const filters = parseHistoryFilters(query);
+    const where = await buildHistoryWhere(filters);
+    const allowedSort = ['created_at', 'commission_amount', 'order_amount', 'id'];
+    const sortBy = allowedSort.includes(String(filters.sortBy)) ? filters.sortBy : 'created_at';
+
+    const { data, meta } = await paginate(AffiliateHistory, {
+      where,
+      page: filters.page,
+      limit: filters.limit,
+      sortBy,
+      sortOrder: filters.sortOrder,
+    });
+
+    const enriched = await enrichHistoryRows(data);
+    return { data: enriched, meta };
+  },
+
+  /**
+   * Fetch affiliate history with details (legacy — prefer listHistory).
    */
   async getHistory() {
-    const history = await AffiliateHistory.findAll({
-      order: [["created_at", "DESC"]],
-      // We can't easily join User since it's in another service, 
-      // but in this setup, the users table seems accessible in the same DB.
-    });
+    const { data } = await this.listHistory({ page: 1, limit: 10000 });
+    return data;
+  },
 
-    if (history.length === 0) return [];
-
-    const userIds = [...new Set([
-      ...history.map(h => h.user_id),
-      ...history.map(h => h.affiliate_id)
-    ])];
-    
-    const courseIds = [...new Set(history.map(h => h.course_id))];
-
-    // Fetch users for names
-    const users = await sequelize.query(
-      `SELECT id, name, email FROM users WHERE id IN (:userIds)`,
-      {
-        replacements: { userIds },
-        type: QueryTypes.SELECT,
-      }
+  async exportHistoryCsvStream(query, res) {
+    const datePart = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="affiliate-history-export-${datePart}.csv"`,
     );
-    const userMap = new Map(users.map(u => [Number(u.id), u]));
+    res.write('\uFEFF');
+    res.write(`${AFFILIATE_HISTORY_EXPORT_HEADERS.map(escapeCsvCell).join(',')}\r\n`);
 
-    // Fetch courses for titles
-    const courses = await Course.findAll({
-      where: { id: courseIds },
-      attributes: ['id', 'title']
-    });
-    const courseMap = new Map(courses.map(c => [Number(c.id), c]));
+    let exported = 0;
+    for await (const batch of iterateHistoryExportBatches(query)) {
+      for (const row of batch) {
+        res.write(`${historyRowToCsvLine(row)}\r\n`);
+        exported += 1;
+      }
+    }
 
-    return history.map(h => {
-      const record = h.get({ plain: true });
-      const buyer = userMap.get(Number(record.user_id)) || {};
-      const affiliate = userMap.get(Number(record.affiliate_id)) || {};
-      const course = courseMap.get(Number(record.course_id)) || {};
-      
-      return {
-        ...record,
-        buyer_name: buyer.name || 'Unknown',
-        affiliate_name: affiliate.name || 'Unknown',
-        course_title: course.title || 'Unknown Course'
-      };
-    });
+    logger.info('[affiliate.exportHistoryCsvStream] completed', { exported });
+    res.end();
   },
 
   /**
