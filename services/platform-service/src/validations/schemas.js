@@ -530,6 +530,20 @@ const mediaAssetsListQuery = {
     }),
 };
 
+const acquireArticleEditLock = {
+    params: idParam.params,
+    body: Joi.object({
+        user_id: Joi.number().integer().positive().required(),
+    }),
+};
+
+const releaseArticleEditLock = {
+    params: idParam.params,
+    query: Joi.object({
+        user_id: Joi.number().integer().positive().required(),
+    }),
+};
+
 module.exports = {
     idParam,
     slugParam,
@@ -553,6 +567,8 @@ module.exports = {
     articleListQuery,
     createArticle,
     updateArticle,
+    acquireArticleEditLock,
+    releaseArticleEditLock,
     createArticleCategory,
     updateArticleCategory,
     createTaxonomyTerm,

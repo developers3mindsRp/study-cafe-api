@@ -118,10 +118,14 @@ function register(router) {
   router.get('/internal/platform/articles/counts', internalAuth, controller.getArticleStatusCounts);
   router.get('/internal/platform/articles', internalAuth, validate(schemas.articleListQuery), controller.getArticlesInternal);
   router.post('/internal/platform/articles/:id/preview-token', internalAuth, validate(schemas.idParam), controller.createArticlePreviewToken);
+  router.get('/internal/platform/articles/:id/edit-lock', internalAuth, validate(schemas.idParam), controller.getArticleEditLock);
+  router.post('/internal/platform/articles/:id/edit-lock', internalAuth, validate(schemas.acquireArticleEditLock), controller.acquireArticleEditLock);
+  router.delete('/internal/platform/articles/:id/edit-lock', internalAuth, validate(schemas.releaseArticleEditLock), controller.releaseArticleEditLock);
   router.get('/internal/platform/articles/:id', internalAuth, validate(schemas.idParam), controller.getArticleByIdInternal);
   router.post('/internal/platform/articles', internalAuth, validate(schemas.createArticle), controller.createArticle);
   router.put('/internal/platform/articles/:id', internalAuth, validate(schemas.updateArticle), controller.updateArticle);
   router.post('/internal/platform/articles/:id/restore', internalAuth, validate(schemas.idParam), controller.restoreArticle);
+  router.delete('/internal/platform/articles/:id/permanent', internalAuth, validate(schemas.idParam), controller.deleteArticlePermanently);
   router.delete('/internal/platform/articles/:id', internalAuth, validate(schemas.idParam), controller.deleteArticle);
   router.get('/internal/platform/article-categories', internalAuth, controller.getArticleCategoriesInternal);
   router.get('/internal/platform/article-categories/:id', internalAuth, validate(schemas.idParam), controller.getArticleCategoryByIdInternal);

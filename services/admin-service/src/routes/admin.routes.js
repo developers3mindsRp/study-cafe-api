@@ -144,9 +144,13 @@ function register(router) {
   router.get('/admin/platform/articles/counts', requireAdmin, p.getArticleStatusCounts);
   router.get('/admin/platform/articles', requireAdmin, p.getArticles);
   router.post('/admin/platform/articles/:id/preview-token', requireAdmin, controller.createArticlePreviewToken);
+  router.get('/admin/platform/articles/:id/edit-lock', requireAdmin, p.getArticleEditLock);
+  router.post('/admin/platform/articles/:id/edit-lock', requireAdmin, p.acquireArticleEditLock);
+  router.delete('/admin/platform/articles/:id/edit-lock', requireAdmin, p.releaseArticleEditLock);
   router.get('/admin/platform/articles/:id', requireAdmin, p.getArticle);
   router.post('/admin/platform/articles', requireAdmin, p.postArticle);
   router.put('/admin/platform/articles/:id', requireAdmin, p.putArticle);
+  router.delete('/admin/platform/articles/:id/permanent', requireAdmin, p.deleteArticlePermanently);
   router.delete('/admin/platform/articles/:id', requireAdmin, p.deleteArticle);
   router.post('/admin/platform/articles/:id/restore', requireAdmin, p.restoreArticle);
   router.get('/admin/platform/article-categories', requireAdmin, p.getArticleCategories);

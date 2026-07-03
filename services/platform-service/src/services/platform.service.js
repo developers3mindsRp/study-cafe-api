@@ -144,6 +144,7 @@ const {
   ContactInquiry,
   SeoMetadata,
   SiteSeoRoute,
+  Comment,
 } = require('../models');
 
 /** Build a display label from a user row, preferring first_name + last_name. */
@@ -2728,6 +2729,119 @@ async function restoreArticle(id) {
   return true;
 }
 
+/**
+ * Permanently delete an article and all its child rows. Only articles already
+ * in trash can be hard-deleted — active ones must go through deleteArticle
+ * (soft delete) first, so a single call can never destroy a live article.
+ */
+async function deleteArticlePermanently(id) {
+  const row = await Article.findByPk(id, { paranoid: false });
+  if (!row) return { ok: false, reason: 'not_found' };
+  if (!row.deleted_at) return { ok: false, reason: 'not_trashed' };
+  await articleScheduling.removeScheduledPublishJob(id).catch(() => {});
+  await sequelize.transaction(async (t) => {
+    await ArticleCategoryMap.destroy({ where: { article_id: id }, transaction: t });
+    await ArticleTagMap.destroy({ where: { article_id: id }, transaction: t });
+    await ArticleTypeMap.destroy({ where: { article_id: id }, transaction: t });
+    await ArticleCourtMap.destroy({ where: { article_id: id }, transaction: t });
+    await ArticleSection.destroy({ where: { article_id: id }, transaction: t });
+    await Comment.destroy({ where: { article_id: id }, transaction: t });
+    await sequelize.query('DELETE FROM article_edit_locks WHERE article_id = ?', {
+      replacements: [id],
+      transaction: t,
+    });
+    await row.destroy({ force: true, transaction: t });
+  });
+  logger.info('[deleteArticlePermanently] hard-deleted from trash', { id });
+  return { ok: true };
+}
+
+// ── Article edit locks (concurrent-editing guard) ────────────────────
+
+/** Lock lifetime; the admin panel renews well inside this window, so an
+ *  expired lock means the editor is gone (closed tab, crash, network loss). */
+const ARTICLE_EDIT_LOCK_TTL_SECONDS = 120;
+/** Suggested client renew/poll interval, returned so the panel stays in step with the TTL. */
+const ARTICLE_EDIT_LOCK_HEARTBEAT_SECONDS = 30;
+
+function formatEditLock(row) {
+  if (!row) return null;
+  return {
+    user_id: Number(row.user_id),
+    user_name: row.user_name || null,
+    locked_at: row.locked_at,
+    expires_at: row.expires_at,
+  };
+}
+
+async function findArticleEditLockRow(articleId) {
+  const rows = await sequelize.query(
+    `SELECT article_id, user_id, user_name, locked_at, expires_at
+     FROM article_edit_locks
+     WHERE article_id = ? AND expires_at > NOW()
+     LIMIT 1`,
+    { replacements: [articleId], type: QueryTypes.SELECT }
+  );
+  return rows[0] || null;
+}
+
+async function getArticleEditLock(articleId) {
+  const row = await findArticleEditLockRow(articleId);
+  return {
+    locked: !!row,
+    lock: formatEditLock(row),
+    ttl_seconds: ARTICLE_EDIT_LOCK_TTL_SECONDS,
+    heartbeat_seconds: ARTICLE_EDIT_LOCK_HEARTBEAT_SECONDS,
+  };
+}
+
+/**
+ * Acquire or renew the edit lock on an article. The upsert only transfers
+ * ownership when the current lock already belongs to the caller or has
+ * expired — an active lock held by someone else is never stolen; the caller
+ * gets { acquired: false } plus the holder's info so the UI can warn them.
+ */
+async function acquireArticleEditLock(articleId, userId) {
+  const article = await Article.findByPk(articleId, { attributes: ['id'] });
+  if (!article) return null;
+  const userName = await getAuthorDisplayName(userId);
+  // Assignment order matters: MySQL evaluates ON DUPLICATE KEY assignments
+  // left to right, so user_id is decided first (against the OLD expires_at)
+  // and the later assignments key off the NEW user_id.
+  await sequelize.query(
+    `INSERT INTO article_edit_locks (article_id, user_id, user_name, locked_at, expires_at)
+     VALUES (?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL ? SECOND))
+     ON DUPLICATE KEY UPDATE
+       user_id    = IF(user_id = VALUES(user_id) OR expires_at <= NOW(), VALUES(user_id), user_id),
+       user_name  = IF(user_id = VALUES(user_id), VALUES(user_name), user_name),
+       locked_at  = IF(user_id = VALUES(user_id) AND expires_at <= NOW(), VALUES(locked_at), locked_at),
+       expires_at = IF(user_id = VALUES(user_id), VALUES(expires_at), expires_at)`,
+    { replacements: [articleId, userId, userName, ARTICLE_EDIT_LOCK_TTL_SECONDS] }
+  );
+  const rows = await sequelize.query(
+    `SELECT article_id, user_id, user_name, locked_at, expires_at
+     FROM article_edit_locks WHERE article_id = ? LIMIT 1`,
+    { replacements: [articleId], type: QueryTypes.SELECT }
+  );
+  const row = rows[0] || null;
+  const acquired = !!row && Number(row.user_id) === Number(userId);
+  return {
+    acquired,
+    lock: formatEditLock(row),
+    ttl_seconds: ARTICLE_EDIT_LOCK_TTL_SECONDS,
+    heartbeat_seconds: ARTICLE_EDIT_LOCK_HEARTBEAT_SECONDS,
+  };
+}
+
+/** Release the edit lock; only the caller's own lock row is removed. */
+async function releaseArticleEditLock(articleId, userId) {
+  await sequelize.query(
+    `DELETE FROM article_edit_locks WHERE article_id = ? AND user_id = ?`,
+    { replacements: [articleId, userId] }
+  );
+  return true;
+}
+
 async function getArticleCategories() {
   const rows = await Category.findAll({
     order: [['name', 'ASC']],
@@ -3637,7 +3751,11 @@ module.exports = {
     createArticle,
     updateArticle,
     deleteArticle,
+    deleteArticlePermanently,
     restoreArticle,
+    getArticleEditLock,
+    acquireArticleEditLock,
+    releaseArticleEditLock,
   },
   articleCategories: {
     getArticleCategories,
