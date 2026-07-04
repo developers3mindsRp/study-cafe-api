@@ -1116,6 +1116,81 @@ async function getArticlesPublic(options = {}) {
   return out;
 }
 
+/**
+ * Public list of "case law" articles: only rows that have BOTH an appeal number
+ * and a judgement date (non-null, non-empty). Returns a slim projection tailored
+ * for the case-law index. Does not affect the generic articles list.
+ */
+async function getCaseLawsPublic(options = {}) {
+  const { page = 1, limit = 20, search } = options;
+
+  const safePage = Math.max(1, Number(page) || 1);
+  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
+  const offset = (safePage - 1) * safeLimit;
+
+  const conditions = [
+    "a.status = 'publish'",
+    sqlDeletedAtIsNull('a'),
+    "a.appeal_number IS NOT NULL",
+    "TRIM(a.appeal_number) <> ''",
+    "a.judgement_date IS NOT NULL",
+    "TRIM(a.judgement_date) <> ''",
+  ];
+  const replacements = { limit: safeLimit, offset };
+
+  if (search && String(search).trim()) {
+    conditions.push(
+      '(a.title LIKE :search OR a.case_name LIKE :search OR a.appeal_number LIKE :search OR a.citation LIKE :search OR a.court_name LIKE :search)'
+    );
+    replacements.search = `%${String(search).trim()}%`;
+  }
+
+  const whereSql = conditions.join(' AND ');
+
+  const [countRow] = await sequelize.query(
+    `SELECT COUNT(*) AS total FROM articles a WHERE ${whereSql}`,
+    { replacements, type: QueryTypes.SELECT },
+  );
+  const total = Number(countRow?.total || 0);
+  const totalPages = Math.ceil(total / safeLimit) || 0;
+
+  const rows = total > 0
+    ? await sequelize.query(
+      `SELECT a.id, a.wp_post_id, a.title, a.slug, a.case_name, a.citation,
+              a.appeal_number, a.judgement_date, a.assessment_year, a.court_name,
+              a.rel_download_url, a.upload_url
+       FROM articles a
+       WHERE ${whereSql}
+       ORDER BY a.created_at DESC, a.id DESC
+       LIMIT :limit OFFSET :offset`,
+      { replacements, type: QueryTypes.SELECT },
+    )
+    : [];
+
+  const data = rows.map((p) => ({
+    id: p.id,
+    wp_post_id: p.wp_post_id,
+    title: p.title,
+    slug: p.slug,
+    case_name: p.case_name ?? null,
+    citation: p.citation ?? null,
+    appeal_number: p.appeal_number ?? null,
+    judgement_date: p.judgement_date ?? null,
+    assessment_year: p.assessment_year ?? null,
+    court_name: p.court_name ?? null,
+    rel_download_url: p.rel_download_url ?? null,
+    download_url: p.rel_download_url || p.upload_url || null,
+  }));
+
+  return {
+    data,
+    total,
+    page: safePage,
+    limit: safeLimit,
+    totalPages,
+  };
+}
+
 async function getAuthorPublicProfile(authorId) {
   if (authorId == null) return null;
   const rows = await sequelize.query(
@@ -3762,6 +3837,7 @@ module.exports = {
   },
   articles: {
     getArticlesPublic,
+    getCaseLawsPublic,
     getBlogSpotlightFeed,
     getArticleBySlugPublic,
     getUpNextArticlesBySlugPublic,

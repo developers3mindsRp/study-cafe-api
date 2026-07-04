@@ -263,6 +263,14 @@ const getArticles = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+const getCaseLaws = asyncHandler(async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page || '1', 10));
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '20', 10)));
+  const search = req.query.search ? String(req.query.search).trim() : undefined;
+  const data = await platformService.articles.getCaseLawsPublic({ page, limit, search });
+  sendSuccess(res, data);
+});
+
 const getArticleBySlug = asyncHandler(async (req, res) => {
   const previewToken = typeof req.query.preview_token === 'string' ? req.query.preview_token : null;
   const data = await platformService.articles.getArticleBySlugPublic(req.params.slug, req.viewer || null, previewToken);
@@ -818,6 +826,7 @@ module.exports = {
   deleteComparisonFeature,
   setFeatureAvailability,
   getArticles,
+  getCaseLaws,
   getBlogSpotlightFeed,
   getArticleBySlug,
   createArticlePreviewToken,
