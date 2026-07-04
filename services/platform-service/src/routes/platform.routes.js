@@ -23,6 +23,7 @@ function register(router) {
   router.get('/platform/memberships', controller.getPlans);
   router.post('/platform/membership/upgrade-summary', controller.getMembershipUpgradeSummary);
   router.get('/platform/articles', controller.getArticles);
+  router.get('/platform/case-laws', controller.getCaseLaws);
   router.get('/platform/articles/blog-spotlight', optionalWebUser, controller.getBlogSpotlightFeed);
   router.get(
     '/platform/articles/:slug/up-next',
