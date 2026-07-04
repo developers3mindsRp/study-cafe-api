@@ -12,6 +12,40 @@ const paymentGatewayService = require('../services/paymentGateway.service');
 const { sequelize, Coupon } = require('../models');
 const { Op } = require('sequelize');
 
+/**
+ * Create a manual 'paid' course order so an admin-allotted course surfaces under
+ * the user's "Purchased Course" tab (order-service GET /orders/my-purchases reads
+ * the orders table). Best-effort: failures are logged, never thrown, so a broken
+ * order write can't fail the enrollment itself.
+ */
+async function createCourseOrder({ userId, courseId, price, paymentId, contact }) {
+  if (!courseId) return;
+  try {
+    let buyer = contact || null;
+    if (!buyer) {
+      try {
+        const { data } = await authClient.get(`/internal/users/${userId}/contact`);
+        buyer = data || null;
+      } catch (contactErr) {
+        console.error('[createCourseOrder] contact lookup failed:', contactErr?.response?.data ?? contactErr?.message ?? contactErr);
+      }
+    }
+    await orderClient.post('/internal/orders', {
+      user_id: userId,
+      type: 'course',
+      entity_id: String(courseId),
+      amount: price ? Number(price) : 0,
+      buyer_email: buyer?.email || null,
+      buyer_name: buyer?.name || null,
+      buyer_mobile: buyer?.phone || null,
+      status: 'paid',
+      payment_id: paymentId || undefined,
+    });
+  } catch (orderErr) {
+    console.error('[createCourseOrder] order creation failed:', orderErr?.response?.data ?? orderErr?.message ?? orderErr);
+  }
+}
+
 /** Normalizes and validates coupon body for create/update. */
 function validateCouponPayload(body) {
   const type = String(body.type || '').trim();
@@ -598,8 +632,16 @@ const getBatches = asyncHandler(async (req, res) => {
 
 const addBatchEnrollment = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
-  const { data } = await courseClient.post(`/internal/batches/${req.params.id}/enrollments`, req.body);
-  await adminLogsService.logAction(adminId, 'ADD_BATCH_ENROLLMENT', 'batch_enrollment', String(data.id), { batchId: req.params.id, userId: req.body.user_id }, req.ip);
+  const { user_id, price, paymentId, courseId } = req.body;
+  const { data } = await courseClient.post(`/internal/batches/${req.params.id}/enrollments`, { user_id });
+  await adminLogsService.logAction(adminId, 'ADD_BATCH_ENROLLMENT', 'batch_enrollment', String(data.id), { batchId: req.params.id, userId: user_id }, req.ip);
+
+  // Always create a manual course order on a fresh enrollment so the course shows
+  // under "Purchased Course". Skip re-enrollments (created === false) to avoid dupes.
+  if (data.created !== false && courseId) {
+    await createCourseOrder({ userId: user_id, courseId, price, paymentId });
+  }
+
   sendCreated(res, data);
 });
 
@@ -630,23 +672,16 @@ const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
         if (status === 'enrolled') {
           await adminLogsService.logAction(adminId, 'ADD_BATCH_ENROLLMENT', 'batch_enrollment', String(data.id), { batchId, userId: user.id }, req.ip);
 
-          // Create a manual order record when price or paymentId is provided
-          if ((price || paymentId) && courseId) {
-            try {
-              await orderClient.post('/internal/orders', {
-                user_id: user.id,
-                type: 'course',
-                entity_id: String(courseId),
-                amount: price ? Number(price) : 0,
-                buyer_email: user.email,
-                buyer_name: user.name || null,
-                buyer_mobile: user.phone || null,
-                status: 'paid',
-                payment_id: paymentId || undefined,
-              });
-            } catch (orderErr) {
-              console.error('[bulkEnroll] order creation failed:', orderErr?.response?.data ?? orderErr?.message ?? orderErr);
-            }
+          // Always create a manual course order so the course shows under "Purchased
+          // Course" (price/paymentId optional). We already have the buyer contact here.
+          if (courseId) {
+            await createCourseOrder({
+              userId: user.id,
+              courseId,
+              price,
+              paymentId,
+              contact: { email: user.email, name: user.name || null, phone: user.phone || null },
+            });
           }
         }
         return { email: normalized, status };

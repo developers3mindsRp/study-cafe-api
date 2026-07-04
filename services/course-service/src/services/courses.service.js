@@ -71,6 +71,24 @@ async function allocateUniqueCourseSlug(rawSlug, excludeCourseId) {
   }
 }
 
+const LIFETIME_GRANT_YEARS = 10;
+const DEFAULT_GRANT_YEARS = 1;
+
+/**
+ * Compute the user_courses.expires_at for an admin-granted course based on the
+ * course's own validity. Lifetime courses are capped at 10 years from now;
+ * everything else gets 1 year. Returns an ISO string, or null if the course
+ * can't be resolved (grant-course then falls back to its own default).
+ */
+async function resolveCourseGrantExpiry(courseId) {
+  const course = await Course.findByPk(courseId, { attributes: ["validity"] });
+  if (!course) return null;
+  const years = course.validity === "lifetime" ? LIFETIME_GRANT_YEARS : DEFAULT_GRANT_YEARS;
+  const expires = new Date();
+  expires.setFullYear(expires.getFullYear() + years);
+  return expires.toISOString();
+}
+
 /** Grant auth-service user_courses row so access/check + dashboard work (admin batch enroll, auto-enroll). */
 async function syncUserCourseGrant(userId, courseId) {
   const base = config.authServiceUrl?.replace(/\/$/, "") || "";
@@ -82,9 +100,10 @@ async function syncUserCourseGrant(userId, courseId) {
   const cid = Number(courseId);
   if (!Number.isFinite(uid) || uid <= 0 || !Number.isFinite(cid) || cid <= 0) return;
   try {
+    const expiresAt = await resolveCourseGrantExpiry(cid);
     await axios.post(
       `${base}/access/grant-course`,
-      { userId: uid, courseId: cid, orderId: null },
+      { userId: uid, courseId: cid, orderId: null, expiresAt },
       {
         headers: { "X-Internal-API-Key": config.internalApiKey },
         timeout: 10000,
