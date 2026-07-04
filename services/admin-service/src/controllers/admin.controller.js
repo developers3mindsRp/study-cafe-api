@@ -1196,8 +1196,25 @@ const exportAffiliateHistoryCsv = asyncHandler(async (req, res) => {
 });
 
 const getWithdrawalRequests = asyncHandler(async (req, res) => {
-  const { data } = await courseClient.get('/internal/affiliate/withdrawals');
-  sendSuccess(res, data);
+  const { data: payload } = await courseClient.get('/internal/affiliate/withdrawals', { params: req.query });
+  if (payload && typeof payload === 'object' && payload.meta) {
+    sendPaginated(res, { data: payload.data, meta: payload.meta });
+    return;
+  }
+  sendSuccess(res, payload?.data ?? payload);
+});
+
+const exportWithdrawalRequestsCsv = asyncHandler(async (req, res) => {
+  const response = await courseClient.get('/internal/affiliate/withdrawals/export.csv', {
+    params: req.query,
+    responseType: 'stream',
+    timeout: 120000,
+  });
+  res.setHeader('Content-Type', response.headers['content-type'] || 'text/csv; charset=utf-8');
+  if (response.headers['content-disposition']) {
+    res.setHeader('Content-Disposition', response.headers['content-disposition']);
+  }
+  response.data.pipe(res);
 });
 
 const getAffiliateBalance = asyncHandler(async (req, res) => {
@@ -1407,6 +1424,7 @@ module.exports = {
   getAffiliateHistory,
   exportAffiliateHistoryCsv,
   getWithdrawalRequests,
+  exportWithdrawalRequestsCsv,
   getAffiliateBalance,
   createWithdrawalRequest,
   updateWithdrawalStatus,

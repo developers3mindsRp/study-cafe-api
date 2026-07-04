@@ -175,6 +175,140 @@ async function* iterateHistoryExportBatches(query) {
   }
 }
 
+const WITHDRAWAL_EXPORT_HEADERS = [
+  'ID',
+  'Affiliate Name',
+  'Affiliate Email',
+  'Amount',
+  'Status',
+  'Remarks',
+  'Requested On',
+  'Updated At',
+];
+
+function parseWithdrawalFilters(query = {}) {
+  return {
+    dateFrom: query.date_from || query.dateFrom || '',
+    dateTo: query.date_to || query.dateTo || '',
+    affiliateId: query.affiliate_id || query.affiliateId || '',
+    status: query.status ? String(query.status).trim() : '',
+    amountMin: query.amount_min ?? query.amountMin ?? '',
+    amountMax: query.amount_max ?? query.amountMax ?? '',
+    search: query.search ? String(query.search).trim() : '',
+    page: query.page,
+    limit: query.limit,
+    sortBy: query.sortBy || 'created_at',
+    sortOrder: query.sortOrder || 'DESC',
+  };
+}
+
+async function buildWithdrawalWhere(filters) {
+  const where = {};
+  const createdAtRange = buildCreatedAtRange(filters.dateFrom, filters.dateTo, Op);
+  if (createdAtRange) where.created_at = createdAtRange;
+
+  if (filters.affiliateId) {
+    const id = Number(filters.affiliateId);
+    if (Number.isFinite(id) && id > 0) where.affiliate_id = id;
+  }
+
+  if (filters.status) {
+    const allowed = ['pending', 'approved', 'rejected'];
+    if (allowed.includes(filters.status)) where.status = filters.status;
+  }
+
+  const min = parseFloat(filters.amountMin);
+  const max = parseFloat(filters.amountMax);
+  if (Number.isFinite(min) || Number.isFinite(max)) {
+    where.amount = {};
+    if (Number.isFinite(min)) where.amount[Op.gte] = min;
+    if (Number.isFinite(max)) where.amount[Op.lte] = max;
+  }
+
+  if (filters.search) {
+    const q = `%${filters.search}%`;
+    const userRows = await sequelize.query(
+      'SELECT id FROM users WHERE name LIKE :q OR email LIKE :q',
+      { replacements: { q }, type: QueryTypes.SELECT },
+    );
+    const userIds = userRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
+
+    const orClauses = [];
+    if (userIds.length) orClauses.push({ affiliate_id: { [Op.in]: userIds } });
+    orClauses.push({ status: { [Op.like]: q } });
+    if (orClauses.length) {
+      where[Op.or] = orClauses;
+    } else {
+      where.id = -1;
+    }
+  }
+
+  return where;
+}
+
+async function enrichWithdrawalRows(rows) {
+  if (!rows.length) return [];
+
+  const affiliateIds = [...new Set(rows.map((r) => {
+    const plain = r.get ? r.get({ plain: true }) : r;
+    return plain.affiliate_id;
+  }))];
+
+  const users = affiliateIds.length
+    ? await sequelize.query(
+      'SELECT id, name, email FROM users WHERE id IN (:affiliateIds)',
+      { replacements: { affiliateIds }, type: QueryTypes.SELECT },
+    )
+    : [];
+  const userMap = new Map(users.map((u) => [Number(u.id), u]));
+
+  return rows.map((record) => {
+    const plain = record.get ? record.get({ plain: true }) : record;
+    const user = userMap.get(Number(plain.affiliate_id)) || {};
+    return {
+      ...plain,
+      affiliate_name: user.name || 'Unknown',
+      affiliate_email: user.email || '',
+    };
+  });
+}
+
+function withdrawalRowToCsvLine(row) {
+  return [
+    row.id,
+    row.affiliate_name,
+    row.affiliate_email,
+    row.amount,
+    row.status,
+    row.remarks,
+    row.created_at,
+    row.updated_at,
+  ].map(escapeCsvCell).join(',');
+}
+
+async function* iterateWithdrawalExportBatches(query) {
+  const filters = parseWithdrawalFilters(query);
+  const where = await buildWithdrawalWhere(filters);
+  const allowedSort = ['created_at', 'amount', 'status', 'id'];
+  const sortBy = allowedSort.includes(String(filters.sortBy)) ? filters.sortBy : 'created_at';
+  let page = 1;
+  const batchSize = 500;
+
+  for (;;) {
+    const { data } = await paginate(WithdrawalRequest, {
+      where,
+      page,
+      limit: batchSize,
+      sortBy,
+      sortOrder: filters.sortOrder,
+    });
+    if (!data.length) break;
+    yield await enrichWithdrawalRows(data);
+    if (data.length < batchSize) break;
+    page += 1;
+  }
+}
+
 /** Match order-service normalization: trim + uppercase (referral hex codes are stored uppercase). */
 function normalizeReferralCodeInput(code) {
   if (code == null) return "";
@@ -362,35 +496,54 @@ const affiliateService = {
   },
 
   /**
-   * Fetch withdrawal requests.
+   * Admin: paginated withdrawal requests with filters.
+   */
+  async listWithdrawals(query = {}) {
+    const filters = parseWithdrawalFilters(query);
+    const where = await buildWithdrawalWhere(filters);
+    const allowedSort = ['created_at', 'amount', 'status', 'id'];
+    const sortBy = allowedSort.includes(String(filters.sortBy)) ? filters.sortBy : 'created_at';
+
+    const { data, meta } = await paginate(WithdrawalRequest, {
+      where,
+      page: filters.page,
+      limit: filters.limit,
+      sortBy,
+      sortOrder: filters.sortOrder,
+    });
+
+    const enriched = await enrichWithdrawalRows(data);
+    return { data: enriched, meta };
+  },
+
+  async exportWithdrawalsCsvStream(query, res) {
+    const datePart = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="affiliate-withdrawals-export-${datePart}.csv"`,
+    );
+    res.write('\uFEFF');
+    res.write(`${WITHDRAWAL_EXPORT_HEADERS.map(escapeCsvCell).join(',')}\r\n`);
+
+    let exported = 0;
+    for await (const batch of iterateWithdrawalExportBatches(query)) {
+      for (const row of batch) {
+        res.write(`${withdrawalRowToCsvLine(row)}\r\n`);
+        exported += 1;
+      }
+    }
+
+    logger.info('[affiliate.exportWithdrawalsCsvStream] completed', { exported });
+    res.end();
+  },
+
+  /**
+   * Fetch withdrawal requests (legacy — prefer listWithdrawals).
    */
   async getWithdrawals() {
-    const requests = await WithdrawalRequest.findAll({
-      order: [["created_at", "DESC"]]
-    });
-
-    if (requests.length === 0) return [];
-
-    const affiliateIds = [...new Set(requests.map(r => r.affiliate_id))];
-
-    const users = await sequelize.query(
-      `SELECT id, name, email FROM users WHERE id IN (:affiliateIds)`,
-      {
-        replacements: { affiliateIds },
-        type: QueryTypes.SELECT,
-      }
-    );
-    const userMap = new Map(users.map(u => [Number(u.id), u]));
-
-    return requests.map(r => {
-      const record = r.get({ plain: true });
-      const user = userMap.get(Number(record.affiliate_id)) || {};
-      return {
-        ...record,
-        affiliate_name: user.name || 'Unknown',
-        affiliate_email: user.email || ''
-      };
-    });
+    const { data } = await this.listWithdrawals({ page: 1, limit: 10000 });
+    return data;
   },
 
   /**

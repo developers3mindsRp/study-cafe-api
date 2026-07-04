@@ -11,8 +11,12 @@ const exportHistoryCsv = asyncHandler(async (req, res) => {
 });
 
 const getWithdrawals = asyncHandler(async (req, res) => {
-  const data = await affiliateService.getWithdrawals();
-  sendSuccess(res, data);
+  const result = await affiliateService.listWithdrawals(req.query);
+  sendPaginated(res, result);
+});
+
+const exportWithdrawalsCsv = asyncHandler(async (req, res) => {
+  await affiliateService.exportWithdrawalsCsvStream(req.query, res);
 });
 
 const getBalance = asyncHandler(async (req, res) => {
@@ -87,6 +91,7 @@ module.exports = {
   getHistory,
   exportHistoryCsv,
   getWithdrawals,
+  exportWithdrawalsCsv,
   getBalance,
   createWithdrawal,
   updateWithdrawalStatus,

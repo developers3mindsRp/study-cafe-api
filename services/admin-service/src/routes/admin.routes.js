@@ -200,6 +200,7 @@ function register(router) {
   router.get('/admin/affiliate/history', requireAdmin, controller.getAffiliateHistory);
   router.get('/admin/affiliate/history/export.csv', requireAdmin, controller.exportAffiliateHistoryCsv);
   router.get('/admin/affiliate/withdrawals', requireAdmin, controller.getWithdrawalRequests);
+  router.get('/admin/affiliate/withdrawals/export.csv', requireAdmin, controller.exportWithdrawalRequestsCsv);
   router.get('/admin/affiliate/balance/:userId', requireAdmin, controller.getAffiliateBalance);
   router.post('/admin/affiliate/withdrawals', requireAdmin, controller.createWithdrawalRequest);
   router.patch('/admin/affiliate/withdrawals/:id', requireAdmin, controller.updateWithdrawalStatus);
