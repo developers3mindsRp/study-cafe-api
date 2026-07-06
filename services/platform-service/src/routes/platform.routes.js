@@ -107,6 +107,10 @@ function register(router) {
   router.delete('/internal/platform/plans/:id', internalAuth, validate(schemas.idParam), controller.deletePlan);
   router.get('/internal/platform/plans/:id/linked-courses', internalAuth, validate(schemas.idParam), controller.getPlanLinkedCoursesInternal);
   router.get('/internal/platform/plans/list-by-ids', internalAuth, controller.listPlansByIdsInternal);
+  // Course → plans (memberships) links, managed from the course side. Operates on plan_courses only.
+  router.get('/internal/platform/plan-courses/map', internalAuth, controller.getPlanCoursesMapInternal);
+  router.get('/internal/platform/courses/:courseId/plans', internalAuth, validate(schemas.coursePlansParam), controller.getCoursePlanIdsInternal);
+  router.put('/internal/platform/courses/:courseId/plans', internalAuth, validate(schemas.setCoursePlans), controller.setCoursePlanIdsInternal);
   router.get('/internal/platform/contact-inquiries', internalAuth, controller.getContactInquiryInternal);
 
   // ── Comparison Features ──────────────────────────────────────────
