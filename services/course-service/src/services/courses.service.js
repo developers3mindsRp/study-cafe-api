@@ -1298,7 +1298,7 @@ const coursesService = {
       );
     }
 
-    const { start_date, meet_link } = data;
+    const { name, start_date, meet_link } = data;
 
     // Auto-compute end date: start + (curriculum.length - 1) days
     let end_date = null;
@@ -1309,18 +1309,22 @@ const coursesService = {
         .split("T")[0];
     }
 
-    // Auto-generate batch name
-    const nameDate = start_date
-      ? new Date(start_date).toLocaleDateString("en-IN", {
-        month: "short",
-        year: "numeric",
-      })
-      : "New";
-    const existingCount = await Batch.count({ where: { course_id: courseId } });
-    const batchName =
-      existingCount === 0
-        ? "Default Batch"
-        : `Batch ${existingCount + 1} — ${nameDate}`;
+    // Use provided name; otherwise auto-generate one.
+    const providedName = typeof name === "string" ? name.trim() : "";
+    let batchName = providedName;
+    if (!batchName) {
+      const nameDate = start_date
+        ? new Date(start_date).toLocaleDateString("en-IN", {
+          month: "short",
+          year: "numeric",
+        })
+        : "New";
+      const existingCount = await Batch.count({ where: { course_id: courseId } });
+      batchName =
+        existingCount === 0
+          ? "Default Batch"
+          : `Batch ${existingCount + 1} — ${nameDate}`;
+    }
 
     const batch = await Batch.create({
       course_id: courseId,
