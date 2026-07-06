@@ -29,8 +29,15 @@ function buildMembershipUpgradeEmailHtml(opts) {
   const safeEmail = escapeHtml(opts.email || '');
   const safePlan = escapeHtml(opts.membershipPlanName || 'Membership');
   const safeOrderId = escapeHtml(opts.orderId || '');
-  const safeUrl = escapeHtml(opts.siteUrl || '');
 
+  const url =
+  opts.siteUrl && opts.siteUrl.includes("localhost")
+    ? "https://studycafe.in"
+    : opts.siteUrl;
+
+  const safeUrl = escapeHtml(url);
+
+  
   const startsAt = opts.startsAt ? escapeHtml(new Date(opts.startsAt).toISOString().slice(0, 10)) : null;
   const expiresAt = opts.expiresAt ? escapeHtml(new Date(opts.expiresAt).toISOString().slice(0, 10)) : null;
 

@@ -23,7 +23,12 @@ function siteHostnameForFooter(url) {
 function buildWelcomeEmailHtml({ name, email, siteUrl }) {
   const safeName = escapeHtml(name || 'there');
   const safeEmail = escapeHtml(email);
-  const safeUrl = escapeHtml(siteUrl);
+  const url =
+  siteUrl.includes("localhost")
+    ? "https://studycafe.in"
+    : siteUrl;
+ 
+const safeUrl = escapeHtml(url);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -89,7 +94,7 @@ function buildWelcomeEmailHtml({ name, email, siteUrl }) {
               </div>
 
               <div style="text-align:center;margin-top:24px;">
-                <a href="${safeUrl}/all-courses" style="display:inline-block;background-color:#1e3a5f;color:#ffffff;text-decoration:none;padding:12px 32px;border-radius:6px;font-size:15px;font-weight:600;">
+                <a href="${safeUrl}/courses" style="display:inline-block;background-color:#1e3a5f;color:#ffffff;text-decoration:none;padding:12px 32px;border-radius:6px;font-size:15px;font-weight:600;">
                   Explore Courses
                 </a>
               </div>
