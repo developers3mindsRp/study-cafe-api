@@ -211,6 +211,24 @@ const getPlanLinkedCoursesInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+const getCoursePlanIdsInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.plans.getCoursePlanIdsInternal(req.params.courseId);
+  sendSuccess(res, data);
+});
+
+const setCoursePlanIdsInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.plans.setCoursePlanIdsInternal(
+    req.params.courseId,
+    req.body.plan_ids
+  );
+  sendSuccess(res, data);
+});
+
+const getPlanCoursesMapInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.plans.getPlanCoursesMapInternal();
+  sendSuccess(res, data);
+});
+
 const listPlansByIdsInternal = asyncHandler(async (req, res) => {
   const ids = String(req.query.ids || '').split(',').map(Number).filter(Boolean);
   const plans = await platformService.plans.listPlansByIds(ids);
@@ -819,6 +837,9 @@ module.exports = {
   togglePlanPopular,
   deletePlan,
   getPlanLinkedCoursesInternal,
+  getCoursePlanIdsInternal,
+  setCoursePlanIdsInternal,
+  getPlanCoursesMapInternal,
   listPlansByIdsInternal,
   getComparisonFeatures,
   createComparisonFeature,

@@ -1015,6 +1015,42 @@ async function getPlanLinkedCoursesInternal(id) {
   };
 }
 
+/** Which plans (memberships) directly list this course via plan_courses. */
+async function getCoursePlanIdsInternal(courseId) {
+  const rows = await PlanCourse.findAll({
+    where: { course_id: courseId },
+    attributes: ['plan_id'],
+  });
+  return { plan_ids: rows.map((r) => Number(r.plan_id)) };
+}
+
+/**
+ * Replace the set of plans (memberships) that directly list this course.
+ * Operates only on plan_courses — course categories (plan_course_categories) are untouched.
+ */
+async function setCoursePlanIdsInternal(courseId, planIds) {
+  const ids = Array.from(
+    new Set((Array.isArray(planIds) ? planIds : []).map(Number).filter(Boolean))
+  );
+  await PlanCourse.destroy({ where: { course_id: courseId } });
+  if (ids.length) {
+    await PlanCourse.bulkCreate(ids.map((plan_id) => ({ plan_id, course_id: courseId })));
+  }
+  return { plan_ids: ids };
+}
+
+/** Flat map of plan_id → [course_id, …] for the whole plan_courses table (admin filters). */
+async function getPlanCoursesMapInternal() {
+  const rows = await PlanCourse.findAll({ attributes: ['plan_id', 'course_id'] });
+  const map = {};
+  for (const r of rows) {
+    const planId = Number(r.plan_id);
+    if (!map[planId]) map[planId] = [];
+    map[planId].push(Number(r.course_id));
+  }
+  return map;
+}
+
 /** Merge non-trashed filter into Sequelize article where (public + active admin lists). */
 function withActiveArticleWhere(baseWhere = {}) {
   const active = activeRowWhere();
@@ -3845,6 +3881,9 @@ module.exports = {
     togglePopular,
     deletePlan,
     getPlanLinkedCoursesInternal,
+    getCoursePlanIdsInternal,
+    setCoursePlanIdsInternal,
+    getPlanCoursesMapInternal,
     listPlansByIds,
   },
   comparisonFeatures: {

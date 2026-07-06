@@ -294,6 +294,20 @@ const updatePlan = {
 
 // ── Articles ────────────────────────────────────────────────────────
 
+// ── Course ⇄ Plan (membership) links (plan_courses) ─────────────────
+const coursePlansParam = {
+    params: Joi.object({
+        courseId: Joi.number().integer().positive().required(),
+    }),
+};
+
+const setCoursePlans = {
+    params: coursePlansParam.params,
+    body: Joi.object({
+        plan_ids: Joi.array().items(Joi.number().integer().positive()).default([]),
+    }),
+};
+
 const articleListQuery = {
     query: Joi.object({
         page: Joi.number().integer().min(1).default(1),
@@ -565,6 +579,8 @@ module.exports = {
     upsertGlobalSetting,
     createPlan,
     updatePlan,
+    coursePlansParam,
+    setCoursePlans,
     articleListQuery,
     createArticle,
     updateArticle,
