@@ -27,7 +27,7 @@ function buildWelcomeEmailHtml({ name, email, siteUrl }) {
   siteUrl.includes("localhost")
     ? "https://studycafe.in"
     : siteUrl;
-
+ 
 const safeUrl = escapeHtml(url);
 
   return `<!DOCTYPE html>
