@@ -74,10 +74,16 @@ function statusMeta(status) {
  */
 function buildWithdrawalEmailHtml(opts) {
   const meta = statusMeta(opts.status);
-  const safeUrl = escapeHtml(opts.siteUrl);
+  
   const safeName = escapeHtml(opts.name || 'there');
   const safeId = escapeHtml(String(opts.requestId));
   const amount = formatCurrency(opts.amount, opts.currency);
+
+  const url =
+  opts.siteUrl && opts.siteUrl.includes("localhost")
+    ? "https://studycafe.in"
+    : opts.siteUrl;
+  const safeUrl = escapeHtml(url);
 
   let remarksBlock = '';
   if (opts.status === 'rejected' && opts.remarks) {
@@ -88,8 +94,8 @@ function buildWithdrawalEmailHtml(opts) {
       </div>`;
   }
 
-  const ctaUrl = opts.status === 'created' ? `${safeUrl}/report` : safeUrl;
-  const ctaLabel = opts.status === 'created' ? 'View affiliate dashboard' : 'Visit Study Cafe';
+  const ctaLabel = 'Dashboard';
+  const ctaUrl = `${safeUrl}/dashboard`;
 
   return `<!DOCTYPE html>
 <html lang="en">

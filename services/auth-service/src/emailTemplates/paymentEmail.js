@@ -167,11 +167,6 @@ function buildPaymentEmailHtml(opts) {
 
               ${failReasonBlock}
 
-              <div style="text-align:center;margin-top:24px;">
-                <a href="${ctaUrl}" style="display:inline-block;background-color:#1e3a5f;color:#ffffff;text-decoration:none;padding:12px 32px;border-radius:6px;font-size:15px;font-weight:600;">
-                  ${ctaLabel}
-                </a>
-              </div>
             </td>
           </tr>
 
