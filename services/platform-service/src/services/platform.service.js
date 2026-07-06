@@ -2058,7 +2058,7 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
       : body;
 
   // Fetch all categories for this article (with social link fields)
-  const [catMapRows, tagMapRows] = await Promise.all([
+  const [catMapRows, tagMapRows, typeMapRows] = await Promise.all([
     ArticleCategoryMap.findAll({
       where: { article_id: p.id },
       attributes: ['category_id'],
@@ -2067,9 +2067,14 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
       where: { article_id: p.id },
       attributes: ['tag_id'],
     }),
+    ArticleTypeMap.findAll({
+      where: { article_id: p.id },
+      attributes: ['article_type_id'],
+    }),
   ]);
   const catIds = catMapRows.map((m) => Number(m.category_id)).filter((n) => Number.isFinite(n));
   const tagIds = tagMapRows.map((m) => Number(m.tag_id)).filter((n) => Number.isFinite(n));
+  const typeIds = typeMapRows.map((m) => Number(m.article_type_id)).filter((n) => Number.isFinite(n));
 
   // Fetch tag names
   const tagRecords = tagIds.length
@@ -2077,6 +2082,19 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     : [];
   const tagNameById = new Map(tagRecords.map((r) => [Number(r.id), r.name || '']));
   const tags = tagIds.map((id) => ({ id, name: tagNameById.get(id) ?? '' })).filter((t) => t.name);
+
+  // Fetch article type names/slugs (stored via article_types_map -> article_types)
+  const typeRecords = typeIds.length
+    ? await ArticleType.findAll({ where: { id: { [Op.in]: typeIds } }, attributes: ['id', 'name', 'slug'], raw: true })
+    : [];
+  const typeById = new Map(typeRecords.map((r) => [Number(r.id), r]));
+  // Preserve the article's type order from the map rows.
+  const article_types = typeIds
+    .map((id) => {
+      const t = typeById.get(id);
+      return t ? { id, name: t.name ?? '', slug: t.slug ?? '' } : null;
+    })
+    .filter((t) => t && t.name);
 
   let whatsapp_link = null;
   let telegram_link = null;
@@ -2145,6 +2163,7 @@ async function getArticleBySlugPublic(slug, viewer = null, previewToken = null) 
     google_news_url,
     tags,
     categories,
+    article_types,
   };
   if (related_articles.length) out.related_articles = related_articles;
   return stripPremiumMetadataFromArticlePublic(out, canViewPremiumMetadata);
