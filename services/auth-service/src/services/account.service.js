@@ -4,6 +4,62 @@ const { User, UserCourse, Role, sequelize } = require('../models');
 const config = require('../config');
 const { AppError, logger } = require('../../../../shared');
 
+const BANK_PROFILE_FIELDS = [
+  'bank_account_holder_name',
+  'bank_account_number',
+  'bank_ifsc',
+  'bank_name',
+  'bank_branch',
+];
+
+function emptyToNull(value) {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+function mapBankDetailsFromBody(body) {
+  const nested = body.bank_details ?? body.bankDetails;
+  if (!nested || typeof nested !== 'object') return {};
+  return {
+    bank_account_holder_name:
+      nested.bank_account_holder_name ?? nested.account_holder_name ?? nested.accountHolderName,
+    bank_account_number:
+      nested.bank_account_number ?? nested.account_number ?? nested.accountNumber,
+    bank_ifsc: nested.bank_ifsc ?? nested.ifsc,
+    bank_name: nested.bank_name ?? nested.bankName,
+    bank_branch: nested.bank_branch ?? nested.branch,
+  };
+}
+
+function validateBankField(key, value) {
+  if (value == null) return null;
+  const v = String(value).trim();
+  if (v === '') return null;
+  if (key === 'bank_ifsc' && !/^[A-Z]{4}0[A-Z0-9]{6}$/i.test(v)) {
+    throw new AppError('Invalid IFSC code', 400);
+  }
+  if (key === 'bank_account_number' && !/^\d{9,18}$/.test(v)) {
+    throw new AppError('Invalid bank account number', 400);
+  }
+  if (key === 'bank_account_holder_name' && v.length > 200) {
+    throw new AppError('Account holder name is too long', 400);
+  }
+  if (key === 'bank_ifsc') return v.toUpperCase();
+  return v;
+}
+
+function buildBankPatch(body) {
+  const fromNested = mapBankDetailsFromBody(body);
+  const patch = {};
+  for (const key of BANK_PROFILE_FIELDS) {
+    const raw = body[key] !== undefined ? body[key] : fromNested[key];
+    if (raw === undefined) continue;
+    patch[key] = validateBankField(key, emptyToNull(raw));
+  }
+  return patch;
+}
+
 function mapUserToProfile(userRow) {
   const u = userRow.get ? userRow.get({ plain: true }) : userRow;
   const roleName = u.Role?.name || u.role || 'user';
@@ -23,6 +79,12 @@ function mapUserToProfile(userRow) {
     country: u.country || undefined,
     bio: u.bio != null && String(u.bio).trim() !== '' ? String(u.bio) : undefined,
     gst: u.gst || undefined,
+    bank_account_holder_name: u.bank_account_holder_name || undefined,
+    bank_account_number: u.bank_account_number || undefined,
+    bank_ifsc: u.bank_ifsc || undefined,
+    bank_name: u.bank_name || undefined,
+    bank_branch: u.bank_branch || undefined,
+    bank_details_updated_at: new Date(u.bank_details_updated_at).toISOString(),
     createdAt: u.created_at,
     updatedAt: u.updated_at,
   };
@@ -63,6 +125,12 @@ async function updateProfile(userId, body) {
   if (patch.bio !== undefined) {
     patch.bio =
       patch.bio == null || String(patch.bio).trim() === '' ? null : String(patch.bio);
+  }
+
+  const bankPatch = buildBankPatch(body);
+  if (Object.keys(bankPatch).length > 0) {
+    Object.assign(patch, bankPatch);
+    patch.bank_details_updated_at = new Date();
   }
 
   await user.update(patch);

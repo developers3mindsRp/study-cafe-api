@@ -139,6 +139,12 @@ const me = asyncHandler(async (req, res) => {
     country: user.country || null,
     gst: user.gst || null,
     email_verified: !!user.email_verified,
+    bank_account_holder_name: user.bank_account_holder_name || null,
+    bank_account_number: user.bank_account_number || null,
+    bank_ifsc: user.bank_ifsc || null,
+    bank_name: user.bank_name || null,
+    bank_branch: user.bank_branch || null,
+    bank_details_updated_at: user.bank_details_updated_at || null,
   });
 });
 

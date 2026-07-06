@@ -41,6 +41,12 @@ module.exports = (sequelize) => {
       referral_code: { type: DataTypes.STRING(32), allowNull: true, unique: true },
       referred_by: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
       referred_at: { type: DataTypes.DATE, allowNull: true },
+      bank_account_holder_name: { type: DataTypes.STRING(200), allowNull: true },
+      bank_account_number: { type: DataTypes.STRING(34), allowNull: true },
+      bank_ifsc: { type: DataTypes.STRING(11), allowNull: true },
+      bank_name: { type: DataTypes.STRING(200), allowNull: true },
+      bank_branch: { type: DataTypes.STRING(200), allowNull: true },
+      bank_details_updated_at: { type: DataTypes.DATE, allowNull: true },
       email_verified_at: { type: DataTypes.DATE, allowNull: true },
     },
     {

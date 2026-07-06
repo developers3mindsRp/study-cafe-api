@@ -200,6 +200,7 @@ function emptyToNull(s) {
 }
 
 async function sessionFromUserEntity(user) {
+
   if (!user) return null;
   const plain = user.get({ plain: true });
   const role = plain.Role?.name || 'user';
@@ -245,6 +246,12 @@ async function sessionFromUserEntity(user) {
       permissions,
       has_active_membership,
       email_verified: emailVerified,
+      bank_account_holder_name: plain.bank_account_holder_name || null,
+      bank_account_number: plain.bank_account_number || null,
+      bank_ifsc: plain.bank_ifsc || null,
+      bank_name: plain.bank_name || null,
+      bank_branch: plain.bank_branch || null,
+      bank_details_updated_at: plain.bank_details_updated_at || null,
     },
     expiresIn: expiresInSecondsFromAccessToken(accessToken),
   };
@@ -313,7 +320,7 @@ async function register({
     referral_code: newReferralCode,
     referred_by: referredBy,
     referred_at: referredBy ? new Date() : null,
-    email_verified_at: null,
+    email_verified_at: null
   });
 
   const otp = generateSixDigitOtp();
@@ -335,7 +342,7 @@ async function register({
     include: [roleIncludeForSession()],
     attributes: [
       'id', 'email', 'name', 'referral_code', 'phone', 'profession', 'company', 'designation',
-      'city', 'state', 'country', 'gst', 'email_verified_at',
+      'city', 'state', 'country', 'gst', 'email_verified_at', 'bank_account_holder_name', 'bank_account_number', 'bank_ifsc', 'bank_name', 'bank_branch', 'bank_details_updated_at',
     ],
   });
   const r = withRole.get({ plain: true });
@@ -355,6 +362,12 @@ async function register({
     country: r.country,
     gst: r.gst || null,
     email_verified: userIsEmailVerified(r),
+    bank_account_holder_name: r.bank_account_holder_name || null,
+    bank_account_number: r.bank_account_number || null,
+    bank_ifsc: r.bank_ifsc || null,
+    bank_name: r.bank_name || null,
+    bank_branch: r.bank_branch || null,
+    bank_details_updated_at: r.bank_details_updated_at || null,
   };
 }
 
@@ -491,6 +504,7 @@ async function validateToken(token) {
     attributes: [
       'id', 'email', 'name', 'bio', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country',
       'gst', 'permission_overrides', 'referral_code', 'profile_pic_url', 'email_verified_at',
+      'bank_account_holder_name', 'bank_account_number', 'bank_ifsc', 'bank_name', 'bank_branch', 'bank_details_updated_at',
     ],
   });
   if (!user) return null;
@@ -523,6 +537,12 @@ async function validateToken(token) {
     country: r.country || null,
     gst: r.gst || null,
     email_verified,
+    bank_account_holder_name: r.bank_account_holder_name || null,
+    bank_account_number: r.bank_account_number || null,
+    bank_ifsc: r.bank_ifsc || null,
+    bank_name: r.bank_name || null,
+    bank_branch: r.bank_branch || null,
+    bank_details_updated_at: r.bank_details_updated_at || null,
   };
 }
 
