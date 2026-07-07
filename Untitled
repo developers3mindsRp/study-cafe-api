@@ -1,0 +1,91 @@
+Ready for review
+Select text to add comments on the plan
+Plan: Per-course 4-digit certificate number
+Context
+Courses issue a certificate of completion. Today the certificate has no real number — the frontend shows a hardcoded serial 4987 on every certificate (CertificateLayout.tsx:24).
+
+The client wants a unique 4-digit number per certificate, numbered per course starting at 0001 and increasing as new learners get their certificate. The number must be surfaced in the GET /api/progress/course/:courseId response (and in the certificate payload so it prints on the certificate).
+
+Decisions confirmed with the user:
+
+Stable per user — the number is assigned once the first time a learner opens/downloads their certificate for a course, stored, and reused on every re-download. The per-course counter only advances for new learners.
+Per-course scope — each course has its own sequence (0001, 0002, …), independent of other courses.
+Overflow — zero-pad to at least 4 digits, but allow growth beyond 9999 (10000…). Never collide, never break.
+Why assignment happens at certificate-fetch time (not on the PNG "Download" click)
+The actual "Download" button in Certificate.tsx is a pure client-side html-to-image render — the server never sees it. The server does see the data fetch GET /certificates/course/:courseId, which fires when the certificate opens and already gates on "course completed + has access + certificate enabled". Since the number is assign-once / stable per user, minting it there is correct: first open = number minted; every later open returns the same stored number. Same number is also echoed into progress/course.
+
+Approach
+Introduce a dedicated course_certificates table keyed by (user_id, course_id) that stores the assigned number. Assign lazily + atomically inside the existing certificate-data path, then echo the formatted number into both the certificate payload and the progress payload.
+
+The legacy WP migration already sketches a certificates table (scripts\migrate-wp-to-ms.js:245-259) but nothing live uses it. We add a new, clean table via the repo's idempotent "ensure on boot" mechanism rather than reusing that dormant DDL, to avoid coupling to the one-time migration script.
+
+1. New table + boot ensure (course-service)
+Add SQL services/course-service/scripts/create-course-certificates-table.sql:
+CREATE TABLE IF NOT EXISTS course_certificates (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id       BIGINT UNSIGNED NOT NULL,
+  course_id     BIGINT UNSIGNED NOT NULL,
+  cert_seq      INT UNSIGNED NOT NULL,          -- per-course running number (1,2,3,…)
+  issued_at     DATETIME NOT NULL,
+  created_at    DATETIME NOT NULL,
+  updated_at    DATETIME NOT NULL,
+  UNIQUE KEY uq_cert_user_course (user_id, course_id),
+  UNIQUE KEY uq_cert_course_seq  (course_id, cert_seq)
+);
+cert_seq is the raw integer; the display string (0001) is derived at read time with String(cert_seq).padStart(4, '0').
+Add services/course-service/src/db/ensureCourseCertificatesTable.js mirroring ensureCoursePageSettingsTable.js (read the .sql, run it once per process, set an ensured flag).
+Wire it into connect() in models/index.js next to the existing ensure* calls.
+Add a Sequelize model models/CourseCertificate.js (table course_certificates, underscored, timestamps: true with created_at/updated_at) and register it in models/index.js.
+2. Atomic assignment helper (course-service)
+Add getOrAssignCertificateNumber(userId, courseId) — new function in certificate.service.js (or a small certificateNumber.service.js). Logic:
+
+SELECT cert_seq FROM course_certificates WHERE user_id=? AND course_id=? → if found, return it.
+Else assign the next sequence atomically inside a transaction to avoid two concurrent first-time downloads getting the same number:
+INSERT INTO course_certificates (user_id, course_id, cert_seq, …) VALUES (?, ?, (SELECT next), …) computed as COALESCE(MAX(cert_seq),0)+1 over the same course_id, guarded by the uq_cert_course_seq unique key.
+On duplicate-key race (ER_DUP_ENTRY), retry the read/compute once (small bounded retry loop).
+The uq_cert_user_course key guarantees one row per learner even under concurrent first opens.
+Return cert_seq; caller formats via padStart(4,'0').
+Reuse the existing sequelize from models; follow the raw-query style already in certificate.service.js / progress.service.js.
+
+3. Surface the number in the certificate payload
+In certificate.service.js:
+
+getCertificateData and getCertificateDataInternal: after the existing completion/access/enabled checks pass, call getOrAssignCertificateNumber(userId, cid) and add certificateNumber: '0001' (formatted) to the returned object alongside courseTitle, studentName, completionDate.
+Because assignment is gated behind the same checks, a number is only ever minted for a genuinely completed + certificate-enabled course — no wasted numbers.
+4. Surface the number in progress/course
+In progress.service.js getCourseProgress, after computing status:
+
+Only when status === 'completed' and the course provides a certificate, look up (do not assign) the existing number: SELECT cert_seq … WHERE user_id, course_id. Return certificateNumber: cert_seq ? padStart : null.
+Do not assign here — progress is polled frequently and also runs for internal summaries; minting on a background poll would burn numbers before the learner ever opens the certificate. Assignment stays exclusively in the certificate path (step 3). progress/course reports the number once it exists, null until then.
+Add certificateNumber to the two return objects (the !batch early return can keep it null).
+5. Frontend — display the real number
+API types / payloads (study-cafe-web):
+Add certificateNumber?: string | null to CertificatePayload (certificatePrint.ts:3), to the CertificateData type in Certificate.tsx:13, and to CourseProgressPayload (progress.service.ts:28).
+CertificateLayout (CertificateLayout.tsx):
+Add a serial?: string prop; replace hardcoded 4987 at line 24 with {serial ?? "—"}.
+Pass it from Certificate.tsx render: serial={certificateData.certificateNumber} and from the print template (certificatePrint.ts) add a "Certificate Serial No." line using payload.certificateNumber.
+Files to modify / create
+course-service (API)
+
+services/course-service/scripts/create-course-certificates-table.sql (new)
+services/course-service/src/db/ensureCourseCertificatesTable.js (new)
+services/course-service/src/models/CourseCertificate.js (new)
+services/course-service/src/models/index.js (register model + ensure call)
+services/course-service/src/services/certificate.service.js (assign helper + add certificateNumber to both payloads)
+services/course-service/src/services/progress.service.js (read-only lookup, add certificateNumber)
+study-cafe-web (frontend)
+
+src/utils/certificatePrint.ts (type + print template line)
+src/components/Certificate.tsx (type + pass serial)
+src/components/ui/CertificateLayout.tsx (prop, replace 4987)
+src/services/progress.service.ts (type)
+src/services/courses.service.ts / src/types/api.types.ts if a shared certificate type is used there (verify during implementation)
+Verification
+DB ensure: boot course-service; confirm log course_certificates table ensured and the table exists (SHOW TABLES LIKE 'course_certificates').
+First download assigns 0001: as a user who has completed a certificate-enabled course and has no row yet, call GET /api/certificates/course/:courseId → response includes certificateNumber: "0001"; a row appears in course_certificates with cert_seq=1.
+Stable on re-download: call the same endpoint again → still 0001, no new row, counter not advanced.
+Second learner gets 0002: a different completed user on the same course → 0002.
+Per-course independence: a completed user on a different course → that course's own 0001.
+progress/course echoes it: GET /api/progress/course/:courseId for a user who already has a number returns the same certificateNumber; for a completed user who has not opened the certificate yet it returns null (and no row is created by the progress call — verify the row count is unchanged after hitting progress).
+Concurrency: fire two simultaneous first-time certificate fetches for the same new user+course (or two different new users on the same course); confirm no duplicate cert_seq and exactly one row per user (unique keys hold; bounded retry resolves the race).
+Frontend: open the certificate modal on a completed course → the layout shows the real serial (e.g. 0001) instead of 4987; the printed/PNG certificate carries it.

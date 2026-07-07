@@ -60,6 +60,7 @@ async function getCourseProgress(courseId, userId, authHeader) {
       totalSessions: 0,
       percent: 0,
       status: 'not_started',
+      certificateNumber: null,
       lastSessionId: null,
       sessions: [],
     };
@@ -91,6 +92,26 @@ async function getCourseProgress(courseId, userId, authHeader) {
   const percent = totalSessions === 0 ? 0 : Math.round((completed / totalSessions) * 100);
   const status =
     completed >= totalSessions && totalSessions > 0 ? 'completed' : completed > 0 ? 'in_progress' : 'not_started';
+
+  // Report the learner's certificate number if one has already been assigned. Read-only: opening the
+  // certificate (certificate.service) is what mints it, never a progress poll.
+  let certificateNumber = null;
+  if (status === 'completed') {
+    try {
+      const certificateService = require('./certificate.service');
+      const course = await coursesService.getByIdInternal(Number(courseId));
+      if (certificateService.courseProvidesCertificate(course)) {
+        const seq = await certificateService.getExistingCertificateSeq(userId, courseId);
+        certificateNumber = certificateService.formatCertificateSerial(seq);
+      }
+    } catch (err) {
+      logger.warn('[progress] certificate number lookup failed', {
+        courseId,
+        userId,
+        error: err?.message || String(err),
+      });
+    }
+  }
 
   const sessionsOut = sessionPayload.map(({ session, recordings }) => {
     const p = bySession.get(session.id);
@@ -130,6 +151,7 @@ async function getCourseProgress(courseId, userId, authHeader) {
     totalSessions,
     percent,
     status,
+    certificateNumber,
     lastSessionId: lastSessionId ? String(lastSessionId) : null,
     sessions: sessionsOut,
   };
