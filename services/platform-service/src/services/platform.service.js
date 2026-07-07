@@ -1193,7 +1193,7 @@ async function getCaseLawsPublic(options = {}) {
 
   const rows = total > 0
     ? await sequelize.query(
-      `SELECT a.id, a.wp_post_id, a.title, a.slug, a.case_name, a.citation,
+      `SELECT a.id, a.wp_post_id, a.title, a.slug, a.thumbnail_url, a.thumbnail_alt, a.case_name, a.citation,
               a.appeal_number, a.judgement_date, a.assessment_year, a.court_name,
               a.rel_download_url, a.upload_url, a.blog_access_tier
        FROM articles a
@@ -1211,6 +1211,8 @@ async function getCaseLawsPublic(options = {}) {
       wp_post_id: p.wp_post_id,
       title: p.title,
       slug: p.slug,
+      cover_image_url: p.thumbnail_url,
+      cover_image_alt: p.thumbnail_alt,
       blog_access_tier,
       access,
       case_name: p.case_name ?? null,
