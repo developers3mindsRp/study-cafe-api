@@ -1204,10 +1204,7 @@ async function getCaseLawsPublic(options = {}) {
     : [];
 
   const data = rows.map((p) => {
-    const { blog_access_tier, access, canViewPremiumMetadata } = buildArticlePublicAccess(
-      p.blog_access_tier,
-      viewer,
-    );
+    const { blog_access_tier, access } = buildArticlePublicAccess(p.blog_access_tier, viewer);
     return {
       id: p.id,
       wp_post_id: p.wp_post_id,
@@ -1215,14 +1212,14 @@ async function getCaseLawsPublic(options = {}) {
       slug: p.slug,
       blog_access_tier,
       access,
-      case_name: canViewPremiumMetadata ? (p.case_name ?? null) : null,
-      citation: canViewPremiumMetadata ? (p.citation ?? null) : null,
-      appeal_number: canViewPremiumMetadata ? (p.appeal_number ?? null) : null,
-      judgement_date: canViewPremiumMetadata ? (p.judgement_date ?? null) : null,
-      assessment_year: canViewPremiumMetadata ? (p.assessment_year ?? null) : null,
-      court_name: canViewPremiumMetadata ? (p.court_name ?? null) : null,
-      rel_download_url: canViewPremiumMetadata ? (p.rel_download_url ?? null) : null,
-      download_url: canViewPremiumMetadata ? (p.rel_download_url || p.upload_url || null) : null,
+      case_name: p.case_name ?? null,
+      citation: p.citation ?? null,
+      appeal_number: p.appeal_number ?? null,
+      judgement_date: p.judgement_date ?? null,
+      assessment_year: p.assessment_year ?? null,
+      court_name: p.court_name ?? null,
+      rel_download_url: p.rel_download_url ?? null,
+      download_url: p.rel_download_url || p.upload_url || null,
     };
   });
 
