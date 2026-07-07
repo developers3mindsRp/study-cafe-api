@@ -58,8 +58,26 @@ function buildCreatedAtRange(dateFrom, dateTo, Op) {
   return range;
 }
 
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+/** First and last calendar day of the current month in Asia/Kolkata (YYYY-MM-DD). */
+function currentIstMonthYmdBounds(now = new Date()) {
+  const istMs = now.getTime() + IST_OFFSET_MS;
+  const ist = new Date(istMs);
+  const y = ist.getUTCFullYear();
+  const mo = ist.getUTCMonth();
+  const lastDay = new Date(Date.UTC(y, mo + 1, 0)).getUTCDate();
+  return {
+    dateFrom: `${y}-${pad2(mo + 1)}-01`,
+    dateTo: `${y}-${pad2(mo + 1)}-${pad2(lastDay)}`,
+  };
+}
+
 module.exports = {
   buildCreatedAtRange,
   resolveFilterRangeStart,
   resolveFilterRangeEnd,
+  currentIstMonthYmdBounds,
 };

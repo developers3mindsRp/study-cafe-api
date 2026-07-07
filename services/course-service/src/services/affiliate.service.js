@@ -7,7 +7,7 @@ const {
 } = require("../models");
 const { QueryTypes, Op } = require("sequelize");
 const { logger, paginate } = require("../../../../shared");
-const { buildCreatedAtRange } = require("../../../../shared/istDateRange");
+const { buildCreatedAtRange, currentIstMonthYmdBounds } = require("../../../../shared/istDateRange");
 const { notifyWithdrawalEmail } = require("./withdrawalEmail.service");
 const affiliateSettingsService = require("./affiliateSettings.service");
 
@@ -181,6 +181,11 @@ const WITHDRAWAL_EXPORT_HEADERS = [
   'Affiliate Email',
   'Amount',
   'Status',
+  'Account Holder',
+  'Account Number',
+  'IFSC',
+  'Bank Name',
+  'Branch',
   'Remarks',
   'Requested On',
   'Updated At',
@@ -246,6 +251,25 @@ async function buildWithdrawalWhere(filters) {
   return where;
 }
 
+function mapUserBankDetails(user = {}) {
+  const account_holder_name = user.bank_account_holder_name || null;
+  const account_number = user.bank_account_number || null;
+  const ifsc = user.bank_ifsc || null;
+  const bank_name = user.bank_name || null;
+  const branch = user.bank_branch || null;
+  const updated_at = user.bank_details_updated_at || null;
+  const hasAny = account_holder_name || account_number || ifsc || bank_name || branch;
+  if (!hasAny) return null;
+  return {
+    account_holder_name,
+    account_number,
+    ifsc,
+    bank_name,
+    branch,
+    updated_at,
+  };
+}
+
 async function enrichWithdrawalRows(rows) {
   if (!rows.length) return [];
 
@@ -256,7 +280,9 @@ async function enrichWithdrawalRows(rows) {
 
   const users = affiliateIds.length
     ? await sequelize.query(
-      'SELECT id, name, email FROM users WHERE id IN (:affiliateIds)',
+      `SELECT id, name, email,
+        bank_account_holder_name, bank_account_number, bank_ifsc, bank_name, bank_branch, bank_details_updated_at
+       FROM users WHERE id IN (:affiliateIds)`,
       { replacements: { affiliateIds }, type: QueryTypes.SELECT },
     )
     : [];
@@ -265,21 +291,29 @@ async function enrichWithdrawalRows(rows) {
   return rows.map((record) => {
     const plain = record.get ? record.get({ plain: true }) : record;
     const user = userMap.get(Number(plain.affiliate_id)) || {};
+    const bank_details = mapUserBankDetails(user);
     return {
       ...plain,
       affiliate_name: user.name || 'Unknown',
       affiliate_email: user.email || '',
+      bank_details,
     };
   });
 }
 
 function withdrawalRowToCsvLine(row) {
+  const bank = row.bank_details || {};
   return [
     row.id,
     row.affiliate_name,
     row.affiliate_email,
     row.amount,
     row.status,
+    bank.account_holder_name,
+    bank.account_number,
+    bank.ifsc,
+    bank.bank_name,
+    bank.branch,
     row.remarks,
     row.created_at,
     row.updated_at,
@@ -367,6 +401,20 @@ function summarizeCommissionHistory(enriched) {
     active_commission_total: Math.round(activeCommissionTotal * 100) / 100,
     next_expiry_at: nextExpiryAt != null ? new Date(nextExpiryAt).toISOString() : null,
   };
+}
+
+async function sumMonthlyCommissionTotal(affiliateId) {
+  const { dateFrom, dateTo } = currentIstMonthYmdBounds();
+  const createdAtRange = buildCreatedAtRange(dateFrom, dateTo, Op);
+  if (!createdAtRange) return 0;
+
+  const total = await AffiliateHistory.sum('commission_amount', {
+    where: {
+      affiliate_id: affiliateId,
+      created_at: createdAtRange,
+    },
+  });
+  return Math.round((parseFloat(total) || 0) * 100) / 100;
 }
 
 function isExpiredStatusEnumError(err) {
@@ -839,6 +887,7 @@ const affiliateService = {
         available_for_withdrawal: 0,
         expired_commission_total: 0,
         active_commission_total: 0,
+        monthly_commission_total: 0,
         next_expiry_at: null,
         totalOrders: 0,
         totalOrderValue: 0,
@@ -850,10 +899,13 @@ const affiliateService = {
 
     await this.expireStaleEarnings(uid);
 
-    const [balance] = await AffiliateBalance.findOrCreate({
-      where: { affiliate_id: uid },
-      defaults: { affiliate_id: uid, total_earned: 0, total_withdrawn: 0, current_balance: 0 },
-    });
+    const [balance, monthlyCommissionTotal] = await Promise.all([
+      AffiliateBalance.findOrCreate({
+        where: { affiliate_id: uid },
+        defaults: { affiliate_id: uid, total_earned: 0, total_withdrawn: 0, current_balance: 0 },
+      }).then(([row]) => row),
+      sumMonthlyCommissionTotal(uid),
+    ]);
 
     const pendingWithdrawalTotal = await sumPendingWithdrawals(uid);
     const balPlain = balance.get({ plain: true });
@@ -875,6 +927,7 @@ const affiliateService = {
         available_for_withdrawal: availableForWithdrawal,
         expired_commission_total: 0,
         active_commission_total: 0,
+        monthly_commission_total: monthlyCommissionTotal,
         next_expiry_at: null,
         totalOrders: 0,
         totalOrderValue: 0,
@@ -925,6 +978,7 @@ const affiliateService = {
       pending_withdrawal_total: pendingWithdrawalTotal,
       available_for_withdrawal: availableForWithdrawal,
       ...summary,
+      monthly_commission_total: monthlyCommissionTotal,
       totalOrders: activeHistory.length,
       totalOrderValue: Math.round(totalOrderValue * 100) / 100,
       totalCommission: parseFloat(balance.total_earned),
