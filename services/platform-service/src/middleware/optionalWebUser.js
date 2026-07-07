@@ -1,8 +1,7 @@
 const jwt = require('jsonwebtoken');
-const { Op } = require('sequelize');
 const config = require('../config');
-const { UserMembership, PremiumPlan } = require('../models');
 const { logger } = require('../../../../shared');
+const { resolveActiveMembershipForUser } = require('../lib/membershipViewer');
 
 /**
  * Optional JWT + membership hydration for public blog/article routes.
@@ -18,40 +17,18 @@ async function optionalWebUser(req, res, next) {
     const decoded = jwt.verify(auth.slice(7), config.jwt.secret);
     const userId = Number(decoded.userId);
     if (!Number.isFinite(userId)) return next();
-    const now = new Date();
-    const m = await UserMembership.findOne({
-      where: {
-        user_id: userId,
-        starts_at: { [Op.lte]: now },
-        expires_at: { [Op.gte]: now },
-      },
-      order: [['expires_at', 'DESC']],
-      attributes: ['id', 'membership_type'],
-    });
-    let membershipSlug = null;
-    let membershipTierRank = 0;
-    if (m) {
-      membershipSlug = m.get('membership_type') || null;
-      if (membershipSlug) {
-        const plan = await PremiumPlan.findOne({
-          where: { slug: membershipSlug },
-          attributes: ['tier_rank'],
-        });
-        membershipTierRank = plan ? Number(plan.get('tier_rank') ?? 0) : 0;
-      }
-    }
+
+    const membership = await resolveActiveMembershipForUser(userId);
     req.viewer = {
       userId,
       email: decoded.email,
       role: decoded.role || 'user',
-      hasActiveMembership: !!m,
-      membershipSlug,
-      membershipTierRank,
+      hasActiveMembership: !!membership,
+      membershipSlug: membership?.membershipSlug ?? null,
+      membershipTierRank: membership?.membershipTierRank ?? 0,
     };
   } catch (err) {
     req.viewer = null;
-    // Surface common misconfigurations (mismatched JWT_SECRET, expired tokens, etc.)
-    // so premium-article gating doesn't silently treat real members as guests.
     logger.warn('[optionalWebUser] token verify failed', {
       name: err?.name,
       message: err?.message,

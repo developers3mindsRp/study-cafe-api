@@ -180,10 +180,14 @@ async function hasActiveMembershipForUserId(userId) {
   if (userId == null) return false;
   const uid = Number(userId);
   if (!Number.isFinite(uid)) return false;
+  const userRow = await User.findByPk(uid, { attributes: ['id', 'wp_user_id'] });
+  const lookupIds = [uid];
+  const wp = Number(userRow?.wp_user_id);
+  if (Number.isFinite(wp) && wp > 0) lookupIds.push(wp);
   const now = new Date();
   const row = await UserMembership.findOne({
     where: {
-      user_id: uid,
+      user_id: { [Op.in]: lookupIds },
       starts_at: { [Op.lte]: now },
       expires_at: { [Op.gte]: now },
     },

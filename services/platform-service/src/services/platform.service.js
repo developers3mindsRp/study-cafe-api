@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const { QueryTypes } = require('sequelize');
+const { normalizeMembershipSlug } = require('../lib/membershipViewer');
 
 /**
  * Normalize a plan's `features` value from the DB into a clean string[].
@@ -1743,7 +1744,7 @@ function canViewArticleCitation(viewer) {
   if (['admin', 'super_admin'].includes(viewer.role)) return true;
   if (!viewer.hasActiveMembership) return false;
   if (Number(viewer.membershipTierRank ?? 0) >= 2) return true;
-  const slug = String(viewer.membershipSlug || '').toLowerCase();
+  const slug = normalizeMembershipSlug(viewer.membershipSlug);
   return slug === 'premium' || slug === 'ultimate';
 }
 
