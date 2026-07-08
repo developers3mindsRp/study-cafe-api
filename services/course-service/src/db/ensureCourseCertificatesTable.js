@@ -16,7 +16,18 @@ async function ensureCourseCertificatesTable(sequelize) {
     path.join(__dirname, '../../scripts/create-course-certificates-table.sql'),
     'utf8',
   );
-  await sequelize.query(sql);
+  // The driver runs one statement per query (multipleStatements is not enabled). Strip SQL comments
+  // and split on ';' so each CREATE/INSERT executes separately.
+  const statements = sql
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('--'))
+    .join('\n')
+    .split(';')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const stmt of statements) {
+    await sequelize.query(stmt);
+  }
 
   // Reconcile a table created by the earlier per-course implementation (column `cert_seq`,
   // unique key `uq_cert_course_seq`) into the global-serial shape. No-op on fresh installs.
