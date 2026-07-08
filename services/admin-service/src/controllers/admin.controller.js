@@ -645,6 +645,34 @@ const addBatchEnrollment = asyncHandler(async (req, res) => {
   sendCreated(res, data);
 });
 
+// Atomically set a user's batch for a course (param :id = courseId). Removes any other batch of
+// the same course, then ensures the target enrollment — so switching a batch never leaves the user
+// enrolled in two batches at once. A course order is minted ONLY on a first-time enrollment
+// (firstEnrollment === true); a pure batch switch does not create a new order.
+const setUserCourseBatch = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const courseId = req.params.id;
+  const { user_id, batch_id, price, paymentId } = req.body;
+  const { data } = await courseClient.post(`/internal/courses/${courseId}/set-batch`, {
+    user_id,
+    batch_id,
+  });
+  await adminLogsService.logAction(
+    adminId,
+    'SET_USER_COURSE_BATCH',
+    'batch_enrollment',
+    String(data.id ?? ''),
+    { courseId, batchId: batch_id, userId: user_id },
+    req.ip,
+  );
+
+  if (data.firstEnrollment && courseId) {
+    await createCourseOrder({ userId: user_id, courseId, price, paymentId });
+  }
+
+  sendSuccess(res, data);
+});
+
 const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
   const batchId = req.params.id;
@@ -1413,6 +1441,7 @@ module.exports = {
   deleteBatch,
   getBatchEnrollments,
   addBatchEnrollment,
+  setUserCourseBatch,
   bulkAddBatchEnrollmentByEmails,
   bulkGrantMembershipByEmails,
   importUsersFromCsv,

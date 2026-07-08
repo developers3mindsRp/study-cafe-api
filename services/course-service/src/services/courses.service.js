@@ -1640,6 +1640,74 @@ const coursesService = {
     return { ...row.get({ plain: true }), created };
   },
 
+  /**
+   * Set the user's batch for a course ATOMICALLY: remove any existing batch_enrollments the
+   * user has for OTHER batches of this course, then ensure the single target enrollment. This
+   * guarantees a user is never left enrolled in two batches of the same course (the cause of
+   * the "2 batches show / switch appends a duplicate" bug), since batch_enrollments is keyed on
+   * (batch_id, user_id), not (course_id, user_id).
+   *
+   * Does NOT touch user_course_progress — old-batch progress rows are intentionally left in place.
+   *
+   * Returns { batch_id, user_id, created, firstEnrollment }:
+   *  - created: true if the target enrollment row was newly created (vs already present)
+   *  - firstEnrollment: true if the user had NO batch enrollment for this course before this call
+   *    (used by the admin layer to decide whether to mint a course order — a pure switch should not).
+   */
+  async setUserCourseBatch(userId, courseId, batchId) {
+    const uid = Number(userId);
+    const cid = Number(courseId);
+    const bid = Number(batchId);
+
+    // Confirm the target batch exists and belongs to this course.
+    const targetBatch = await Batch.findOne({
+      where: { id: bid, course_id: cid },
+      attributes: ["id"],
+    });
+    if (!targetBatch) {
+      throw new AppError("Batch not found for this course", 404);
+    }
+
+    // All batches of this course → the set we may need to prune the user out of.
+    const courseBatches = await Batch.findAll({
+      where: { course_id: cid },
+      attributes: ["id"],
+      raw: true,
+    });
+    const courseBatchIds = courseBatches.map((b) => b.id);
+
+    // Was the user already enrolled in any batch of this course?
+    const existing = await BatchEnrollment.findAll({
+      where: { user_id: uid, batch_id: { [Op.in]: courseBatchIds } },
+      attributes: ["batch_id"],
+      raw: true,
+    });
+    const firstEnrollment = existing.length === 0;
+
+    // Remove every enrollment for this course EXCEPT the target batch.
+    const toRemove = courseBatchIds.filter((id) => Number(id) !== bid);
+    if (toRemove.length > 0) {
+      await BatchEnrollment.destroy({
+        where: { user_id: uid, batch_id: { [Op.in]: toRemove } },
+      });
+    }
+
+    // Ensure the single target enrollment.
+    const [row, created] = await BatchEnrollment.findOrCreate({
+      where: { batch_id: bid, user_id: uid },
+      defaults: { batch_id: bid, user_id: uid, enrolled_at: new Date() },
+    });
+
+    // Keep the course-level enrollment + user_courses access grant in sync.
+    await Enrollment.findOrCreate({
+      where: { user_id: uid, course_id: cid },
+      defaults: { user_id: uid, course_id: cid, enrolled_at: new Date() },
+    });
+    await syncUserCourseGrant(uid, cid);
+
+    return { ...row.get({ plain: true }), created, firstEnrollment };
+  },
+
   async removeBatchEnrollment(enrollmentId) {
     const row = await BatchEnrollment.findByPk(enrollmentId);
     if (!row) return false;
@@ -1654,10 +1722,13 @@ const coursesService = {
       include: [{ model: Course, as: 'Course', attributes: ['id', 'title'] }],
     });
 
-    // 2. Get batch enrollments (legacy or specific)
+    // 2. Get batch enrollments (legacy or specific). Newest-enrolled first so that if legacy dirty
+    //    data still has a user in >1 batch of the same course, the display resolves deterministically
+    //    to their most recent batch (matching getUserBatchForCourse), instead of arbitrary DB order.
     const batchRows = await BatchEnrollment.findAll({
       where: { user_id: userId },
       include: [{ model: Batch, as: 'Batch', include: [{ model: Course, as: 'Course', attributes: ['id', 'title'] }] }],
+      order: [['enrolled_at', 'DESC']],
     });
 
     // 3. Get generic user_courses (Auth service parity)
@@ -1680,13 +1751,16 @@ const coursesService = {
       });
     }
 
-    // Layer in Batch info
+    // Layer in Batch info. batchRows are newest-first, so the first batch row seen for a course is
+    // the most recent enrollment — skip any later (older) batch rows for a course we already tagged
+    // so a stale duplicate enrollment never overwrites the newest one.
     for (const r of batchRows) {
       const b = r.get({ plain: true });
       const cid = String(b.Batch?.course_id);
       if (!cid || cid === 'undefined') continue;
 
       const existing = resultsMap.get(cid);
+      if (existing?.batch_id != null) continue;
       resultsMap.set(cid, {
         enrollment_id: existing?.enrollment_id ?? null,
         course_id: Number(cid),
@@ -1854,6 +1928,12 @@ const coursesService = {
    * Returns the batch row (plain) + basic status info, or null.
    */
   async getUserBatchForCourse(courseId, userId) {
+    // Return the batch the learner is ACTUALLY enrolled in — never the batch with the
+    // most sessions. Each cohort has its own sessions and a learner must see only their
+    // own batch's content (Default-batch student sees Default lectures, New-batch student
+    // sees New lectures). Ordered newest-enrolled first so the normal single-enrollment
+    // case returns that row, and any legacy user in >1 batch of the same course resolves
+    // deterministically to their most recent enrollment (tie-break: highest batch id).
     const rows = await BatchEnrollment.findAll({
       where: { user_id: userId },
       include: [
@@ -1868,32 +1948,17 @@ const coursesService = {
     });
     if (!rows.length) return null;
 
-    const batchIds = rows.map((r) => r.Batch?.id).filter(Boolean);
-    if (batchIds.length === 0) return null;
-
-    const { Op } = require("sequelize");
-    const countRows = await Session.findAll({
-      attributes: [
-        "batch_id",
-        [Session.sequelize.fn("COUNT", Session.sequelize.col("Session.id")), "cnt"],
-      ],
-      where: { batch_id: { [Op.in]: batchIds } },
-      group: ["batch_id"],
-      raw: true,
-    });
-    const countMap = new Map(countRows.map((r) => [Number(r.batch_id), Number(r.cnt) || 0]));
-
     let bestBatch = null;
-    let bestScore = -1;
+    let bestEnr = -1;
+    let bestId = -1;
     for (const r of rows) {
       const b = r.Batch;
       if (!b) continue;
-      const bid = Number(b.id);
-      const cnt = countMap.get(bid) || 0;
       const enr = r.enrolled_at ? new Date(r.enrolled_at).getTime() : 0;
-      const score = cnt * 1e15 + enr;
-      if (score > bestScore) {
-        bestScore = score;
+      const bid = Number(b.id) || 0;
+      if (enr > bestEnr || (enr === bestEnr && bid > bestId)) {
+        bestEnr = enr;
+        bestId = bid;
         bestBatch = b;
       }
     }
@@ -1901,9 +1966,11 @@ const coursesService = {
   },
 
   /**
-   * If the learner is enrolled in a batch with zero sessions but another batch
-   * for this course has sessions (e.g. "Default Batch"), move enrollment so
-   * progress and player APIs match the slug/sessions behavior.
+   * @deprecated No longer called. This used to move a learner off an empty batch onto the
+   * session-richest one, but that silently dragged Default-batch students onto the latest
+   * batch on every page load and broke per-batch content isolation. A learner's batch now
+   * changes only via purchase or explicit admin action (see setUserCourseBatch). Kept
+   * defined to keep the removal diff minimal; safe to delete once confirmed unused.
    */
   async repairUserBatchIfNoSessions(courseId, userId) {
     const cid = Number(courseId);

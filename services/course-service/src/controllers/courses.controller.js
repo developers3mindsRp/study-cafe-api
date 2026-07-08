@@ -269,6 +269,17 @@ const autoEnrollBatch = asyncHandler(async (req, res) => {
   sendSuccess(res, result || { message: 'No active batch found' });
 });
 
+// Atomically set the user's single batch for this course (removes any other batch of the same
+// course, then ensures the target enrollment). Used by admin user-edit to switch batches without
+// leaving the user enrolled in two batches at once.
+const setUserCourseBatch = asyncHandler(async (req, res) => {
+  const { user_id, batch_id } = req.body;
+  if (!user_id) throw new AppError('user_id is required', 400);
+  if (!batch_id) throw new AppError('batch_id is required', 400);
+  const result = await coursesService.setUserCourseBatch(user_id, req.params.id, batch_id);
+  sendSuccess(res, result);
+});
+
 const selectPurchaseBatch = asyncHandler(async (req, res) => {
   const batch = await coursesService.selectPurchaseBatch(req.params.id);
   if (!batch) return sendSuccess(res, null);
@@ -359,6 +370,7 @@ module.exports = {
   addBatchEnrollment,
   removeBatchEnrollment,
   autoEnrollBatch,
+  setUserCourseBatch,
   unenrollUser,
   getUserEnrollments,
   listBatchesByCourse,

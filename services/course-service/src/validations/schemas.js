@@ -295,6 +295,14 @@ const autoEnrollBatch = {
     }),
 };
 
+const setUserCourseBatch = {
+    params: idParam.params,
+    body: Joi.object({
+        user_id: Joi.number().integer().positive().required(),
+        batch_id: Joi.number().integer().positive().required(),
+    }),
+};
+
 const listBatchesQuery = {
     query: Joi.object({
         course_id: Joi.number().integer().positive().optional(),
@@ -385,6 +393,7 @@ module.exports = {
     toggleVisibility,
     addBatchEnrollment,
     autoEnrollBatch,
+    setUserCourseBatch,
     listBatchesQuery,
     addMaterial,
     updatePageSetting,

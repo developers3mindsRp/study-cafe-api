@@ -68,6 +68,8 @@ function register(router) {
   router.get('/admin/batches/:id/enrollments', requireAdmin, controller.getBatchEnrollments);
   router.post('/admin/batches/:id/enrollments', requireAdmin, controller.addBatchEnrollment);
   router.post('/admin/batches/:id/enrollments/bulk', requireAdmin, controller.bulkAddBatchEnrollmentByEmails);
+  // :id = courseId — atomically set the user's single batch for that course (used by user-edit switch).
+  router.post('/admin/courses/:id/set-batch', requireAdmin, controller.setUserCourseBatch);
   router.post('/admin/memberships/bulk', requireAdmin, controller.bulkGrantMembershipByEmails);
   router.post('/admin/users/import', requireAdmin, controller.importUsersFromCsv);
   router.delete('/admin/batch-enrollments/:id', requireAdmin, controller.removeBatchEnrollment);

@@ -10,8 +10,14 @@ async function ensureAccessAndBatch(courseId, userId, authHeader) {
   // if (!allowed) {
   //   throw new AppError('Access denied', 403);
   // }
+  // First-touch safety net only: enrolls a user who has course access but zero batch rows
+  // (e.g. membership/legacy users). It is a no-op when the user is already in a batch, so it
+  // never MOVES an existing learner between batches.
   await coursesService.autoEnrollInBatch(Number(courseId), Number(userId), null);
-  await coursesService.repairUserBatchIfNoSessions(Number(courseId), Number(userId));
+  // NOTE: repairUserBatchIfNoSessions was intentionally removed here. It used to destroy the
+  // learner's real batch enrollment (if that batch had 0 sessions) and move them onto the
+  // session-richest batch on every page load — silently dragging Default-batch students onto
+  // the latest batch. A learner's batch now only changes via purchase or explicit admin action.
 }
 
 async function listSessionRowsForUserCourse(courseId, userId) {
