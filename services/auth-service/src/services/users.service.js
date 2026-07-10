@@ -34,6 +34,7 @@ const USER_EXPORT_CSV_HEADERS = [
     'state',
     'country',
     'bio',
+    'gst',
 ];
 
 function escapeCsvCell(value) {
@@ -190,6 +191,7 @@ function userRowToExportCsvLine(user) {
         user.state,
         user.country,
         user.bio,
+        user.gst,
     ];
     return cells.map(escapeCsvCell).join(',');
 }
@@ -433,7 +435,7 @@ async function* iterateExportBatches(query) {
         'id', 'wp_user_id', 'name', 'display_name', 'email', 'phone',
         'first_name', 'last_name', 'designation', 'profession', 'company',
         'state', 'city', 'country', 'bio', 'role', 'role_id', 'status',
-        'created_at', 'plan',
+        'created_at', 'plan', 'gst',
     ];
 
     let lastId = null;
