@@ -12,6 +12,7 @@ function register(router) {
   router.get('/platform/google-reviews', controller.getGoogleReviews);
   router.get('/platform/testimonials', controller.getTestimonials);
   router.get('/platform/products', controller.getProducts);
+  router.get('/platform/professions', controller.getProfessions);
   router.get('/platform/faq', controller.getFaqs);
   router.get('/plateform/contact-inquiries', controller.getContactInquiryInternal)
   router.get('/platform/footer', controller.getFooter);
@@ -61,6 +62,11 @@ function register(router) {
   router.post('/internal/platform/products', internalAuth, validate(schemas.createProduct), controller.createProduct);
   router.put('/internal/platform/products/:id', internalAuth, validate(schemas.updateProduct), controller.updateProduct);
   router.delete('/internal/platform/products/:id', internalAuth, validate(schemas.idParam), controller.deleteProduct);
+  router.get('/internal/platform/professions', internalAuth, controller.getProfessionsInternal);
+  router.get('/internal/platform/professions/:id', internalAuth, validate(schemas.idParam), controller.getProfessionInternal);
+  router.post('/internal/platform/professions', internalAuth, validate(schemas.createProfession), controller.createProfession);
+  router.put('/internal/platform/professions/:id', internalAuth, validate(schemas.updateProfession), controller.updateProfession);
+  router.delete('/internal/platform/professions/:id', internalAuth, validate(schemas.idParam), controller.deleteProfession);
   router.get('/internal/platform/faqs', internalAuth, controller.getFaqsInternal);
   router.get('/internal/platform/faqs/:id', internalAuth, validate(schemas.idParam), controller.getFaqInternal);
   router.post('/internal/platform/faqs', internalAuth, validate(schemas.createFaq), controller.createFaq);

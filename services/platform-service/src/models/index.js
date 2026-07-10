@@ -45,6 +45,7 @@ const State = require("./State")(sequelize);
 const GoogleReview = require("./GoogleReview")(sequelize);
 const Testimonial = require("./Testimonial")(sequelize);
 const Product = require("./Product")(sequelize);
+const Profession = require("./Profession")(sequelize);
 const FooterData = require("./FooterData")(sequelize);
 const GlobalSetting = require("./GlobalSetting")(sequelize);
 const PremiumPlan = require("./PremiumPlan")(sequelize);
@@ -93,6 +94,7 @@ const models = {
   GoogleReview,
   Testimonial,
   Product,
+  Profession,
   FooterData,
   GlobalSetting,
   PremiumPlan,
@@ -120,6 +122,8 @@ async function connect() {
   // Ensure the products ("Our Products") table exists (created via model only — no migration script).
   // Idempotent: creates the table if missing, no-op when present. Scoped to this one table.
   await Product.sync();
+  // Same model-only pattern for the professions master (also created via the SQL script below).
+  await Profession.sync();
 }
 
 module.exports = {

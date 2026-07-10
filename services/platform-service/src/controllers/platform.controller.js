@@ -133,6 +133,41 @@ const deleteProduct = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+// ── Professions ────────────────────────────────────────────────────
+
+const getProfessions = asyncHandler(async (req, res) => {
+  const data = await platformService.professions.getProfessionsPublic();
+  sendSuccess(res, { data });
+});
+
+const getProfessionsInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.professions.getProfessionsInternal();
+  sendSuccess(res, data);
+});
+
+const getProfessionInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.professions.getProfessionByIdInternal(req.params.id);
+  if (!data) throw new AppError('Profession not found', 404);
+  sendSuccess(res, data);
+});
+
+const createProfession = asyncHandler(async (req, res) => {
+  const data = await platformService.professions.createProfession(req.body);
+  sendCreated(res, data);
+});
+
+const updateProfession = asyncHandler(async (req, res) => {
+  const data = await platformService.professions.updateProfession(req.params.id, req.body);
+  if (!data) throw new AppError('Profession not found', 404);
+  sendSuccess(res, data);
+});
+
+const deleteProfession = asyncHandler(async (req, res) => {
+  const ok = await platformService.professions.deleteProfession(req.params.id);
+  if (!ok) throw new AppError('Profession not found', 404);
+  sendNoContent(res);
+});
+
 // ── Footer ─────────────────────────────────────────────────────────
 
 const getFooter = asyncHandler(async (req, res) => {
@@ -837,6 +872,12 @@ module.exports = {
   createProduct,
   updateProduct,
   deleteProduct,
+  getProfessions,
+  getProfessionsInternal,
+  getProfessionInternal,
+  createProfession,
+  updateProfession,
+  deleteProfession,
   getFaqs,
   getFaqsInternal,
   getFaqInternal,
