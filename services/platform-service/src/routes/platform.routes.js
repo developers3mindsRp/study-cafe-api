@@ -11,6 +11,7 @@ function register(router) {
   router.get('/platform/states', controller.getStates);
   router.get('/platform/google-reviews', controller.getGoogleReviews);
   router.get('/platform/testimonials', controller.getTestimonials);
+  router.get('/platform/products', controller.getProducts);
   router.get('/platform/faq', controller.getFaqs);
   router.get('/plateform/contact-inquiries', controller.getContactInquiryInternal)
   router.get('/platform/footer', controller.getFooter);
@@ -56,6 +57,10 @@ function register(router) {
   router.post('/internal/platform/testimonials', internalAuth, validate(schemas.createTestimonial), controller.createTestimonial);
   router.put('/internal/platform/testimonials/:id', internalAuth, validate(schemas.updateTestimonial), controller.updateTestimonial);
   router.delete('/internal/platform/testimonials/:id', internalAuth, validate(schemas.idParam), controller.deleteTestimonial);
+  router.get('/internal/platform/products', internalAuth, controller.getProductsInternal);
+  router.post('/internal/platform/products', internalAuth, validate(schemas.createProduct), controller.createProduct);
+  router.put('/internal/platform/products/:id', internalAuth, validate(schemas.updateProduct), controller.updateProduct);
+  router.delete('/internal/platform/products/:id', internalAuth, validate(schemas.idParam), controller.deleteProduct);
   router.get('/internal/platform/faqs', internalAuth, controller.getFaqsInternal);
   router.get('/internal/platform/faqs/:id', internalAuth, validate(schemas.idParam), controller.getFaqInternal);
   router.post('/internal/platform/faqs', internalAuth, validate(schemas.createFaq), controller.createFaq);

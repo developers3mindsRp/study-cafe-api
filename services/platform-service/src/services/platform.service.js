@@ -122,6 +122,7 @@ const {
   State,
   GoogleReview,
   Testimonial,
+  Product,
   FooterData,
   GlobalSetting,
   PremiumPlan,
@@ -556,6 +557,77 @@ async function updateTestimonial(id, data) {
 
 async function deleteTestimonial(id) {
   const deleted = await Testimonial.destroy({ where: { id } });
+  return deleted > 0;
+}
+
+// ── Products ("Our Products") ──────────────────────────────────────
+
+function productToApi(r) {
+  const plain = r.get ? r.get({ plain: true }) : r;
+  return {
+    id: plain.id,
+    title: plain.title,
+    redirect_url: plain.redirect_url,
+    sort_order: plain.sort_order,
+    is_active: plain.is_active,
+    created_at: plain.created_at,
+    updated_at: plain.updated_at,
+  };
+}
+
+async function getProductsPublic() {
+  const rows = await Product.findAll({
+    where: { is_active: true },
+    order: [
+      ['sort_order', 'ASC'],
+      ['id', 'DESC'],
+    ],
+    attributes: ['id', 'title', 'redirect_url', 'sort_order'],
+  });
+  return rows.map((r) => {
+    const plain = r.get ? r.get({ plain: true }) : r;
+    return {
+      id: plain.id,
+      title: plain.title,
+      redirect_url: plain.redirect_url,
+    };
+  });
+}
+
+async function getProductsInternal() {
+  const rows = await Product.findAll({
+    order: [
+      ['sort_order', 'ASC'],
+      ['id', 'DESC'],
+    ],
+  });
+  return rows.map(productToApi);
+}
+
+async function createProduct(data) {
+  const row = await Product.create({
+    title: data.title || '',
+    redirect_url: data.redirect_url || '',
+    sort_order: data.sort_order ?? 0,
+    is_active: data.is_active !== undefined ? !!data.is_active : true,
+  });
+  return productToApi(row);
+}
+
+async function updateProduct(id, data) {
+  const row = await Product.findByPk(id);
+  if (!row) return null;
+  const updates = {};
+  if (data.title !== undefined) updates.title = data.title;
+  if (data.redirect_url !== undefined) updates.redirect_url = data.redirect_url;
+  if (data.sort_order !== undefined) updates.sort_order = data.sort_order;
+  if (data.is_active !== undefined) updates.is_active = !!data.is_active;
+  await row.update(updates);
+  return productToApi(row);
+}
+
+async function deleteProduct(id) {
+  const deleted = await Product.destroy({ where: { id } });
   return deleted > 0;
 }
 
@@ -3851,6 +3923,13 @@ module.exports = {
     createTestimonial,
     updateTestimonial,
     deleteTestimonial,
+  },
+  products: {
+    getProductsPublic,
+    getProductsInternal,
+    createProduct,
+    updateProduct,
+    deleteProduct,
   },
   faqs: {
     getFaqsPublic,

@@ -5,6 +5,7 @@ const ALL_PERMISSIONS = [
   'memberships:list', 'memberships:view', 'memberships:create', 'memberships:edit', 'memberships:delete',
   'google_reviews:list', 'google_reviews:view', 'google_reviews:create', 'google_reviews:edit', 'google_reviews:delete',
   'testimonials:list', 'testimonials:view', 'testimonials:create', 'testimonials:edit', 'testimonials:delete',
+  'products:list', 'products:view', 'products:create', 'products:edit', 'products:delete',
   'faq:list', 'faq:view', 'faq:create', 'faq:edit', 'faq:delete',
   'newsletter:list', 'newsletter:edit', 'newsletter:create', 'newsletter:delete', 'newsletter:send',
   'courses:list', 'courses:view', 'courses:create', 'courses:edit', 'courses:delete',
@@ -62,6 +63,12 @@ const MODULE_HIERARCHY = {
     ['testimonials:edit'],
     ['testimonials:create'],
     ['testimonials:delete'],
+  ],
+  products: [
+    ['products:list', 'products:view'],
+    ['products:edit'],
+    ['products:create'],
+    ['products:delete'],
   ],
   faq: [
     ['faq:list', 'faq:view'],
@@ -189,6 +196,7 @@ const ROLE_PERMISSIONS = {
     'content:list', 'content:view', 'content:edit',
     'google_reviews:list', 'google_reviews:view', 'google_reviews:create', 'google_reviews:edit',
     'testimonials:list', 'testimonials:view', 'testimonials:create', 'testimonials:edit',
+    'products:list', 'products:view', 'products:create', 'products:edit',
     'faq:list', 'faq:view', 'faq:create', 'faq:edit',
     'marketing_pages:list', 'marketing_pages:view', 'marketing_pages:create', 'marketing_pages:edit',
     'payment_links:list', 'payment_links:view', 'payment_links:create', 'payment_links:edit',
@@ -200,6 +208,7 @@ const ROLE_PERMISSIONS = {
     'memberships:list', 'memberships:view',
     'google_reviews:list', 'google_reviews:view',
     'testimonials:list', 'testimonials:view',
+    'products:list', 'products:view',
     'faq:list', 'faq:view',
   ],
 

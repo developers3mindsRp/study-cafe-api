@@ -44,6 +44,7 @@ const CmsPage = require("./CmsPage")(sequelize);
 const State = require("./State")(sequelize);
 const GoogleReview = require("./GoogleReview")(sequelize);
 const Testimonial = require("./Testimonial")(sequelize);
+const Product = require("./Product")(sequelize);
 const FooterData = require("./FooterData")(sequelize);
 const GlobalSetting = require("./GlobalSetting")(sequelize);
 const PremiumPlan = require("./PremiumPlan")(sequelize);
@@ -91,6 +92,7 @@ const models = {
   State,
   GoogleReview,
   Testimonial,
+  Product,
   FooterData,
   GlobalSetting,
   PremiumPlan,
@@ -115,6 +117,9 @@ async function connect() {
   await ArticleSection.sync();
   // Same model-only pattern for the concurrent-editing lock table.
   await ArticleEditLock.sync();
+  // Ensure the products ("Our Products") table exists (created via model only — no migration script).
+  // Idempotent: creates the table if missing, no-op when present. Scoped to this one table.
+  await Product.sync();
 }
 
 module.exports = {

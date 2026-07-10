@@ -104,6 +104,35 @@ const deleteTestimonial = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+// ── Products ("Our Products") ──────────────────────────────────────
+
+const getProducts = asyncHandler(async (req, res) => {
+  const data = await platformService.products.getProductsPublic();
+  sendSuccess(res, data);
+});
+
+const getProductsInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.products.getProductsInternal();
+  sendSuccess(res, data);
+});
+
+const createProduct = asyncHandler(async (req, res) => {
+  const data = await platformService.products.createProduct(req.body);
+  sendCreated(res, data);
+});
+
+const updateProduct = asyncHandler(async (req, res) => {
+  const data = await platformService.products.updateProduct(req.params.id, req.body);
+  if (!data) throw new AppError('Product not found', 404);
+  sendSuccess(res, data);
+});
+
+const deleteProduct = asyncHandler(async (req, res) => {
+  const ok = await platformService.products.deleteProduct(req.params.id);
+  if (!ok) throw new AppError('Product not found', 404);
+  sendNoContent(res);
+});
+
 // ── Footer ─────────────────────────────────────────────────────────
 
 const getFooter = asyncHandler(async (req, res) => {
@@ -803,6 +832,11 @@ module.exports = {
   createTestimonial,
   updateTestimonial,
   deleteTestimonial,
+  getProducts,
+  getProductsInternal,
+  createProduct,
+  updateProduct,
+  deleteProduct,
   getFaqs,
   getFaqsInternal,
   getFaqInternal,

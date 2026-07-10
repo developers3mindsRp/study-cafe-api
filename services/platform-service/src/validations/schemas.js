@@ -125,6 +125,27 @@ const updateTestimonial = {
     }),
 };
 
+// ── Products ("Our Products") ─────────────────────────────────────────
+
+const createProduct = {
+    body: Joi.object({
+        title: Joi.string().max(255).required(),
+        redirect_url: Joi.string().max(512).uri().required(),
+        is_active: Joi.boolean().default(true),
+        sort_order: Joi.number().integer().min(0).default(0),
+    }),
+};
+
+const updateProduct = {
+    params: idParam.params,
+    body: Joi.object({
+        title: Joi.string().max(255),
+        redirect_url: Joi.string().max(512).uri(),
+        is_active: Joi.boolean(),
+        sort_order: Joi.number().integer().min(0),
+    }),
+};
+
 // ── FAQs ────────────────────────────────────────────────────────────
 
 const createFaq = {
@@ -571,6 +592,8 @@ module.exports = {
     updateGoogleReview,
     createTestimonial,
     updateTestimonial,
+    createProduct,
+    updateProduct,
     createFaq,
     updateFaq,
     createContactInquiry,

@@ -105,6 +105,10 @@ function register(router) {
   router.post('/admin/platform/testimonials', requireAdmin, p.postTestimonial);
   router.put('/admin/platform/testimonials/:id', requireAdmin, p.putTestimonial);
   router.delete('/admin/platform/testimonials/:id', requireAdmin, p.deleteTestimonial);
+  router.get('/admin/platform/products', requireAdmin, p.getProducts);
+  router.post('/admin/platform/products', requireAdmin, p.postProduct);
+  router.put('/admin/platform/products/:id', requireAdmin, p.putProduct);
+  router.delete('/admin/platform/products/:id', requireAdmin, p.deleteProduct);
   router.get('/admin/platform/faqs', requireAdmin, p.getFaqs);
   router.get('/admin/platform/faqs/:id', requireAdmin, p.getFaq);
   router.post('/admin/platform/faqs', requireAdmin, p.postFaq);
