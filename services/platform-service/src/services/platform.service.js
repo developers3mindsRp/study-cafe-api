@@ -2770,13 +2770,7 @@ async function createArticle(data) {
 async function updateArticle(id, data) {
   const row = await Article.findByPk(id);
   if (!row) return null;
-  // Author is set at create only; edits must never change author_id or author display fields.
-  const {
-    author_id: _dropAuthorId,
-    author_name: _dropAuthorName,
-    author_role: _dropAuthorRole,
-    ...patch
-  } = data && typeof data === 'object' ? data : {};
+  const patch = data && typeof data === 'object' ? data : {};
   const cur = row.get({ plain: true });
   const nextStatus = patch.status !== undefined ? normalizeArticleAdminStatus(patch.status) : cur.status;
 
@@ -2802,6 +2796,7 @@ async function updateArticle(id, data) {
   if (patch.thumbnail_link_url !== undefined) updates.thumbnail_link_url = patch.thumbnail_link_url || null;
   if (patch.thumbnail_caption !== undefined) updates.thumbnail_caption = patch.thumbnail_caption || null;
   if (patch.sub_heading !== undefined) updates.sub_heading = patch.sub_heading;
+  if (patch.author_id !== undefined) updates.author_id = patch.author_id || null;
   if (patch.status !== undefined) updates.status = nextStatus;
   if (patch.meta_title !== undefined) updates.meta_title = patch.meta_title;
   if (patch.meta_description !== undefined) updates.meta_description = patch.meta_description;
