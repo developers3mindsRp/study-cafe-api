@@ -123,6 +123,7 @@ const {
   GoogleReview,
   Testimonial,
   Product,
+  Profession,
   FooterData,
   GlobalSetting,
   PremiumPlan,
@@ -628,6 +629,48 @@ async function updateProduct(id, data) {
 
 async function deleteProduct(id) {
   const deleted = await Product.destroy({ where: { id } });
+  return deleted > 0;
+}
+
+async function getProfessionsPublic() {
+  const rows = await Profession.findAll({
+    where: { status: 'active' },
+    order: [['title', 'ASC']],
+    attributes: ['id', 'title'],
+  });
+  return rows.map((r) => r.get({ plain: true }));
+}
+
+async function getProfessionsInternal() {
+  const rows = await Profession.findAll({ order: [['title', 'ASC']] });
+  return rows.map((r) => r.get({ plain: true }));
+}
+
+async function getProfessionByIdInternal(id) {
+  const row = await Profession.findByPk(id);
+  return row ? row.get({ plain: true }) : null;
+}
+
+async function createProfession(data) {
+  const row = await Profession.create({
+    title: data.title || '',
+    status: data.status === 'inactive' ? 'inactive' : 'active',
+  });
+  return row.get({ plain: true });
+}
+
+async function updateProfession(id, data) {
+  const row = await Profession.findByPk(id);
+  if (!row) return null;
+  const updates = {};
+  if (data.title !== undefined) updates.title = data.title;
+  if (data.status !== undefined) updates.status = data.status === 'inactive' ? 'inactive' : 'active';
+  await row.update(updates);
+  return row.get({ plain: true });
+}
+
+async function deleteProfession(id) {
+  const deleted = await Profession.destroy({ where: { id } });
   return deleted > 0;
 }
 
@@ -3930,6 +3973,14 @@ module.exports = {
     createProduct,
     updateProduct,
     deleteProduct,
+  },
+  professions: {
+    getProfessionsPublic,
+    getProfessionsInternal,
+    getProfessionByIdInternal,
+    createProfession,
+    updateProfession,
+    deleteProfession,
   },
   faqs: {
     getFaqsPublic,

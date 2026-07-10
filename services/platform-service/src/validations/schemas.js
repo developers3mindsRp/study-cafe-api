@@ -125,6 +125,23 @@ const updateTestimonial = {
     }),
 };
 
+// ── Professions ──────────────────────────────────────────────────────
+
+const createProfession = {
+    body: Joi.object({
+        title: Joi.string().max(150).required(),
+        status: Joi.string().valid('active', 'inactive').default('active'),
+    }),
+};
+
+const updateProfession = {
+    params: idParam.params,
+    body: Joi.object({
+        title: Joi.string().max(150),
+        status: Joi.string().valid('active', 'inactive'),
+    }),
+};
+
 // ── Products ("Our Products") ─────────────────────────────────────────
 
 const createProduct = {
@@ -594,6 +611,8 @@ module.exports = {
     updateTestimonial,
     createProduct,
     updateProduct,
+    createProfession,
+    updateProfession,
     createFaq,
     updateFaq,
     createContactInquiry,

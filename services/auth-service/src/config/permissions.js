@@ -7,6 +7,7 @@ const ALL_PERMISSIONS = [
   'testimonials:list', 'testimonials:view', 'testimonials:create', 'testimonials:edit', 'testimonials:delete',
   'products:list', 'products:view', 'products:create', 'products:edit', 'products:delete',
   'faq:list', 'faq:view', 'faq:create', 'faq:edit', 'faq:delete',
+  'professions:list', 'professions:view', 'professions:create', 'professions:edit', 'professions:delete',
   'newsletter:list', 'newsletter:edit', 'newsletter:create', 'newsletter:delete', 'newsletter:send',
   'courses:list', 'courses:view', 'courses:create', 'courses:edit', 'courses:delete',
   'marketing_pages:list', 'marketing_pages:view', 'marketing_pages:create', 'marketing_pages:edit', 'marketing_pages:delete',
@@ -75,6 +76,12 @@ const MODULE_HIERARCHY = {
     ['faq:edit'],
     ['faq:create'],
     ['faq:delete'],
+  ],
+  professions: [
+    ['professions:list', 'professions:view'],
+    ['professions:edit'],
+    ['professions:create'],
+    ['professions:delete'],
   ],
   newsletter: [
     ['newsletter:list'],
@@ -198,6 +205,7 @@ const ROLE_PERMISSIONS = {
     'testimonials:list', 'testimonials:view', 'testimonials:create', 'testimonials:edit',
     'products:list', 'products:view', 'products:create', 'products:edit',
     'faq:list', 'faq:view', 'faq:create', 'faq:edit',
+    'professions:list', 'professions:view', 'professions:create', 'professions:edit',
     'marketing_pages:list', 'marketing_pages:view', 'marketing_pages:create', 'marketing_pages:edit',
     'payment_links:list', 'payment_links:view', 'payment_links:create', 'payment_links:edit',
   ],
@@ -210,6 +218,7 @@ const ROLE_PERMISSIONS = {
     'testimonials:list', 'testimonials:view',
     'products:list', 'products:view',
     'faq:list', 'faq:view',
+    'professions:list', 'professions:view',
   ],
 
   editor_articles: [

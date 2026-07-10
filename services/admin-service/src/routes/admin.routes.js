@@ -109,6 +109,11 @@ function register(router) {
   router.post('/admin/platform/products', requireAdmin, p.postProduct);
   router.put('/admin/platform/products/:id', requireAdmin, p.putProduct);
   router.delete('/admin/platform/products/:id', requireAdmin, p.deleteProduct);
+  router.get('/admin/platform/professions', requireAdmin, p.getProfessions);
+  router.get('/admin/platform/professions/:id', requireAdmin, p.getProfession);
+  router.post('/admin/platform/professions', requireAdmin, p.postProfession);
+  router.put('/admin/platform/professions/:id', requireAdmin, p.putProfession);
+  router.delete('/admin/platform/professions/:id', requireAdmin, p.deleteProfession);
   router.get('/admin/platform/faqs', requireAdmin, p.getFaqs);
   router.get('/admin/platform/faqs/:id', requireAdmin, p.getFaq);
   router.post('/admin/platform/faqs', requireAdmin, p.postFaq);
