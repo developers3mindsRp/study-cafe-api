@@ -620,6 +620,15 @@ const grantUserMembership = asyncHandler(async (req, res) => {
   sendSuccess(res, { granted: true });
 });
 
+// Downgrade a user to the Free tier — expires every active membership row and
+// resets users.membership/plan. Backs the "Free" option in the user edit form.
+const removeUserMembership = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  await authClient.post('/access/remove-membership', { userId: req.params.id });
+  await adminLogsService.logAction(adminId, 'REMOVE_MEMBERSHIP', 'user_membership', String(req.params.id), {}, req.ip);
+  sendSuccess(res, { removed: true });
+});
+
 const getUserDistinctStates = asyncHandler(async (req, res) => {
   const { data } = await authClient.get('/users/distinct-states');
   sendSuccess(res, Array.isArray(data) ? data : []);
@@ -1449,6 +1458,7 @@ module.exports = {
   getUserEnrollments,
   getUserMemberships,
   grantUserMembership,
+  removeUserMembership,
   getUserDistinctStates,
   getBatches,
   addMaterial,

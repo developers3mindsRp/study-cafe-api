@@ -38,4 +38,10 @@ const revokeMembership = asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 });
 
-module.exports = { check, grantCourse, revokeCourse, grantMembership, revokeMembership };
+const removeMembership = asyncHandler(async (req, res) => {
+  const { userId } = req.body;
+  const result = await accessService.removeMembership({ userId });
+  sendSuccess(res, result);
+});
+
+module.exports = { check, grantCourse, revokeCourse, grantMembership, revokeMembership, removeMembership };

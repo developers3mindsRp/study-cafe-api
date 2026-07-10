@@ -184,6 +184,12 @@ const revokeMembership = {
     }),
 };
 
+const removeMembership = {
+    body: Joi.object({
+        userId: Joi.number().integer().positive().required(),
+    }),
+};
+
 module.exports = {
     register,
     login,
@@ -199,6 +205,7 @@ module.exports = {
     revokeCourse,
     grantMembership,
     revokeMembership,
+    removeMembership,
     createAdminUser,
     lookupAdminUser,
     updateAdminUser,

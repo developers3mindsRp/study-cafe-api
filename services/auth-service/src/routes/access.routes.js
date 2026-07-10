@@ -18,6 +18,7 @@ function register(router) {
   router.post('/access/revoke-course', requireGrantAuth, validate(schemas.revokeCourse), accessController.revokeCourse);
   router.post('/access/grant-membership', requireGrantAuth, validate(schemas.grantMembership), accessController.grantMembership);
   router.post('/access/revoke-membership', requireGrantAuth, validate(schemas.revokeMembership), accessController.revokeMembership);
+  router.post('/access/remove-membership', requireGrantAuth, validate(schemas.removeMembership), accessController.removeMembership);
 
   router.post('/internal/users/by-emails', requireGrantAuth, asyncHandler(async (req, res) => {
     const emails = Array.isArray(req.body.emails) ? req.body.emails : [];

@@ -186,7 +186,7 @@ async function revokeMembership({ userId, orderId }) {
     { expires_at: new Date() },
     { where: { user_id: userId, order_id: orderId } }
   );
-  
+
   // After expiring, check if user still has ANY active membership.
   // If not, clear their membership status on the User table.
   const active = await getActiveMembership(userId);
@@ -196,8 +196,35 @@ async function revokeMembership({ userId, orderId }) {
       { where: { id: userId } }
     );
   }
-  
+
   return { revoked: true };
+}
+
+/**
+ * Downgrade a user to the Free tier by expiring EVERY currently-active membership
+ * (regardless of order), then resetting the User table columns. Unlike
+ * revokeMembership (which targets a single order), this is used by the admin panel
+ * "Free" option to fully remove a user's paid membership. History rows are kept
+ * intact — we only push their expires_at to now.
+ */
+async function removeMembership({ userId }) {
+  // Match memberships stored under BOTH the internal id and the legacy wp_user_id.
+  const userRow = await User.findByPk(userId, { attributes: ['id', 'wp_user_id'] });
+  const lookupIds = [Number(userId)];
+  if (userRow?.wp_user_id != null) lookupIds.push(Number(userRow.wp_user_id));
+
+  await UserMembership.update(
+    { expires_at: new Date() },
+    { where: { user_id: { [Op.in]: lookupIds }, expires_at: { [Op.gt]: new Date() } } }
+  );
+
+  // Reset the User table so the profile/list UI reflects Free immediately.
+  await User.update(
+    { membership: 0, plan: null },
+    { where: { id: userId } }
+  );
+
+  return { removed: true };
 }
 
 module.exports = {
@@ -207,5 +234,6 @@ module.exports = {
   revokeCourse,
   grantMembership,
   revokeMembership,
+  removeMembership,
   getActiveMembership,
 };
