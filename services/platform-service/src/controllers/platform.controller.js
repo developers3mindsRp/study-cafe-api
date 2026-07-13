@@ -1,5 +1,6 @@
 const fs = require('fs');
 const platformService = require('../services/platform.service');
+const telegramService = require('../services/telegram.service');
 const membershipUpgradeService = require('../services/membership-upgrade.service');
 const articlePreviewTokenService = require('../services/articlePreviewToken.service');
 const { asyncHandler, AppError, sendSuccess, sendCreated, sendNoContent, sendPaginated, logger } = require('../../../../shared');
@@ -479,6 +480,21 @@ const deleteArticlePermanently = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+/**
+ * Manually (re-)post an article to the Telegram group. Intended for local
+ * testing and one-off re-sends from the admin panel. Pass ?force=true to
+ * bypass the once-only guard and re-post an already-announced article.
+ */
+const postArticleToTelegram = asyncHandler(async (req, res) => {
+  const force = req.query.force === 'true' || req.query.force === '1';
+  const result = await telegramService.notifyArticlePublished(Number(req.params.id), { force });
+  if (!result.ok) {
+    const status = result.skipped === 'not_found' ? 404 : 400;
+    throw new AppError(`Telegram post not sent: ${result.error || result.skipped}`, status);
+  }
+  sendSuccess(res, result);
+});
+
 const getArticleEditLock = asyncHandler(async (req, res) => {
   const data = await platformService.articles.getArticleEditLock(req.params.id);
   sendSuccess(res, data);
@@ -943,6 +959,7 @@ module.exports = {
   getArticleEditLock,
   acquireArticleEditLock,
   releaseArticleEditLock,
+  postArticleToTelegram,
   getArticleCategories,
   getArticleCategoriesInternal,
   getArticleCategoryByIdInternal,

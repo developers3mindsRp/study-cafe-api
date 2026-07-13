@@ -48,6 +48,24 @@ module.exports = {
     enablePolling: requiredBool('ENABLE_ARTICLE_POLLING'),
     pollIntervalMs: requiredInt('ARTICLE_POLL_INTERVAL_MS'),
   },
+
+  /**
+   * Telegram auto-publishing. When enabled and credentials are present, every
+   * article that becomes published is posted to the configured group/channel.
+   * All fields optional so the service boots without them (integration simply
+   * stays inactive). See services/telegram.service.js.
+   */
+  telegram: {
+    botToken: readOptional('TELEGRAM_BOT_TOKEN'),
+    chatId: readOptional('TELEGRAM_CHAT_ID'),
+    // Default ON; set TELEGRAM_PUBLISH_ENABLED=false to mute posting.
+    enabled: (() => {
+      const raw = readOptional('TELEGRAM_PUBLISH_ENABLED');
+      if (raw === undefined) return true;
+      return ['true', '1'].includes(raw.toLowerCase());
+    })(),
+    apiBaseUrl: (readOptional('TELEGRAM_API_BASE_URL') || 'https://api.telegram.org').replace(/\/+$/, ''),
+  },
 };
 
 process.env.SERVICE_NAME = module.exports.serviceName;

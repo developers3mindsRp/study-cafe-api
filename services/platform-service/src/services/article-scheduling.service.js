@@ -76,7 +76,25 @@ async function atomicPublishArticle(articleId, publishedAt) {
 
   // Sequelize returns [results, affectedRows] for UPDATE statements
   const affected = typeof meta === 'number' ? meta : (meta?.affectedRows ?? 0);
-  return affected > 0;
+  const published = affected > 0;
+
+  // This is the single convergence point for every SCHEDULED publish (BullMQ
+  // worker, in-process poller, and startup reconcile). Fire the Telegram post
+  // here so a scheduled article is announced exactly when it goes live. The
+  // notify helper is idempotent (atomic claim) and never throws — fire & forget
+  // so it never delays or breaks the publish.
+  if (published) {
+    // Lazy require avoids a circular dependency at module load
+    // (telegram.service → models, scheduling.service → telegram.service).
+    require('./telegram.service')
+      .notifyArticlePublished(articleId)
+      .catch((err) => logger.error('[article-schedule] telegram notify failed', {
+        articleId: Number(articleId),
+        message: err.message,
+      }));
+  }
+
+  return published;
 }
 
 // ─── BullMQ job management ───────────────────────────────────────────────────

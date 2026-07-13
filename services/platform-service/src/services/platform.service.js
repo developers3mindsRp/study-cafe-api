@@ -116,6 +116,7 @@ const {
 } = require('../../../../shared');
 const { resolveModuleMetaDescription } = require('../../../../shared/seoMetaDescription');
 const articleScheduling = require('./article-scheduling.service');
+const telegramService = require('./telegram.service');
 const {
   sequelize,
   CmsPage,
@@ -2879,7 +2880,25 @@ async function createArticle(data) {
   await articleScheduling.syncArticlePublishJob(out).catch((err) => {
     logger.error('[createArticle] sync schedule failed', { error: err.message, stack: err.stack });
   });
+  // Auto-post to Telegram when created directly as published. Idempotent + never
+  // throws; fire & forget so it never delays the API response. (Scheduled
+  // articles are posted later from atomicPublishArticle when they go live.)
+  maybeNotifyTelegramOnPublish(out);
   return out;
+}
+
+/**
+ * Fire the Telegram announcement for a just-saved article when its resulting
+ * status is `publish`. The Telegram service's atomic once-only claim means this
+ * is safe to call on every publish/edit — a republished or re-saved article is
+ * never double-posted.
+ */
+function maybeNotifyTelegramOnPublish(article) {
+  if (!article?.id) return;
+  if (String(article.status || '').toLowerCase() !== 'publish') return;
+  telegramService
+    .notifyArticlePublished(article.id)
+    .catch((err) => logger.error('[article] telegram notify failed', { id: article.id, error: err.message }));
 }
 
 async function updateArticle(id, data) {
@@ -2997,6 +3016,10 @@ async function updateArticle(id, data) {
   await articleScheduling.syncArticlePublishJob(out).catch((err) => {
     logger.error('[updateArticle] sync schedule failed', { error: err.message, stack: err.stack });
   });
+  // Announce on Telegram when this edit results in a published article (e.g.
+  // draft/scheduled → publish). Idempotent, so editing an already-announced
+  // article never re-posts.
+  maybeNotifyTelegramOnPublish(out);
   return out;
 }
 

@@ -124,6 +124,34 @@ async function connect() {
   await Product.sync();
   // Same model-only pattern for the professions master (also created via the SQL script below).
   await Profession.sync();
+  // Telegram auto-publish bookkeeping columns on `articles` (created via idempotent
+  // ALTER — not part of the Sequelize model). These are managed purely by raw SQL in
+  // telegram.service.js: `telegram_posted_at` is the atomic exactly-once claim marker
+  // and `telegram_message_id` stores the posted group message id for observability.
+  await ensureArticleTelegramColumns();
+}
+
+/**
+ * Add the Telegram tracking columns to `articles` if they do not already exist.
+ * Idempotent and safe on a live DB (nullable columns → instant metadata-only
+ * change on MySQL 8). MySQL lacks `ADD COLUMN IF NOT EXISTS`, so we probe
+ * information_schema first and only ALTER when the column is missing.
+ */
+async function ensureArticleTelegramColumns() {
+  const columns = [
+    { name: 'telegram_posted_at', ddl: 'DATETIME NULL DEFAULT NULL' },
+    { name: 'telegram_message_id', ddl: 'BIGINT NULL DEFAULT NULL' },
+  ];
+  for (const col of columns) {
+    const [{ cnt }] = await sequelize.query(
+      `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'articles' AND COLUMN_NAME = :name`,
+      { replacements: { name: col.name }, type: Sequelize.QueryTypes.SELECT },
+    );
+    if (Number(cnt) === 0) {
+      await sequelize.query(`ALTER TABLE articles ADD COLUMN ${col.name} ${col.ddl}`);
+    }
+  }
 }
 
 module.exports = {

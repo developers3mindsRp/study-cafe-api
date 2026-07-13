@@ -140,6 +140,7 @@ function register(router) {
   router.get('/internal/platform/articles/:id', internalAuth, validate(schemas.idParam), controller.getArticleByIdInternal);
   router.post('/internal/platform/articles', internalAuth, validate(schemas.createArticle), controller.createArticle);
   router.put('/internal/platform/articles/:id', internalAuth, validate(schemas.updateArticle), controller.updateArticle);
+  router.post('/internal/platform/articles/:id/telegram', internalAuth, validate(schemas.idParam), controller.postArticleToTelegram);
   router.post('/internal/platform/articles/:id/restore', internalAuth, validate(schemas.idParam), controller.restoreArticle);
   router.delete('/internal/platform/articles/:id/permanent', internalAuth, validate(schemas.idParam), controller.deleteArticlePermanently);
   router.delete('/internal/platform/articles/:id', internalAuth, validate(schemas.idParam), controller.deleteArticle);
