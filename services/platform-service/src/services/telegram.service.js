@@ -72,11 +72,14 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;');
 }
 
-/** Absolute public URL of the article on the marketing site. */
+/**
+ * Absolute public URL of the article, in the legacy WordPress permalink form
+ * `<base>/<slug>-<id>.html` (matches the existing Telegram channel style).
+ */
 function articleUrl(article) {
-  const base = (config.publicSiteUrl || '').replace(/\/+$/, '');
-  if (!base || !article.slug) return null;
-  return `${base}/blogs/${article.slug}`;
+  const base = config.telegram.articleBaseUrl;
+  if (!base || !article.slug || !article.id) return null;
+  return `${base}/${article.slug}-${article.id}.html`;
 }
 
 /** Short plain-text teaser from excerpt → sub_heading → body, HTML stripped. */

@@ -65,6 +65,17 @@ module.exports = {
       return ['true', '1'].includes(raw.toLowerCase());
     })(),
     apiBaseUrl: (readOptional('TELEGRAM_API_BASE_URL') || 'https://api.telegram.org').replace(/\/+$/, ''),
+    // Base for the article link posted to Telegram. Uses the legacy WordPress
+    // permalink form `<base>/<slug>-<id>.html`, so this must point at the public
+    // site that serves those URLs (studycafe.in). Override with
+    // TELEGRAM_ARTICLE_BASE_URL; otherwise falls back to FRONTEND_URL, then
+    // PUBLIC_SITE_URL.
+    articleBaseUrl: (
+      readOptional('TELEGRAM_ARTICLE_BASE_URL')
+      || readOptional('FRONTEND_URL')
+      || readOptional('PUBLIC_SITE_URL')
+      || ''
+    ).replace(/\/+$/, ''),
   },
 };
 
