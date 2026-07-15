@@ -153,6 +153,17 @@ const restoreCourseInternal = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+const deleteCoursePermanentlyInternal = asyncHandler(async (req, res) => {
+  const result = await coursesService.deleteCoursePermanently(req.params.id);
+  if (!result.ok) {
+    if (result.reason === 'not_trashed') {
+      throw new AppError('Course must be in trash before it can be permanently deleted', 409);
+    }
+    throw new AppError('Course not found in trash', 404);
+  }
+  sendNoContent(res);
+});
+
 const listByIdsOrCatIds = asyncHandler(async (req, res) => {
   const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
   const cat_ids = Array.isArray(req.body.cat_ids) ? req.body.cat_ids : [];
@@ -380,6 +391,7 @@ module.exports = {
   listAllInternal,
   deleteCourseInternal,
   restoreCourseInternal,
+  deleteCoursePermanentlyInternal,
   listCourseCatsInternal,
   createCourseCat,
   updateCourseCat,

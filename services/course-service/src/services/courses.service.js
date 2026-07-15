@@ -2427,4 +2427,58 @@ coursesService.restoreCourse = async function restoreCourse(id) {
   return true;
 };
 
+/**
+ * Permanently delete a course and all its owned child rows. Only courses
+ * already in trash can be hard-deleted — active ones must go through
+ * deleteCourse (soft delete) first, so a single call can never destroy a live
+ * course. Children are removed in FK-safe order (recordings → sessions →
+ * batch enrollments → batches, then the flat course-owned tables) inside one
+ * transaction. Affiliate/financial history (affiliate_history, balances) is
+ * intentionally left untouched.
+ *
+ * Returns { ok: true } on success or { ok: false, reason } when the course is
+ * missing or not in trash.
+ */
+coursesService.deleteCoursePermanently = async function deleteCoursePermanently(id) {
+  const {
+    sequelize,
+    UserCourseProgress,
+    CourseReview,
+    MarketingPage,
+    CourseCertificate,
+  } = require("../models");
+
+  const course = await Course.findByPk(id, { paranoid: false });
+  if (!course) return { ok: false, reason: "not_found" };
+  if (!course.deleted_at) return { ok: false, reason: "not_trashed" };
+
+  await sequelize.transaction(async (t) => {
+    const batches = await Batch.findAll({ where: { course_id: id }, attributes: ["id"], transaction: t });
+    const batchIds = batches.map((b) => b.id);
+    if (batchIds.length) {
+      const sessions = await Session.findAll({ where: { batch_id: batchIds }, attributes: ["id"], transaction: t });
+      const sessionIds = sessions.map((s) => s.id);
+      if (sessionIds.length) {
+        await Recording.destroy({ where: { session_id: sessionIds }, force: true, transaction: t });
+      }
+      await Session.destroy({ where: { batch_id: batchIds }, force: true, transaction: t });
+      await BatchEnrollment.destroy({ where: { batch_id: batchIds }, force: true, transaction: t });
+    }
+    await Batch.destroy({ where: { course_id: id }, force: true, transaction: t });
+    await Material.destroy({ where: { course_id: id }, force: true, transaction: t });
+    await CourseAuthor.destroy({ where: { course_id: id }, force: true, transaction: t });
+    await Enrollment.destroy({ where: { course_id: id }, force: true, transaction: t });
+    await UserCourse.destroy({ where: { course_id: id }, force: true, transaction: t });
+    await UserCourseProgress.destroy({ where: { course_id: id }, force: true, transaction: t });
+    await CourseReview.destroy({ where: { course_id: id }, force: true, transaction: t });
+    await CourseCategory.destroy({ where: { course_id: id }, force: true, transaction: t });
+    await MarketingPage.destroy({ where: { course_id: id }, force: true, transaction: t });
+    await CourseCertificate.destroy({ where: { course_id: id }, force: true, transaction: t });
+    await course.destroy({ force: true, transaction: t });
+  });
+
+  logger.info("[course-service] course permanently deleted from trash", { id });
+  return { ok: true };
+};
+
 module.exports = coursesService;

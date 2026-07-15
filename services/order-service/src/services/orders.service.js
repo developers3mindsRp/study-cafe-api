@@ -3263,6 +3263,30 @@ async function restoreOrder(id) {
   return { id };
 }
 
+/**
+ * Permanently delete an order and its owned rows (payments + coupon-usage).
+ * Only orders already in trash can be hard-deleted, so a single call can never
+ * destroy a live order. Payments key off the numeric order id; coupon-usage
+ * rows key off the public order_id string. Returns { ok: true } on success or
+ * { ok: false, reason } when the order is missing or not in trash.
+ */
+async function deleteOrderPermanently(id) {
+  const order = await Order.findByPk(id, { paranoid: false });
+  if (!order) return { ok: false, reason: 'not_found' };
+  if (!order.deleted_at) return { ok: false, reason: 'not_trashed' };
+
+  await sequelize.transaction(async (t) => {
+    await Payment.destroy({ where: { order_id: order.id }, transaction: t });
+    if (order.order_id) {
+      await CouponUsage.destroy({ where: { order_id: order.order_id }, transaction: t });
+    }
+    await order.destroy({ force: true, transaction: t });
+  });
+
+  logger.info(`[orders] permanently deleted from trash id=${id} order_id=${order.order_id}`);
+  return { ok: true };
+}
+
 // ─── Admin coupon CRUD ────────────────────────────────────────────────────────
 
 async function listAllCoupons() {
@@ -3314,6 +3338,7 @@ module.exports = {
   updateOrder,
   deleteOrder,
   restoreOrder,
+  deleteOrderPermanently,
   refundOrder,
   validateCouponForPreview,
   getOrderStats,

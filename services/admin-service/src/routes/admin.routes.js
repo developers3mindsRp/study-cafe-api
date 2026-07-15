@@ -19,6 +19,7 @@ function register(router) {
   router.delete('/admin/payment-gateways/:id', requireAdmin, controller.deletePaymentGateway);
 
   router.get('/admin/courses', requireAdmin, controller.getCourses);
+  router.delete('/admin/courses/:id/permanent', requireAdmin, controller.deleteCoursePermanently);
   router.delete('/admin/courses/:id', requireAdmin, controller.deleteCourse);
   router.post('/admin/courses/:id/restore', requireAdmin, controller.restoreCourse);
   router.get('/admin/courses/:id', requireAdmin, controller.getCourse);
@@ -35,6 +36,7 @@ function register(router) {
   router.post('/admin/orders/apply-coupon', requireAdmin, controller.applyCouponAdmin);
   router.put('/admin/orders/:id', requireAdmin, controller.updateOrder);
   router.post('/admin/orders/:id/refund', requireAdmin, controller.refundOrder);
+  router.delete('/admin/orders/:id/permanent', requireAdmin, controller.deleteOrderPermanently);
   router.delete('/admin/orders/:id', requireAdmin, controller.deleteOrder);
   router.post('/admin/orders/:id/restore', requireAdmin, controller.restoreOrder);
 

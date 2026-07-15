@@ -359,6 +359,13 @@ const restoreCourse = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+const deleteCoursePermanently = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  await courseClient.delete(`/internal/courses/${req.params.id}/permanent`);
+  await adminLogsService.logAction(adminId, 'DELETE_COURSE_PERMANENT', 'course', req.params.id, {}, req.ip);
+  sendNoContent(res);
+});
+
 const getCourse = asyncHandler(async (req, res) => {
   const { data } = await courseClient.get(`/internal/courses/${req.params.id}`);
   sendSuccess(res, data);
@@ -951,6 +958,13 @@ const restoreOrder = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+const deleteOrderPermanently = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  await orderClient.delete(`/internal/orders/${req.params.id}/permanent`);
+  await adminLogsService.logAction(adminId, 'DELETE_ORDER_PERMANENT', 'order', req.params.id, {}, req.ip);
+  sendNoContent(res);
+});
+
 const refundOrder = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
   const { data } = await orderClient.post(`/internal/orders/${req.params.id}/refund`, req.body);
@@ -1488,6 +1502,7 @@ module.exports = {
   getCourses,
   deleteCourse,
   restoreCourse,
+  deleteCoursePermanently,
   getCourse,
   getCourseSessions,
   listBatches,
@@ -1510,6 +1525,7 @@ module.exports = {
   refundOrder,
   deleteOrder,
   restoreOrder,
+  deleteOrderPermanently,
   getCouponUsages,
   getCouponUsageSummary,
   getCoupons,

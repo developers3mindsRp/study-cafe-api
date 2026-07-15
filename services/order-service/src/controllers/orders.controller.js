@@ -157,6 +157,17 @@ const restoreOrder = asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 });
 
+const deleteOrderPermanently = asyncHandler(async (req, res) => {
+  const result = await ordersService.deleteOrderPermanently(req.params.id);
+  if (!result.ok) {
+    if (result.reason === 'not_trashed') {
+      throw new AppError('Order must be in trash before it can be permanently deleted', 409);
+    }
+    throw new AppError('Order not found in trash', 404);
+  }
+  sendNoContent(res);
+});
+
 const webhook = asyncHandler(async (req, res) => {
   const rawBody = req.rawBody;
   const signature = req.headers['x-razorpay-signature'] || '';
@@ -256,6 +267,7 @@ module.exports = {
   updateOrder,
   deleteOrder,
   restoreOrder,
+  deleteOrderPermanently,
   refundOrder,
   getUserPurchasesInternal,
   validateCouponPreviewInternal,
