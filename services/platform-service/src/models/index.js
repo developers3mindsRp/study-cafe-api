@@ -56,6 +56,7 @@ const PlanFeatureAvailability = require("./PlanFeatureAvailability")(sequelize);
 const Faq = require("./Faq")(sequelize);
 const SeoMetadata = require("./SeoMetadata")(sequelize);
 const SiteSeoRoute = require("./SiteSeoRoute")(sequelize);
+const Redirect = require("./Redirect")(sequelize);
 const Media = require("./Media")(sequelize);
 const ContactInquiry = require("./ContactInquiry")(sequelize);
 const UserMembership = require("./UserMembership")(sequelize);
@@ -105,6 +106,7 @@ const models = {
   Faq,
   SeoMetadata,
   SiteSeoRoute,
+  Redirect,
   Media,
   ContactInquiry,
   UserMembership,
@@ -124,6 +126,8 @@ async function connect() {
   await Product.sync();
   // Same model-only pattern for the professions master (also created via the SQL script below).
   await Profession.sync();
+  // Ensure the redirects table exists (created via model only — no migration script).
+  await Redirect.sync();
   // Telegram auto-publish bookkeeping columns on `articles` (created via idempotent
   // ALTER — not part of the Sequelize model). These are managed purely by raw SQL in
   // telegram.service.js: `telegram_posted_at` is the atomic exactly-once claim marker

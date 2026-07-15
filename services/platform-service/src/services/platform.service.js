@@ -148,6 +148,7 @@ const {
   ContactInquiry,
   SeoMetadata,
   SiteSeoRoute,
+  Redirect,
   Comment,
 } = require('../models');
 
@@ -3750,6 +3751,103 @@ async function deleteSiteSeoRoute(id) {
   return deleted > 0;
 }
 
+async function listRedirectsInternal() {
+  const rows = await Redirect.findAll({ order: [['id', 'DESC']] });
+  return rows.map((r) => r.get({ plain: true }));
+}
+
+async function redirectOldPathExists(normalizedPath, excludeId) {
+  const candidates = normalizeSlugCandidates(normalizedPath);
+  if (!candidates.length) return null;
+  const rows = await Redirect.findAll({
+    where: { old_path: { [Op.in]: candidates } },
+    raw: true,
+  });
+  for (const r of rows) {
+    if (excludeId != null && Number(r.id) === Number(excludeId)) continue;
+    if (canonicalSlug(r.old_path) === canonicalSlug(normalizedPath)) return r;
+  }
+  return null;
+}
+
+async function createRedirect(data) {
+  const oldPath = canonicalSlug(data.old_path);
+  const newPath = String(data.new_path ?? '').trim();
+  if (!oldPath) throw new AppError('Old path is required', 400);
+  if (!newPath) throw new AppError('New path is required', 400);
+  if (canonicalSlug(newPath) === oldPath) {
+    throw new AppError('Old path and new path cannot be the same', 400);
+  }
+  const clash = await redirectOldPathExists(oldPath, null);
+  if (clash) {
+    throw new AppError(`A redirect for '${canonicalSlug(clash.old_path)}' already exists`, 409);
+  }
+  const row = await Redirect.create({
+    old_path: oldPath,
+    new_path: newPath,
+    redirect_type: data.redirect_type === '302' ? '302' : '301',
+    is_active: data.is_active !== undefined ? Boolean(data.is_active) : true,
+  });
+  return row.get({ plain: true });
+}
+
+async function updateRedirect(id, data) {
+  const row = await Redirect.findByPk(id);
+  if (!row) return null;
+  const patch = {};
+
+  if (data.old_path !== undefined) {
+    const normalized = canonicalSlug(data.old_path);
+    if (!normalized) throw new AppError('Old path cannot be empty', 400);
+    const clash = await redirectOldPathExists(normalized, id);
+    if (clash) {
+      throw new AppError(`Another redirect already uses old path '${canonicalSlug(clash.old_path)}'`, 409);
+    }
+    patch.old_path = normalized;
+  }
+  if (data.new_path !== undefined) {
+    const t = String(data.new_path).trim();
+    if (!t) throw new AppError('New path cannot be empty', 400);
+    patch.new_path = t;
+  }
+  if (
+    canonicalSlug(patch.new_path ?? row.get('new_path')) ===
+    (patch.old_path ?? canonicalSlug(row.get('old_path')))
+  ) {
+    throw new AppError('Old path and new path cannot be the same', 400);
+  }
+  if (data.redirect_type !== undefined) {
+    patch.redirect_type = data.redirect_type === '302' ? '302' : '301';
+  }
+  if (data.is_active !== undefined) {
+    patch.is_active = Boolean(data.is_active);
+  }
+
+  await row.update(patch);
+  return row.get({ plain: true });
+}
+
+async function deleteRedirect(id) {
+  const deleted = await Redirect.destroy({ where: { id } });
+  return deleted > 0;
+}
+
+/** Public lookup used by the Next.js edge middleware to resolve old → new paths. */
+async function resolveRedirectByPath(path) {
+  const key = canonicalSlug(path);
+  if (!key) return null;
+  const candidates = normalizeSlugCandidates(key);
+  const rows = await Redirect.findAll({
+    where: { old_path: { [Op.in]: candidates }, is_active: true },
+    raw: true,
+  });
+  for (const c of candidates) {
+    const hit = rows.find((r) => canonicalSlug(r.old_path) === canonicalSlug(c));
+    if (hit) return hit;
+  }
+  return rows[0] || null;
+}
+
 async function checkSlugNotUsedByModule(slug) {
   if (isModuleDetailSeoPath(slug)) {
     return { conflict: false };
@@ -4037,6 +4135,13 @@ module.exports = {
     createSiteSeoRoute,
     updateSiteSeoRoute,
     deleteSiteSeoRoute,
+  },
+  redirects: {
+    listRedirectsInternal,
+    createRedirect,
+    updateRedirect,
+    deleteRedirect,
+    resolveRedirectByPath,
   },
   footer: {
     getFooterPublic,

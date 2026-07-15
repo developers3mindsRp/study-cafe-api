@@ -566,6 +566,33 @@ const seoByPathQuery = {
     }),
 };
 
+const redirectByPathQuery = {
+    query: Joi.object({
+        path: Joi.string().max(1000).default('/'),
+    }),
+};
+
+const createRedirect = {
+    body: Joi.object({
+        old_path: Joi.string().max(1000).required(),
+        new_path: Joi.string().max(1000).required(),
+        redirect_type: Joi.string().valid('301', '302').default('301'),
+        is_active: Joi.boolean().default(true),
+    }),
+};
+
+const updateRedirect = {
+    params: idParam.params,
+    body: Joi.object({
+        old_path: Joi.string().max(1000),
+        new_path: Joi.string().max(1000),
+        redirect_type: Joi.string().valid('301', '302'),
+        is_active: Joi.boolean(),
+    })
+        .min(1)
+        .required(),
+};
+
 const createMediaAsset = {
     body: Joi.object({
         url: Joi.string().uri().required(),
@@ -640,6 +667,9 @@ module.exports = {
     syncModuleSeoMetadata,
     createSiteSeoRoute,
     updateSiteSeoRoute,
+    redirectByPathQuery,
+    createRedirect,
+    updateRedirect,
     subscribeNewsletter,
     unsubscribeNewsletter,
     createNewsletterTemplate,

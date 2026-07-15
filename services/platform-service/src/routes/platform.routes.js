@@ -41,6 +41,11 @@ function register(router) {
     controller.getSeoMetadataByPathPublic,
   );
   router.get('/platform/seo-metadata/slug/:slug', validate(schemas.slugParam), controller.getSeoMetadataBySlugPublic);
+  router.get(
+    '/platform/redirects/by-path',
+    validate(schemas.redirectByPathQuery),
+    controller.getRedirectByPathPublic,
+  );
   router.get('/platform/cms-pages/:slug', validate(schemas.slugParam), controller.getCmsPageBySlug);
   router.post('/platform/contact-us', validate(schemas.createContactInquiry), controller.createContactInquiry);
 
@@ -103,6 +108,25 @@ function register(router) {
     internalAuth,
     validate(schemas.idParam),
     controller.deleteSiteSeoRoute
+  );
+  router.get('/internal/platform/redirects', internalAuth, controller.listRedirectsInternal);
+  router.post(
+    '/internal/platform/redirects',
+    internalAuth,
+    validate(schemas.createRedirect),
+    controller.createRedirect
+  );
+  router.put(
+    '/internal/platform/redirects/:id',
+    internalAuth,
+    validate(schemas.updateRedirect),
+    controller.updateRedirect
+  );
+  router.delete(
+    '/internal/platform/redirects/:id',
+    internalAuth,
+    validate(schemas.idParam),
+    controller.deleteRedirect
   );
   router.get('/internal/platform/footer', internalAuth, controller.getFooterInternal);
   router.put('/internal/platform/footer/:key', internalAuth, validate(schemas.upsertFooter), controller.upsertFooter);

@@ -130,6 +130,10 @@ function register(router) {
   router.post('/admin/platform/site-seo-routes', requireAdmin, p.postSiteSeoRoute);
   router.put('/admin/platform/site-seo-routes/:id', requireAdmin, p.putSiteSeoRoute);
   router.delete('/admin/platform/site-seo-routes/:id', requireAdmin, p.deleteSiteSeoRoute);
+  router.get('/admin/platform/redirects', requireAdmin, p.listRedirects);
+  router.post('/admin/platform/redirects', requireAdmin, p.postRedirect);
+  router.put('/admin/platform/redirects/:id', requireAdmin, p.putRedirect);
+  router.delete('/admin/platform/redirects/:id', requireAdmin, p.deleteRedirect);
   router.get('/admin/platform/footer', requireAdmin, p.getFooter);
   router.put('/admin/platform/footer/:key', requireAdmin, p.putFooter);
   router.get('/admin/platform/site-ads', requireAdmin, p.getSiteAds);

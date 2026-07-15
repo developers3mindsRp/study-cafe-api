@@ -865,6 +865,37 @@ const deleteSiteSeoRoute = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+const listRedirectsInternal = asyncHandler(async (req, res) => {
+  const data = await platformService.redirects.listRedirectsInternal();
+  sendSuccess(res, data);
+});
+
+const createRedirect = asyncHandler(async (req, res) => {
+  const data = await platformService.redirects.createRedirect(req.body);
+  sendCreated(res, data);
+});
+
+const updateRedirect = asyncHandler(async (req, res) => {
+  const data = await platformService.redirects.updateRedirect(req.params.id, req.body);
+  if (!data) throw new AppError('Redirect not found', 404);
+  sendSuccess(res, data);
+});
+
+const deleteRedirect = asyncHandler(async (req, res) => {
+  const ok = await platformService.redirects.deleteRedirect(req.params.id);
+  if (!ok) throw new AppError('Redirect not found', 404);
+  sendNoContent(res);
+});
+
+/** Public lookup — Next.js edge middleware calls this for every request to resolve old → new paths. */
+const getRedirectByPathPublic = asyncHandler(async (req, res) => {
+  const raw = typeof req.query?.path === 'string' ? req.query.path : '';
+  const pathNorm = raw === '' ? '/' : raw.startsWith('/') ? raw : `/${raw}`;
+  const data = await platformService.redirects.resolveRedirectByPath(pathNorm);
+  if (!data) throw new AppError('Redirect not found', 404);
+  sendSuccess(res, data);
+});
+
 module.exports = {
   getHome,
   getHomeInternal,
@@ -915,6 +946,11 @@ module.exports = {
   createSiteSeoRoute,
   updateSiteSeoRoute,
   deleteSiteSeoRoute,
+  listRedirectsInternal,
+  createRedirect,
+  updateRedirect,
+  deleteRedirect,
+  getRedirectByPathPublic,
   getFooter,
   getFooterInternal,
   upsertFooter,
