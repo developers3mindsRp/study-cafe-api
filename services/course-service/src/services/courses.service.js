@@ -1892,6 +1892,24 @@ const coursesService = {
     }
 
     if (!targetBatchId) {
+      // Auto-resolve path (no explicit batch): if the learner is ALREADY enrolled in a batch
+      // of this course, this must be a true no-op. Creating a fresh enrollment into
+      // selectPurchaseBatch's pick (the newest batch) would silently move a Default-batch
+      // learner onto the latest cohort on every progress poll and override the purchase-time
+      // batch lock-in. Only pick a batch when the learner has none. Explicit batchId (purchase /
+      // admin set-batch) skips this branch entirely and is still honored below.
+      const existingBatch = await this.getUserBatchForCourse(courseId, userId);
+      if (existingBatch) {
+        // Keep the course-level enrollment + access grant in sync, but leave batch enrollments
+        // untouched so the learner stays on their own cohort.
+        await Enrollment.findOrCreate({
+          where: { user_id: userId, course_id: courseId },
+          defaults: { user_id: userId, course_id: courseId, enrolled_at: new Date() },
+        });
+        await syncUserCourseGrant(userId, courseId);
+        return { course_id: courseId, user_id: userId, batch_id: existingBatch.id, created: false };
+      }
+
       const picked = await this.selectPurchaseBatch(courseId);
       if (picked) {
         targetBatchId = picked.id;
