@@ -1088,6 +1088,16 @@ const platform = {
   deleteSiteSeoRoute: platformProxy((c, req) =>
     c.delete(`/internal/platform/site-seo-routes/${req.params.id}`).then(() => ({ status: 204 }))
   ),
+  listRedirects: platformProxy((c) => c.get('/internal/platform/redirects').then((r) => ({ data: r.data }))),
+  postRedirect: platformProxy((c, req) =>
+    c.post('/internal/platform/redirects', req.body).then((r) => ({ data: r.data, status: 201 }))
+  ),
+  putRedirect: platformProxy((c, req) =>
+    c.put(`/internal/platform/redirects/${req.params.id}`, req.body).then((r) => ({ data: r.data }))
+  ),
+  deleteRedirect: platformProxy((c, req) =>
+    c.delete(`/internal/platform/redirects/${req.params.id}`).then(() => ({ status: 204 }))
+  ),
   getFooter: platformProxy((c) => c.get('/internal/platform/footer').then((r) => ({ data: r.data }))),
   putFooter: platformProxy((c, req) => c.put(`/internal/platform/footer/${req.params.key}`, req.body).then((r) => ({ data: r.data }))),
   getSiteAds: platformProxy((c) => c.get('/internal/platform/site-ads').then((r) => ({ data: r.data }))),
