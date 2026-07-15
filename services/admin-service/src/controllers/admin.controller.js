@@ -1133,7 +1133,11 @@ const platform = {
     delete body.author_id;
     delete body.author_name;
     delete body.author_role;
-    
+    // Record the editor from the JWT-derived admin id, never from the client payload.
+    const adminId = getAdminId(req);
+    if (adminId) body.updated_by = adminId;
+    else delete body.updated_by;
+
     return c.put(`/internal/platform/articles/${req.params.id}`, body).then((r) => ({ data: r.data }));
   }),
   deleteArticle: platformProxy((c, req) => c.delete(`/internal/platform/articles/${req.params.id}`).then(() => ({ status: 204 }))),

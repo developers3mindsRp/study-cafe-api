@@ -129,6 +129,27 @@ async function connect() {
   // telegram.service.js: `telegram_posted_at` is the atomic exactly-once claim marker
   // and `telegram_message_id` stores the posted group message id for observability.
   await ensureArticleTelegramColumns();
+  // Last-editor audit column on `articles` (created via idempotent ALTER — not
+  // part of the Sequelize model sync). Set on every save from the acting admin;
+  // pairs with `updated_at` for the listing's "Edited by" column.
+  await ensureArticleUpdatedByColumn();
+}
+
+/**
+ * Add the `updated_by` audit column to `articles` if it does not already exist.
+ * Idempotent and safe on a live DB (nullable column → instant metadata-only
+ * change on MySQL 8). MySQL lacks `ADD COLUMN IF NOT EXISTS`, so we probe
+ * information_schema first and only ALTER when the column is missing.
+ */
+async function ensureArticleUpdatedByColumn() {
+  const [{ cnt }] = await sequelize.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'articles' AND COLUMN_NAME = 'updated_by'`,
+    { type: Sequelize.QueryTypes.SELECT },
+  );
+  if (Number(cnt) === 0) {
+    await sequelize.query('ALTER TABLE articles ADD COLUMN updated_by BIGINT UNSIGNED NULL DEFAULT NULL');
+  }
 }
 
 /**

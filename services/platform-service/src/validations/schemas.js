@@ -398,6 +398,8 @@ const articleWriteBody = {
     article_type_ids: Joi.array().items(Joi.number().integer().positive()),
     court_ids: Joi.array().items(Joi.number().integer().positive()),
     author_id: Joi.number().integer().positive().allow(null),
+    /** users.id of the editing admin, injected by the admin-service gateway (not the client). */
+    updated_by: Joi.number().integer().positive().allow(null),
     published_at: Joi.alternatives().try(Joi.date(), Joi.string().allow('', null)),
     scheduled_publish_at: Joi.alternatives().try(Joi.date(), Joi.string().allow('', null)),
     /** Public blog: full HTML for everyone vs members-only full body. */

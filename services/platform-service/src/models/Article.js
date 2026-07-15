@@ -12,6 +12,8 @@ module.exports = (sequelize) => {
       excerpt: { type: DataTypes.TEXT, allowNull: true },
       sub_heading: { type: DataTypes.TEXT, allowNull: true },
       author_id: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
+      /** users.id of the last admin who saved an edit (audit column for the listing). */
+      updated_by: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
       thumbnail_url: { type: DataTypes.STRING(500), allowNull: true },
       /** Featured image alt text (accessibility / SEO). */
       thumbnail_alt: { type: DataTypes.STRING(500), allowNull: true },

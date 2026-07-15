@@ -2458,7 +2458,7 @@ async function getUpNextArticlesBySlugPublic(slug, viewer = null, rawLimit) {
   return attachAccessAndAuthorsToArticles(enrichedPlain, authorNameMap, articleCats, viewer);
 }
 
-const ARTICLE_LIST_ATTRS = ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'status', 'published_at', 'scheduled_publish_at', 'created_at', 'updated_at', 'blog_access_tier'];
+const ARTICLE_LIST_ATTRS = ['id', 'title', 'slug', 'excerpt', 'thumbnail_url', 'author_id', 'updated_by', 'status', 'published_at', 'scheduled_publish_at', 'created_at', 'updated_at', 'blog_access_tier'];
 const SORTABLE_ARTICLE_COLUMNS = ['id', 'title', 'slug', 'created_at', 'updated_at', 'status', 'published_at', 'scheduled_publish_at', 'effective_date'];
 
 // The "effective" display time of an article, matching what the admin list shows per status:
@@ -2611,9 +2611,11 @@ async function getArticlesInternal(options = {}) {
   if (result.data && result.data.length > 0) {
     const articleIds = result.data.map((r) => r.id);
     const authorIds = result.data.map((r) => r.author_id).filter(Boolean);
+    const editorIds = result.data.map((r) => r.updated_by).filter(Boolean);
 
     const [authorNames, catMaps, tagMaps] = await Promise.all([
-      getAuthorDisplayNamesBatch(authorIds),
+      // Author and editor ids resolve against the same users table — batch them together.
+      getAuthorDisplayNamesBatch([...authorIds, ...editorIds]),
       ArticleCategoryMap.findAll({ where: { article_id: { [Op.in]: articleIds } }, attributes: ['article_id', 'category_id'], raw: true }),
       ArticleTagMap.findAll({ where: { article_id: { [Op.in]: articleIds } }, attributes: ['article_id', 'tag_id'], raw: true }),
     ]);
@@ -2645,6 +2647,7 @@ async function getArticlesInternal(options = {}) {
     result.data = result.data.map((r) => ({
       ...r,
       author_name: authorNames.get(r.author_id) ?? null,
+      updated_by_name: r.updated_by ? (authorNames.get(r.updated_by) ?? null) : null,
       categories: catsByArticle.get(Number(r.id)) ?? [],
       tags: tagsByArticle.get(Number(r.id)) ?? [],
     }));
@@ -2931,6 +2934,7 @@ async function updateArticle(id, data) {
   if (patch.thumbnail_caption !== undefined) updates.thumbnail_caption = patch.thumbnail_caption || null;
   if (patch.sub_heading !== undefined) updates.sub_heading = patch.sub_heading;
   if (patch.author_id !== undefined) updates.author_id = patch.author_id || null;
+  if (patch.updated_by !== undefined) updates.updated_by = patch.updated_by || null;
   if (patch.status !== undefined) updates.status = nextStatus;
   if (patch.meta_title !== undefined) updates.meta_title = patch.meta_title;
   if (patch.meta_description !== undefined) updates.meta_description = patch.meta_description;
