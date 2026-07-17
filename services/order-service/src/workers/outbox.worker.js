@@ -112,6 +112,18 @@ async function processEvent(record) {
         },
         { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 15000 }
       );
+    } else if (event_type === 'COURSE_ACCESS_EMAIL') {
+      await axios.post(
+        `${config.authServiceUrl}/internal/send-course-access-email`,
+        {
+          to: data.to,
+          orderId: data.orderId,
+          type: data.type,
+          itemName: data.itemName,
+          buyerName: data.buyerName,
+        },
+        { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 15000 }
+      );
     } else if (event_type === 'ORDER_REFUNDED') {
       if (data.type === 'course') {
         await Promise.all([

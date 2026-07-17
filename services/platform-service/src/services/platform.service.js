@@ -1285,10 +1285,8 @@ async function getCaseLawsPublic(options = {}) {
   const conditions = [
     "a.status = 'publish'",
     sqlDeletedAtIsNull('a'),
-    "a.appeal_number IS NOT NULL",
-    "TRIM(a.appeal_number) <> ''",
-    "a.judgement_date IS NOT NULL",
-    "TRIM(a.judgement_date) <> ''",
+    "a.citation IS NOT NULL",
+    "TRIM(a.citation) <> ''",
   ];
   const replacements = { limit: safeLimit, offset };
 
@@ -1315,7 +1313,7 @@ async function getCaseLawsPublic(options = {}) {
               a.rel_download_url, a.upload_url, a.blog_access_tier
        FROM articles a
        WHERE ${whereSql}
-       ORDER BY a.created_at DESC, a.id DESC
+       ORDER BY a.id DESC
        LIMIT :limit OFFSET :offset`,
       { replacements, type: QueryTypes.SELECT },
     )
@@ -1323,6 +1321,15 @@ async function getCaseLawsPublic(options = {}) {
 
   const data = rows.map((p) => {
     const { blog_access_tier, access } = buildArticlePublicAccess(p.blog_access_tier, viewer);
+
+    let citationData = null;
+    try {
+      const parsed = JSON.parse(p.citation);
+      if (parsed && typeof parsed === 'object') citationData = parsed;
+    } catch (e) {
+      citationData = null;
+    }
+
     return {
       id: p.id,
       wp_post_id: p.wp_post_id,
@@ -1332,14 +1339,15 @@ async function getCaseLawsPublic(options = {}) {
       cover_image_alt: p.thumbnail_alt,
       blog_access_tier,
       access,
-      case_name: p.case_name ?? null,
-      citation: p.citation ?? null,
-      appeal_number: p.appeal_number ?? null,
-      judgement_date: p.judgement_date ?? null,
-      assessment_year: p.assessment_year ?? null,
-      court_name: p.court_name ?? null,
+      case_name: citationData?.case_name ?? null,
+      citation: citationData?.case_citation ?? null,
+      appeal_number: citationData?.appeal_number ?? null,
+      judgement_date: citationData?.judgement_date ?? null,
+      assessment_year: citationData?.assessment_year ?? null,
+      court_name: citationData?.court ?? null,
       rel_download_url: p.rel_download_url ?? null,
       download_url: p.rel_download_url || p.upload_url || null,
+      citation_ibj:citationData,
     };
   });
 

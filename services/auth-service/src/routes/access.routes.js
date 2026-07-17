@@ -2,6 +2,7 @@ const accessController = require('../controllers/access.controller');
 const accessService = require('../services/access.service');
 const {
   sendPaymentEmail,
+  sendCourseAccessEmail,
   sendWithdrawalEmail,
   sendMembershipUpgradeEmail,
   sendCourseCompletionCertificateEmail,
@@ -87,6 +88,15 @@ function register(router) {
       throw new AppError('to, status, and orderId are required', 400);
     }
     const result = await sendPaymentEmail(req.body);
+    sendSuccess(res, result);
+  }));
+
+  router.post('/internal/send-course-access-email', requireGrantAuth, asyncHandler(async (req, res) => {
+    const { to, orderId } = req.body;
+    if (!to || !orderId) {
+      throw new AppError('to and orderId are required', 400);
+    }
+    const result = await sendCourseAccessEmail(req.body);
     sendSuccess(res, result);
   }));
 

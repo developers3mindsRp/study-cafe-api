@@ -1,3 +1,5 @@
+const LOGO_URL = 'https://admin.studycafe.in/images/logo/logo.svg';
+
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, '&amp;')
@@ -39,8 +41,10 @@ function buildPasswordResetMailboxHtml({ resetUrl, siteUrl, ttlMinutes }) {
         <table width="600" cellpadding="0" cellspacing="0" role="presentation" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
           <tr>
             <td style="background-color:#1e3a5f;padding:32px 40px;text-align:center;">
-              <h1 style="margin:0;color:#ffffff;font-size:26px;font-weight:700;letter-spacing:0.5px;">Study Cafe</h1>
-              <p style="margin:6px 0 0;color:#93c5fd;font-size:14px;">Your Learning Companion</p>
+              <div style="display:inline-block;background-color:#ffffff;padding:8px 18px;border-radius:8px;">
+                <img src="${LOGO_URL}" alt="Study Cafe" height="32" style="display:block;height:32px;width:auto;" />
+              </div>
+              <p style="margin:10px 0 0;color:#93c5fd;font-size:14px;">Your Learning Companion</p>
             </td>
           </tr>
 

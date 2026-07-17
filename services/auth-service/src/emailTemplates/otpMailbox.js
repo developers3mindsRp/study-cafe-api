@@ -3,6 +3,8 @@
  * (see platform-service newsletter.service.js buildWelcomeEmail).
  */
 
+const LOGO_URL = 'https://admin.studycafe.in/images/logo/logo.svg';
+
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, '&amp;')
@@ -57,8 +59,10 @@ function buildOtpMailboxHtml({ otp, purpose, siteUrl, ttlMinutes }) {
           <!-- Header (matches newsletter) -->
           <tr>
             <td style="background-color:#1e3a5f;padding:32px 40px;text-align:center;">
-              <h1 style="margin:0;color:#ffffff;font-size:26px;font-weight:700;letter-spacing:0.5px;">Study Cafe</h1>
-              <p style="margin:6px 0 0;color:#93c5fd;font-size:14px;">${escapeHtml(headerLine)}</p>
+              <div style="display:inline-block;background-color:#ffffff;padding:8px 18px;border-radius:8px;">
+                <img src="${LOGO_URL}" alt="Study Cafe" height="32" style="display:block;height:32px;width:auto;" />
+              </div>
+              <p style="margin:10px 0 0;color:#93c5fd;font-size:14px;">${escapeHtml(headerLine)}</p>
             </td>
           </tr>
 
