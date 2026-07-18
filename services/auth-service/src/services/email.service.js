@@ -25,6 +25,10 @@ const {
   buildCourseCompletionCertificateEmailHtml,
   buildCourseCompletionCertificateEmailPlainText,
 } = require('../emailTemplates/courseCompletionCertificateEmail');
+const {
+  buildCourseAccessEmailHtml,
+  buildCourseAccessEmailPlainText,
+} = require('../emailTemplates/courseAccessEmail');
 
 let transporterPromise;
 
@@ -197,6 +201,50 @@ async function sendPaymentEmail(opts) {
       to,
       status,
       orderId: opts.orderId,
+      err: err?.message || String(err),
+      code: err?.code,
+    });
+    throw err;
+  }
+}
+
+/**
+ * Sent instead of sendPaymentEmail when access was granted via an admin-created
+ * (internal) order — no payment/amount details are shown to the recipient.
+ * @param {object} opts
+ * @param {string} opts.to          — recipient email
+ * @param {string} opts.orderId
+ * @param {'course'|'membership'|'payment_link'} opts.type
+ * @param {string} [opts.itemName]
+ * @param {string} [opts.buyerName]
+ */
+async function sendCourseAccessEmail(opts) {
+  const { to, orderId } = opts;
+  const subject = `You now have access — ${opts.itemName || 'Study Cafe'}`;
+
+  const templateOpts = { ...opts, siteUrl: config.publicSiteUrl };
+  const text = buildCourseAccessEmailPlainText(templateOpts);
+  const html = buildCourseAccessEmailHtml(templateOpts);
+
+  if (!isSmtpConfigured()) {
+    logger.warn('[email] SMTP not configured — course access email not sent', { to, orderId });
+    return { sent: false, reason: 'smtp_not_configured' };
+  }
+
+  const transport = await getTransporter();
+  if (!transport) {
+    logger.warn('[email] No transporter — course access email not sent', { to, orderId });
+    return { sent: false, reason: 'smtp_not_configured' };
+  }
+
+  try {
+    const info = await transport.sendMail({ from: config.smtp.from, to, subject, text, html });
+    logger.info('[email] Course access email sent', { to, orderId, messageId: info.messageId });
+    return { sent: true };
+  } catch (err) {
+    logger.error('[email] Course access email sendMail failed', {
+      to,
+      orderId,
       err: err?.message || String(err),
       code: err?.code,
     });
@@ -450,6 +498,7 @@ module.exports = {
   sendOtpEmail,
   sendPasswordResetEmail,
   sendPaymentEmail,
+  sendCourseAccessEmail,
   sendWelcomeEmail,
   sendPasswordChangedEmail,
   sendWithdrawalEmail,

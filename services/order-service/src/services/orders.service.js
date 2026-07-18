@@ -891,6 +891,36 @@ async function emitPaymentEmailOutbox(locked, razorpayPaymentId, status, t, extr
   );
 }
 
+/**
+ * Sent instead of emitPaymentEmailOutbox for orders an admin created/marked-paid
+ * internally (no real payment behind them) — recipient should not see payment/amount details.
+ */
+async function emitCourseAccessEmailOutbox(locked, t) {
+  const recipientEmail = await resolveRecipientEmail(locked);
+  if (!recipientEmail) {
+    logger.warn(`[orders] No email for access notification, order=${locked.order_id}`);
+    return;
+  }
+  const itemName = await resolveItemName(locked);
+  const buyerName = locked.buyer_name || (locked.user_id ? (await fetchUserContact(locked.user_id))?.name : null) || null;
+
+  await OutboxEvent.create(
+    {
+      aggregate_type: 'order',
+      aggregate_id: locked.order_id,
+      event_type: 'COURSE_ACCESS_EMAIL',
+      payload: {
+        to: recipientEmail,
+        orderId: locked.order_id,
+        type: locked.type,
+        itemName,
+        buyerName,
+      },
+    },
+    { transaction: t }
+  );
+}
+
 // ─── completePayment ──────────────────────────────────────────────────────────
 // Called by both checkout verify and webhook. Uses SELECT … FOR UPDATE to
 // prevent a double-payment race when verify + webhook arrive simultaneously.
@@ -3003,7 +3033,10 @@ async function createManualOrder(data) {
         paymentRefInput || `manual:${orderId}`;
       await ensurePaymentCaptured(locked, adminPaymentRef, { source: 'manual', transaction: t });
       await emitPurchaseOutbox(locked, t);
-      await emitPaymentEmailOutbox(locked, adminPaymentRef, 'success', t);
+      // Membership orders already get their own email via MEMBERSHIP_ACTIVATED (emitPurchaseOutbox above).
+      if (locked.type === 'course') {
+        await emitCourseAccessEmailOutbox(locked, t);
+      }
       if (couponResult) {
         await recordCouponUsage(couponResult.coupon.id, user_id, orderId, t);
       }
@@ -3173,7 +3206,10 @@ async function updateOrder(id, data) {
       const paymentRef = adminPaymentRef || `manual:${reloaded.order_id}`;
       await ensurePaymentCaptured(reloaded, paymentRef, { source: 'manual', transaction: t });
       await emitPurchaseOutbox(reloaded, t);
-      await emitPaymentEmailOutbox(reloaded, paymentRef, 'success', t);
+      // Membership orders already get their own email via MEMBERSHIP_ACTIVATED (emitPurchaseOutbox above).
+      if (reloaded.type === 'course') {
+        await emitCourseAccessEmailOutbox(reloaded, t);
+      }
     } else if (
       adminPaymentRef &&
       (newStatus === 'paid' || newStatus === 'completed') &&
@@ -3318,6 +3354,7 @@ module.exports = {
   verifyOrder,
   completePayment,
   emitPaymentEmailOutbox,
+  emitCourseAccessEmailOutbox,
   createPaymentLinkOrder,
   verifyPaymentLinkOrder,
   listOrders,
