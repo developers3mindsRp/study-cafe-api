@@ -843,10 +843,13 @@ async function upsertFooter(key, data) {
 /** Display ads JSON — stored in global_settings (migrated from footer_data) */
 
 function normalizeAdSlot(input) {
-  if (!input || typeof input !== 'object') return { image_url: '', link_url: '' };
+  if (!input || typeof input !== 'object') return { mode: 'image', image_url: '', link_url: '', script: '' };
+  const rawMode = typeof input.mode === 'string' ? input.mode.trim().toLowerCase() : '';
   return {
+    mode: rawMode === 'script' ? 'script' : 'image',
     image_url: typeof input.image_url === 'string' ? input.image_url : typeof input.imageUrl === 'string' ? input.imageUrl : '',
     link_url: typeof input.link_url === 'string' ? input.link_url : typeof input.linkUrl === 'string' ? input.linkUrl : '',
+    script: typeof input.script === 'string' ? input.script : '',
   };
 }
 
