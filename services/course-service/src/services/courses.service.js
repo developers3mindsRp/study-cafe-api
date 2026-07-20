@@ -115,11 +115,14 @@ async function syncUserCourseGrant(userId, courseId) {
   }
 }
 
-/** Published course detail/sessions/materials: hidden courses only for viewers with access. */
+/**
+ * Published course detail/sessions/materials visibility.
+ * Unlisted courses (hide_from_public) are excluded from public listings but stay
+ * openable by anyone who has the direct link — same as a normal published course.
+ * Paid content (recordings, curriculum videos) is still gated separately via checkCourseAccess.
+ */
 async function allowPublicCourseDetail(hideFromPublic, courseId, authorization) {
-  if (!hideFromPublic) return true;
-  if (!courseId) return false;
-  return checkCourseAccess(authorization, courseId);
+  return true;
 }
 
 function stripCurriculumVideos(course) {

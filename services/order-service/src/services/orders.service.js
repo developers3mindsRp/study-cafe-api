@@ -921,12 +921,59 @@ async function emitCourseAccessEmailOutbox(locked, t) {
   );
 }
 
+// ─── captureRazorpayPayment ───────────────────────────────────────────────────
+// Razorpay auto-refunds payments that are authorized but never captured (~1 day).
+// We capture every payment explicitly here instead of relying on the account's
+// dashboard-level auto-capture toggle, which can be silently turned off.
+// Idempotent: a retry, or the payment.captured webhook, hits "already captured",
+// which we treat as success.
+async function captureRazorpayPayment(razorpayPaymentId, amountRupees, currency = 'INR') {
+  // Only real Razorpay payments can be captured. Manual / free / admin references
+  // (e.g. "manual:…", "free:…") are settled in their own flows and never go to
+  // Razorpay — skip them here so we don't call the API with a non-payment id.
+  const id = String(razorpayPaymentId || '');
+  if (!id.startsWith('pay_')) {
+    logger.info(`[orders] Skipping Razorpay capture — "${id}" is not a Razorpay payment id`);
+    return;
+  }
+
+  const razorpay = await getRazorpayInstance();
+  if (!razorpay) {
+    throw new AppError('Payment gateway not configured — cannot capture payment', 500);
+  }
+  const amountPaise = Math.round(Number(amountRupees) * 100);
+  try {
+    await razorpay.payments.capture(razorpayPaymentId, amountPaise, currency || 'INR');
+    logger.info(`[orders] Captured Razorpay payment ${razorpayPaymentId} — ${amountPaise} paise ${currency || 'INR'}`);
+  } catch (err) {
+    const desc = err?.error?.description || err?.description || err?.message || '';
+    if (/already been captured|already captured/i.test(desc)) {
+      logger.info(`[orders] Razorpay payment ${razorpayPaymentId} already captured — treating as success`);
+      return;
+    }
+    logger.error(`[orders] Razorpay capture failed for ${razorpayPaymentId}: ${desc || 'unknown error'}`);
+    throw new AppError(`Failed to capture payment: ${desc || 'gateway error'}`, 502);
+  }
+}
+
 // ─── completePayment ──────────────────────────────────────────────────────────
 // Called by both checkout verify and webhook. Uses SELECT … FOR UPDATE to
 // prevent a double-payment race when verify + webhook arrive simultaneously.
 
 async function completePayment(order, razorpayPaymentId, { signature = null, source = 'checkout' } = {}) {
   try {
+    // Skip the capture/record work if the order is already paid (idempotent
+    // re-entry from a concurrent verify + webhook). The transaction below
+    // re-checks under lock; this only avoids a needless capture call.
+    const current = await Order.findByPk(order.id);
+    if (!current || current.status === 'paid') {
+      return { alreadyPaid: true, message: 'Already paid' };
+    }
+
+    // Actually collect the money before granting access. Without this the payment
+    // stays "authorized" and Razorpay auto-refunds it after ~1 day.
+    await captureRazorpayPayment(razorpayPaymentId, current.amount, current.currency);
+
     return await sequelize.transaction(async (t) => {
       const locked = await Order.findOne({
         where: { id: order.id },
@@ -3353,6 +3400,7 @@ module.exports = {
   createOrder,
   verifyOrder,
   completePayment,
+  captureRazorpayPayment,
   emitPaymentEmailOutbox,
   emitCourseAccessEmailOutbox,
   createPaymentLinkOrder,

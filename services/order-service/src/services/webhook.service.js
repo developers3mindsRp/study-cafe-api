@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const { sequelize, Order, Payment, WebhookEvent } = require('../models');
 const config = require('../config');
-const { completePayment, emitPaymentEmailOutbox } = require('./orders.service');
+const { completePayment, emitPaymentEmailOutbox, captureRazorpayPayment } = require('./orders.service');
 const { logger } = require('../../../../shared');
 
 const { getRazorpayConfig } = require('./payment.service');
@@ -62,14 +62,25 @@ async function handlePaymentAuthorized(body) {
     return 'skipped';
   }
 
-  await Payment.create({
-    order_id: order.id,
-    razorpay_payment_id: payment.id,
-    amount: payment.amount / 100,
-    status: 'authorized',
-    source: 'webhook',
-  });
+  const existingPay = await Payment.findOne({ where: { razorpay_payment_id: payment.id } });
+  if (!existingPay) {
+    await Payment.create({
+      order_id: order.id,
+      razorpay_payment_id: payment.id,
+      amount: payment.amount / 100,
+      status: 'authorized',
+      source: 'webhook',
+    });
+  }
   logger.info(`[WEBHOOK] payment.authorized — recorded for order ${order.order_id}`);
+
+  // Capture immediately instead of waiting for dashboard auto-capture. Covers
+  // payments where the customer never returned to the checkout verify page —
+  // without this they stay authorized and Razorpay auto-refunds after ~1 day.
+  // Idempotent; the resulting payment.captured webhook then completes the order.
+  await captureRazorpayPayment(payment.id, payment.amount / 100, payment.currency);
+  logger.info(`[WEBHOOK] payment.authorized — capture requested for order ${order.order_id}`);
+
   return 'processed';
 }
 
