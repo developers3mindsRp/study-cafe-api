@@ -1185,9 +1185,12 @@ function publishedActiveArticleWhere(extra = {}) {
 }
 
 async function getArticlesPublic(options = {}) {
-  const { page = 1, limit = 20, search, category } = options;
+  const { page = 1, limit = 20, search, category, accessTier } = options;
   const normalizedCategory = category && String(category).trim()
     ? String(category).trim().toLowerCase()
+    : undefined;
+  const normalizedAccessTier = accessTier && String(accessTier).trim()
+    ? String(accessTier).trim().toLowerCase()
     : undefined;
 
   const safePage = Math.max(1, Number(page) || 1);
@@ -1196,6 +1199,11 @@ async function getArticlesPublic(options = {}) {
 
   const conditions = ["a.status = 'publish'", sqlDeletedAtIsNull('a')];
   const replacements = { limit: safeLimit, offset };
+
+  if (normalizedAccessTier === 'free' || normalizedAccessTier === 'premium') {
+    conditions.push('a.blog_access_tier = :accessTier');
+    replacements.accessTier = normalizedAccessTier;
+  }
 
   if (search && String(search).trim()) {
     conditions.push('(a.title LIKE :search OR a.excerpt LIKE :search)');

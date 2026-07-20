@@ -342,7 +342,8 @@ const getArticles = asyncHandler(async (req, res) => {
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '20', 10)));
   const search = req.query.search ? String(req.query.search).trim() : undefined;
   const category = req.query.category ? String(req.query.category).trim() : undefined;
-  const data = await platformService.articles.getArticlesPublic({ page, limit, search, category });
+  const accessTier = req.query.access_tier ? String(req.query.access_tier).trim() : undefined;
+  const data = await platformService.articles.getArticlesPublic({ page, limit, search, category, accessTier });
   sendSuccess(res, data);
 });
 
