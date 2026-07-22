@@ -437,7 +437,32 @@ const deleteBatch = asyncHandler(async (req, res) => {
 
 const getBatchEnrollments = asyncHandler(async (req, res) => {
   const { data } = await courseClient.get(`/internal/batches/${req.params.id}/enrollments`);
-  sendSuccess(res, Array.isArray(data) ? data : data || []);
+  const rows = Array.isArray(data) ? data : data || [];
+
+  const courseId = rows[0]?.course_id;
+  const userIds = rows.map((r) => r.user_id).filter(Boolean);
+  if (courseId && userIds.length) {
+    try {
+      const { data: sources } = await orderClient.get(
+        `/internal/courses/${courseId}/enrollment-sources`,
+        { params: { userIds: userIds.join(',') } }
+      );
+      const sourceList = Array.isArray(sources) ? sources : sources?.data || [];
+      const sourceByUser = new Map(sourceList.map((s) => [Number(s.user_id), s]));
+      for (const row of rows) {
+        const s = sourceByUser.get(Number(row.user_id));
+        row.enrollment_source = s?.source || 'unknown';
+        row.is_membership_linked = s?.is_membership_linked || false;
+        row.source_order_id = s?.order_id || null;
+        row.source_order_status = s?.order_status || null;
+        row.source_order_was_refunded = s?.order_was_refunded || false;
+      }
+    } catch (err) {
+      logger.warn(`Failed to resolve enrollment sources for batch ${req.params.id}: ${err.message}`);
+    }
+  }
+
+  sendSuccess(res, rows);
 });
 
 /** Same rules as study-cafe-web `isUserCourseOrderPurchase` — order-service also returns membership rows as synthetic "course" purchases. */

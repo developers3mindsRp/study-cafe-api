@@ -1624,11 +1624,12 @@ const coursesService = {
 
   // ---- Batch Enrollments ----
   async getBatchEnrollments(batchId) {
+    const batch = await Batch.findByPk(batchId, { attributes: ["course_id"] });
     const rows = await BatchEnrollment.findAll({
       where: { batch_id: batchId },
       order: [["enrolled_at", "DESC"]],
     });
-    return rows.map((r) => r.get({ plain: true }));
+    return rows.map((r) => ({ ...r.get({ plain: true }), course_id: batch ? batch.course_id : null }));
   },
 
   async addBatchEnrollment(batchId, userId) {

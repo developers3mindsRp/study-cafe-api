@@ -705,28 +705,34 @@ async function emitPurchaseOutbox(locked, t, options = {}) {
 
   if (locked.type === 'course') {
     const cid = Number(locked.entity_id);
-    if (Number.isFinite(cid) && cid > 0 && existingCourseIds.has(cid)) {
+    const alreadyEnrolled = Number.isFinite(cid) && cid > 0 && existingCourseIds.has(cid);
+    // Even when the learner already has course access (so we skip re-granting/extending
+    // it below), this order still recorded a specific purchase batch — the batch
+    // assignment must still be synced, or the order's batch_id is permanently orphaned
+    // from what batch_enrollments actually reflects. Always emit the event; only the
+    // access-grant side is conditional.
+    if (alreadyEnrolled) {
       logger.info(
-        `[orders] skip COURSE_PURCHASED (already enrolled) user=${locked.user_id} course=${cid} order=${oid}`
-      );
-    } else {
-      const validity = await fetchCourseValidity(locked.entity_id);
-      await OutboxEvent.create(
-        {
-          aggregate_type: 'order',
-          aggregate_id: oid,
-          event_type: 'COURSE_PURCHASED',
-          payload: {
-            userId: locked.user_id,
-            orderId: oid,
-            courseId: locked.entity_id,
-            batchId: locked.batch_id ? Number(locked.batch_id) : null,
-            validity,
-          },
-        },
-        { transaction: t }
+        `[orders] user already has access to course=${cid} order=${oid} — skipping access grant, batch will still be synced`
       );
     }
+    const validity = await fetchCourseValidity(locked.entity_id);
+    await OutboxEvent.create(
+      {
+        aggregate_type: 'order',
+        aggregate_id: oid,
+        event_type: 'COURSE_PURCHASED',
+        payload: {
+          userId: locked.user_id,
+          orderId: oid,
+          courseId: locked.entity_id,
+          batchId: locked.batch_id ? Number(locked.batch_id) : null,
+          validity,
+          skipAccessGrant: alreadyEnrolled,
+        },
+      },
+      { transaction: t }
+    );
   } else if (locked.type === 'membership') {
     const plan = await fetchPlanDetails(locked.entity_id);
     // Fetch user's email from auth-service (authoritative source) rather than buyer_email on the order
@@ -775,11 +781,11 @@ async function emitPurchaseOutbox(locked, t, options = {}) {
     // 3. Emit COURSE_PURCHASED for each linked course (skip if user already has access — e.g. prior standalone purchase)
     for (const cid of courseSet) {
       const courseNum = Number(cid);
-      if (Number.isFinite(courseNum) && courseNum > 0 && existingCourseIds.has(courseNum)) {
+      const alreadyEnrolled = Number.isFinite(courseNum) && courseNum > 0 && existingCourseIds.has(courseNum);
+      if (alreadyEnrolled) {
         logger.info(
-          `[orders] skip membership-linked COURSE_PURCHASED (already enrolled) user=${locked.user_id} course=${courseNum} order=${oid}`
+          `[orders] user already has access to membership-linked course=${courseNum} order=${oid} — skipping access grant, batch will still be synced`
         );
-        continue;
       }
       // We resolve batch synchronously for EACH course to ensure consistency
       const batchId = await fetchPurchaseBatchId(cid);
@@ -796,6 +802,7 @@ async function emitPurchaseOutbox(locked, t, options = {}) {
             batchId: batchId ? Number(batchId) : null,
             isMembershipLinked: true,
             validity,
+            skipAccessGrant: alreadyEnrolled,
           },
         },
         { transaction: t }
@@ -1687,6 +1694,160 @@ async function verifyOrder(userId, { orderId, razorpay_order_id, razorpay_paymen
 }
 
 // ─── Read-only query helpers ──────────────────────────────────────────────────
+
+/**
+ * For a course + a set of user ids, resolve how each user's access to that course
+ * was granted: a direct course purchase, a membership plan that included the course,
+ * or unknown (predates the outbox / admin-granted / migrated data with no trace).
+ * Used by admin-service to annotate batch-enrollment listings so "enrolled with no
+ * matching course order" can be told apart from "enrolled via membership" instead of
+ * both looking like the same mismatch.
+ */
+async function getEnrollmentSources(courseId, userIds) {
+  const ids = [...new Set((userIds || []).map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+  if (!ids.length) return [];
+
+  const rows = await sequelize.query(
+    `SELECT payload FROM outbox_events
+     WHERE event_type = 'COURSE_PURCHASED'
+       AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.courseId')) = :courseId
+       AND CAST(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.userId')) AS UNSIGNED) IN (:ids)
+     ORDER BY id DESC`,
+    { replacements: { courseId: String(courseId), ids }, type: QueryTypes.SELECT }
+  );
+
+  const byUser = new Map();
+  for (const row of rows) {
+    let p = row.payload;
+    if (typeof p === 'string') { try { p = JSON.parse(p); } catch { continue; } }
+    if (!p || p.userId == null || p.courseId == null) continue;
+    const uid = Number(p.userId);
+    if (!ids.includes(uid) || byUser.has(uid)) continue; // keep latest only (rows are DESC by id)
+    byUser.set(uid, {
+      user_id: uid,
+      source: p.isMembershipLinked ? 'membership' : 'course_order',
+      order_id: p.orderId || null,
+      is_membership_linked: !!p.isMembershipLinked,
+    });
+  }
+
+  // The outbox payload only proves an order EXISTED at the time the event was
+  // created -- it says nothing about whether that order still exists now. An order
+  // can be hard-deleted after the fact (see deleteOrderPermanently's force-delete
+  // guard) leaving the outbox trail behind. Trusting the payload blindly here is
+  // exactly why "paid orders" and "direct order enrollments" counts can drift apart:
+  // a deleted-order enrollment would silently count as a resolved 'course_order'.
+  // Verify every referenced order still exists (and is still paid) before trusting it.
+  const candidateOrderIds = [...byUser.values()].map((v) => v.order_id).filter(Boolean);
+  if (candidateOrderIds.length) {
+    const foundOrders = await Order.findAll({
+      where: { order_id: { [Op.in]: candidateOrderIds } },
+      attributes: ['order_id', 'status'],
+      paranoid: false, // include soft-deleted (trashed) too -- still not a live paid order
+    });
+    const statusByOrderId = new Map(foundOrders.map((o) => [o.order_id, o.status]));
+    for (const [uid, entry] of byUser) {
+      if (!entry.order_id) continue;
+      const status = statusByOrderId.get(entry.order_id);
+      if (status === undefined) {
+        // Order no longer exists at all -- the enrollment is orphaned from a deleted order.
+        entry.source = 'deleted_order';
+        entry.order_status = null;
+      } else if (status !== 'paid') {
+        entry.source = 'unpaid_order';
+        entry.order_status = status;
+      } else {
+        entry.order_status = 'paid';
+      }
+    }
+  }
+
+  // Outbox events only exist for orders processed by the current order-service (it's
+  // where they're created). Anything still unresolved -- OR resolved only to a
+  // deleted/unpaid order via a stale outbox trace -- may still have a DIFFERENT,
+  // currently live paid order behind it (e.g. the original order was hard-deleted
+  // and the purchase was later recreated under a new order_id with no outbox event
+  // of its own). Fall back to the orders table itself, using the same entity_id +
+  // type='course' relation as everywhere else (never bare course_id -- see fix in
+  // migrate-wp-to-ms.js for why). Pull EVERY status (paid/pending/failed/refunded)
+  // so pending/failed orders stay visible for context -- but only a 'paid' order
+  // actually explains the enrollment, and a paid result here always wins over a
+  // stale deleted/unpaid outbox-based guess.
+  const stillUnresolved = ids.filter((uid) => {
+    const cur = byUser.get(uid);
+    return !cur || cur.source === 'deleted_order' || cur.source === 'unpaid_order';
+  });
+  if (stillUnresolved.length) {
+    const orders = await Order.findAll({
+      where: {
+        type: 'course',
+        entity_id: String(courseId),
+        user_id: { [Op.in]: stillUnresolved },
+      },
+      attributes: ['user_id', 'order_id', 'status', 'created_at'],
+      order: [['created_at', 'DESC']],
+    });
+
+    // Latest order per user (rows are DESC by created_at), preferring a paid one
+    // over a later pending/failed attempt for the same course.
+    const latestOrderByUser = new Map();
+    for (const o of orders) {
+      const uid = Number(o.user_id);
+      const existing = latestOrderByUser.get(uid);
+      if (!existing || (existing.status !== 'paid' && o.status === 'paid')) {
+        latestOrderByUser.set(uid, o);
+      }
+    }
+
+    // Cross-check by aggregate_id (the order's own id) against ALL outbox events for
+    // that order, regardless of event_type -- this catches cases the payload-content
+    // match above missed (e.g. an ORDER_REFUNDED event explaining why access no
+    // longer matches, or confirming COURSE_PURCHASED did fire for this exact order).
+    const orderIds = [...latestOrderByUser.values()].map((o) => o.order_id).filter(Boolean);
+    const traceByOrderId = new Map();
+    if (orderIds.length) {
+      const traces = await OutboxEvent.findAll({
+        where: { aggregate_type: 'order', aggregate_id: { [Op.in]: orderIds } },
+        attributes: ['aggregate_id', 'event_type', 'status'],
+        order: [['id', 'DESC']],
+      });
+      for (const t of traces) {
+        if (!traceByOrderId.has(t.aggregate_id)) traceByOrderId.set(t.aggregate_id, []);
+        traceByOrderId.get(t.aggregate_id).push({ event_type: t.event_type, status: t.status });
+      }
+    }
+
+    for (const [uid, o] of latestOrderByUser) {
+      const existing = byUser.get(uid);
+      // Don't let a fallback 'unpaid_order' clobber an existing 'deleted_order' guess
+      // (both are non-paid, neither is more informative) -- but a paid result here
+      // always overrides, since it's the strongest evidence available.
+      if (existing && existing.source !== 'deleted_order' && existing.source !== 'unpaid_order') continue;
+      if (existing && o.status !== 'paid') continue;
+
+      const trace = traceByOrderId.get(o.order_id) || [];
+      const wasRefunded = trace.some((t) => t.event_type === 'ORDER_REFUNDED');
+      byUser.set(uid, {
+        user_id: uid,
+        // Only a paid order actually explains the enrollment -- pending/failed orders
+        // are surfaced for context but don't count as a resolved source.
+        source: o.status === 'paid' ? 'course_order' : 'unpaid_order',
+        order_id: o.order_id,
+        is_membership_linked: false,
+        order_status: o.status,
+        order_was_refunded: wasRefunded,
+        outbox_trace: trace,
+      });
+    }
+  }
+
+  return ids.map((uid) => byUser.get(uid) || {
+    user_id: uid,
+    source: 'unknown',
+    order_id: null,
+    is_membership_linked: false,
+  });
+}
 
 async function listOrders(userId) {
   console.log('USER ID:', userId);
@@ -3352,11 +3513,27 @@ async function restoreOrder(id) {
  * destroy a live order. Payments key off the numeric order id; coupon-usage
  * rows key off the public order_id string. Returns { ok: true } on success or
  * { ok: false, reason } when the order is missing or not in trash.
+ *
+ * Course/batch enrollments have no FK to orders, so hard-deleting an order
+ * that a user is still enrolled/granted access via silently orphans that
+ * enrollment (nothing else ever points back to say "this access came from
+ * an order that no longer exists"). Refuse by default when a live enrollment
+ * still traces to this order's course; pass force:true to delete anyway.
  */
-async function deleteOrderPermanently(id) {
+async function deleteOrderPermanently(id, { force = false } = {}) {
   const order = await Order.findByPk(id, { paranoid: false });
   if (!order) return { ok: false, reason: 'not_found' };
   if (!order.deleted_at) return { ok: false, reason: 'not_trashed' };
+
+  if (!force && order.type === 'course' && order.user_id) {
+    const cid = Number(order.entity_id);
+    if (Number.isFinite(cid) && cid > 0) {
+      const enrolledCourseIds = await fetchUserEnrolledCourseIds(order.user_id);
+      if (enrolledCourseIds.has(cid)) {
+        return { ok: false, reason: 'active_enrollment_exists' };
+      }
+    }
+  }
 
   await sequelize.transaction(async (t) => {
     await Payment.destroy({ where: { order_id: order.id }, transaction: t });
@@ -3408,6 +3585,7 @@ module.exports = {
   listOrders,
   listMyPurchases,
   getInvoice,
+  getEnrollmentSources,
   listAllOrders,
   listCouponUsages,
   getCouponUsageSummary,

@@ -2858,6 +2858,7 @@ async function applyPostMigrationDataPatches(tgt) {
              FROM orders o
              INNER JOIN courses c ON c.id = o.course_id
              WHERE o.user_id IS NOT NULL AND o.course_id IS NOT NULL AND o.status = 'paid'
+             AND o.type = 'course'
              AND NOT EXISTS (
                SELECT 1 FROM enrollments e WHERE e.user_id = o.user_id AND e.course_id = o.course_id
              )`,
@@ -2873,6 +2874,7 @@ async function applyPostMigrationDataPatches(tgt) {
              FROM orders o
              WHERE o.user_id IS NOT NULL AND o.course_id IS NOT NULL
                AND o.status = 'paid' AND o.wp_post_status IN ('publish','draft')
+               AND o.type = 'course'
              AND NOT EXISTS (
                SELECT 1 FROM user_courses uc WHERE uc.user_id = o.user_id AND uc.course_id = o.course_id
              )`,

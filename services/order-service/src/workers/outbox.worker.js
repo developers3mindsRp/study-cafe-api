@@ -19,17 +19,11 @@ async function processEvent(record) {
       const expiresAt = data.validity === 'lifetime'
         ? null
         : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
-      await Promise.all([
-        axios.post(
-          `${config.authServiceUrl}/access/grant-course`,
-          {
-            userId: data.userId,
-            courseId: data.courseId,
-            orderId: data.orderId,
-            expiresAt,
-          },
-          { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
-        ),
+      // auto-enroll (batch assignment) always runs — it's idempotent and must reflect
+      // this order's batch_id even when the learner already had course access from
+      // elsewhere. grant-course is skipped in that case so we don't reset/extend an
+      // existing access grant.
+      const calls = [
         axios.post(
           `${config.courseServiceUrl}/internal/courses/${data.courseId}/auto-enroll`,
           {
@@ -37,8 +31,23 @@ async function processEvent(record) {
             batch_id: data.batchId || null,
           },
           { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
-        )
-      ]);
+        ),
+      ];
+      if (!data.skipAccessGrant) {
+        calls.push(
+          axios.post(
+            `${config.authServiceUrl}/access/grant-course`,
+            {
+              userId: data.userId,
+              courseId: data.courseId,
+              orderId: data.orderId,
+              expiresAt,
+            },
+            { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
+          )
+        );
+      }
+      await Promise.all(calls);
     } else if (event_type === 'MEMBERSHIP_ACTIVATED') {
       await axios.post(
         `${config.authServiceUrl}/access/grant-membership`,
