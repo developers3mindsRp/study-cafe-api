@@ -80,21 +80,23 @@ async function checkAccess(token, courseId) {
   const decoded = authService.verifyAccess(token);
   const userId = decoded.userId;
 
-  // Fast path: direct purchase enrollment
+  // Fast path: direct purchase enrollment that is still valid (lifetime or unexpired).
   const row = await UserCourse.findOne({
     where: { user_id: userId, course_id: courseId },
   });
-  if (row) {
-    // expires_at = null means lifetime; otherwise check if still valid
-    if (!row.expires_at || new Date(row.expires_at) > new Date()) {
-      return { allowed: true };
-    }
-    return { allowed: false, reason: 'course_expired' };
+  if (row && (!row.expires_at || new Date(row.expires_at) > new Date())) {
+    return { allowed: true };
   }
 
-  // Slower path: membership-based access
+  // Direct purchase is absent OR expired → fall back to membership access.
+  // NOTE: an expired purchase must NOT short-circuit here — a learner whose
+  // standalone purchase lapsed may still have the course via an active membership
+  // (that's why "Continue learning" was redirecting them to the buy page).
   const hasMembershipAccess = await checkMembershipAccess(userId, courseId);
-  if (!hasMembershipAccess) return { allowed: false };
+  if (!hasMembershipAccess) {
+    // No membership either: report course_expired if they once had a purchase.
+    return row ? { allowed: false, reason: 'course_expired' } : { allowed: false };
+  }
 
   // Lazy-enroll the user in user_courses so progress tracking works going forward.
   // Uses findOrCreate so concurrent requests are safe.
@@ -125,7 +127,19 @@ async function grantCourse({ userId, courseId, orderId, expiresAt }) {
     defaults: { order_id: orderId || null, expires_at: expiresAt ?? null },
   });
   if (!created) {
-    await row.update({ order_id: orderId || row.order_id, expires_at: expiresAt ?? row.expires_at });
+    // Extend-only renewal: never shorten an existing grant, always honour a longer one.
+    //  - expires_at = null means lifetime access, so null on either side always wins.
+    //  - otherwise keep the later of (existing, new). This lets a repurchase after
+    //    expiry renew access (new future date > old past date) while a shorter grant
+    //    can never clip a longer/active one.
+    const existing = row.expires_at;
+    let nextExpiry;
+    if (existing == null || expiresAt == null) {
+      nextExpiry = null;
+    } else {
+      nextExpiry = new Date(expiresAt) > new Date(existing) ? expiresAt : existing;
+    }
+    await row.update({ order_id: orderId || row.order_id, expires_at: nextExpiry });
   }
   return { granted: true };
 }

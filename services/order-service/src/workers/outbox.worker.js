@@ -21,9 +21,17 @@ async function processEvent(record) {
         : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
       // auto-enroll (batch assignment) always runs — it's idempotent and must reflect
       // this order's batch_id even when the learner already had course access from
-      // elsewhere. grant-course is skipped in that case so we don't reset/extend an
-      // existing access grant.
-      const calls = [
+      // elsewhere.
+      //
+      // grant-course also always runs. grantCourse (auth-service) is extend-only: it
+      // never shortens an existing longer/active grant, but it DOES renew an expired
+      // one. Previously we skipped it whenever the user was "already enrolled", but
+      // enrollment records never expire — so a repurchase after expiry was wrongly
+      // treated as already-active and access was never renewed (both my-purchases
+      // cards showed "expired"). The extend-only merge makes always-granting safe.
+      // data.skipAccessGrant is retained on the payload for backward compatibility
+      // but is no longer honoured.
+      await Promise.all([
         axios.post(
           `${config.courseServiceUrl}/internal/courses/${data.courseId}/auto-enroll`,
           {
@@ -32,22 +40,17 @@ async function processEvent(record) {
           },
           { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
         ),
-      ];
-      if (!data.skipAccessGrant) {
-        calls.push(
-          axios.post(
-            `${config.authServiceUrl}/access/grant-course`,
-            {
-              userId: data.userId,
-              courseId: data.courseId,
-              orderId: data.orderId,
-              expiresAt,
-            },
-            { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
-          )
-        );
-      }
-      await Promise.all(calls);
+        axios.post(
+          `${config.authServiceUrl}/access/grant-course`,
+          {
+            userId: data.userId,
+            courseId: data.courseId,
+            orderId: data.orderId,
+            expiresAt,
+          },
+          { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
+        ),
+      ]);
     } else if (event_type === 'MEMBERSHIP_ACTIVATED') {
       await axios.post(
         `${config.authServiceUrl}/access/grant-membership`,

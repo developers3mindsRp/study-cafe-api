@@ -12,8 +12,10 @@ async function ensureAccessAndBatch(courseId, userId, authHeader) {
   // }
   // First-touch safety net only: enrolls a user who has course access but zero batch rows
   // (e.g. membership/legacy users). It is a no-op when the user is already in a batch, so it
-  // never MOVES an existing learner between batches.
-  await coursesService.autoEnrollInBatch(Number(courseId), Number(userId), null);
+  // never MOVES an existing learner between batches. grantAccess:false — this runs on
+  // read/progress polls, so it must not write a standalone user_courses window (that would
+  // grant a membership learner course access outliving their membership).
+  await coursesService.autoEnrollInBatch(Number(courseId), Number(userId), null, { grantAccess: false });
   // NOTE: repairUserBatchIfNoSessions was intentionally removed here. It used to destroy the
   // learner's real batch enrollment (if that batch had 0 sessions) and move them onto the
   // session-richest batch on every page load — silently dragging Default-batch students onto

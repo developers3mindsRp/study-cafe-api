@@ -2056,7 +2056,10 @@ async function listMyPurchases(userId) {
   // so we preserve every order row to match it exactly.
 
   // Fetch expires_at for each course purchase from user_courses (shared DB).
-  // Used only as a fallback for native (non-legacy) orders that have no wp_post_status.
+  // user_courses is the LIVE source of truth for current access: it is (re)granted
+  // on every purchase, so a repurchase renews it. wp_post_status, by contrast, is a
+  // frozen snapshot from migration time that is never updated — so we let a live
+  // active grant override a stale legacy 'draft' (expired) card (see below).
   const expiryMap = new Map();
   if (courseEntityIds.length > 0) {
     const placeholders = courseEntityIds.map(() => '?').join(',');
@@ -2072,21 +2075,33 @@ async function listMyPurchases(userId) {
   const now = new Date();
   for (const item of out) {
     if (!item.course || !courseEntityIds.includes(Number(item.courseId))) continue;
-    if (item.wpPostStatus === 'draft') {
-      // Legacy expired order — authoritative.
-      item.accessStatus = 'expired';
-      item.accessExpiresAt = null;
-    } else if (item.wpPostStatus === 'publish') {
+
+    // Live access from user_courses: a row with expires_at = null (lifetime) or a
+    // future date means the learner currently has access to this course.
+    const hasGrant = expiryMap.has(Number(item.courseId));
+    const grantExpiresAt = hasGrant ? expiryMap.get(Number(item.courseId)) : null;
+    const grantActive = hasGrant && (!grantExpiresAt || new Date(grantExpiresAt) > now);
+
+    if (item.wpPostStatus === 'publish') {
       // Legacy active order — authoritative.
       item.accessStatus = 'active';
       item.accessExpiresAt = null;
+    } else if (item.wpPostStatus === 'draft') {
+      // Legacy expired order. This flag is frozen at migration time and can't see a
+      // later repurchase, so defer to the live user_courses grant: if the learner
+      // now has active access (e.g. they rebought the course), show active with the
+      // real window; only honour the legacy 'expired' when there is no active grant.
+      if (grantActive) {
+        item.accessStatus = 'active';
+        item.accessExpiresAt = grantExpiresAt ? new Date(grantExpiresAt).toISOString() : null;
+      } else {
+        item.accessStatus = 'expired';
+        item.accessExpiresAt = null;
+      }
     } else {
       // Native order: fall back to the user_courses access window.
-      const expiresAt = expiryMap.has(Number(item.courseId))
-        ? expiryMap.get(Number(item.courseId))
-        : null;
-      item.accessExpiresAt = expiresAt ? new Date(expiresAt).toISOString() : null;
-      item.accessStatus = !expiresAt || new Date(expiresAt) > now ? 'active' : 'expired';
+      item.accessExpiresAt = grantExpiresAt ? new Date(grantExpiresAt).toISOString() : null;
+      item.accessStatus = !grantExpiresAt || new Date(grantExpiresAt) > now ? 'active' : 'expired';
     }
   }
 

@@ -899,8 +899,11 @@ const coursesService = {
           });
         }
 
-        // Lazy Auto-Enrollment for Membership Users
-        const enrolled = await this.autoEnrollInBatch(cplain.id, userId);
+        // Lazy Auto-Enrollment for Membership Users. grantAccess:false — access here
+        // comes from the active membership (verified above via checkCourseAccess), NOT a
+        // standalone purchase, so we must not write a user_courses window that would
+        // outlive the membership. We only place them in a batch so recordings resolve.
+        const enrolled = await this.autoEnrollInBatch(cplain.id, userId, null, { grantAccess: false });
         if (enrolled && enrolled.batch_id) {
           return this._getBatchesSessionsRecordings(cplain.id, {
             visibleOnly: true,
@@ -1883,7 +1886,14 @@ const coursesService = {
    * Enroll a buyer into a specific batch (or auto-resolve if batchId not given).
    * Called by order-service outbox worker after a successful COURSE_PURCHASED event.
    */
-  async autoEnrollInBatch(courseId, userId, batchId = null) {
+  async autoEnrollInBatch(courseId, userId, batchId = null, opts = {}) {
+    // grantAccess (default true): whether to also write/extend a standalone
+    // user_courses access window. Purchases and admin enrolls SET it (they are a
+    // real standalone entitlement). Membership / first-touch "safety net" enrolls
+    // must NOT — otherwise merely viewing a course the learner reached via an active
+    // membership grants a course-validity window (1yr, or 10yr for lifetime) that
+    // outlives the membership. Those callers pass { grantAccess: false }.
+    const grantAccess = opts.grantAccess !== false;
     let targetBatchId = batchId ? Number(batchId) : null;
 
     if (targetBatchId) {
@@ -1910,7 +1920,7 @@ const coursesService = {
           where: { user_id: userId, course_id: courseId },
           defaults: { user_id: userId, course_id: courseId, enrolled_at: new Date() },
         });
-        await syncUserCourseGrant(userId, courseId);
+        if (grantAccess) await syncUserCourseGrant(userId, courseId);
         return { course_id: courseId, user_id: userId, batch_id: existingBatch.id, created: false };
       }
 
@@ -1937,7 +1947,7 @@ const coursesService = {
       defaults: { user_id: userId, course_id: courseId, enrolled_at: new Date() }
     });
 
-    await syncUserCourseGrant(userId, courseId);
+    if (grantAccess) await syncUserCourseGrant(userId, courseId);
 
     if (row) {
       return { ...row.get({ plain: true }), created };
