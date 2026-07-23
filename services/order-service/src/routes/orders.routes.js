@@ -34,6 +34,7 @@ function register(router) {
   router.delete('/internal/orders/:id/permanent', internalAuth, ordersController.deleteOrderPermanently);
   router.delete('/internal/orders/:id', internalAuth, ordersController.deleteOrder);
   router.get('/internal/users/:userId/purchases', internalAuth, ordersController.getUserPurchasesInternal);
+  router.get('/internal/courses/:courseId/enrollment-sources', internalAuth, ordersController.getEnrollmentSourcesInternal);
 
 
   // Internal coupon management (called by admin-service)

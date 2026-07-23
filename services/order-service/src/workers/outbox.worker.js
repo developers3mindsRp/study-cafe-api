@@ -19,7 +19,27 @@ async function processEvent(record) {
       const expiresAt = data.validity === 'lifetime'
         ? null
         : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+      // auto-enroll (batch assignment) always runs — it's idempotent and must reflect
+      // this order's batch_id even when the learner already had course access from
+      // elsewhere.
+      //
+      // grant-course also always runs. grantCourse (auth-service) is extend-only: it
+      // never shortens an existing longer/active grant, but it DOES renew an expired
+      // one. Previously we skipped it whenever the user was "already enrolled", but
+      // enrollment records never expire — so a repurchase after expiry was wrongly
+      // treated as already-active and access was never renewed (both my-purchases
+      // cards showed "expired"). The extend-only merge makes always-granting safe.
+      // data.skipAccessGrant is retained on the payload for backward compatibility
+      // but is no longer honoured.
       await Promise.all([
+        axios.post(
+          `${config.courseServiceUrl}/internal/courses/${data.courseId}/auto-enroll`,
+          {
+            user_id: data.userId,
+            batch_id: data.batchId || null,
+          },
+          { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
+        ),
         axios.post(
           `${config.authServiceUrl}/access/grant-course`,
           {
@@ -30,14 +50,6 @@ async function processEvent(record) {
           },
           { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
         ),
-        axios.post(
-          `${config.courseServiceUrl}/internal/courses/${data.courseId}/auto-enroll`,
-          {
-            user_id: data.userId,
-            batch_id: data.batchId || null,
-          },
-          { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
-        )
       ]);
     } else if (event_type === 'MEMBERSHIP_ACTIVATED') {
       await axios.post(

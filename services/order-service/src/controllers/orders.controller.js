@@ -158,10 +158,17 @@ const restoreOrder = asyncHandler(async (req, res) => {
 });
 
 const deleteOrderPermanently = asyncHandler(async (req, res) => {
-  const result = await ordersService.deleteOrderPermanently(req.params.id);
+  const force = req.query.force === 'true' || req.query.force === '1';
+  const result = await ordersService.deleteOrderPermanently(req.params.id, { force });
   if (!result.ok) {
     if (result.reason === 'not_trashed') {
       throw new AppError('Order must be in trash before it can be permanently deleted', 409);
+    }
+    if (result.reason === 'active_enrollment_exists') {
+      throw new AppError(
+        'User is still enrolled in this course — deleting this order would orphan that enrollment. Pass ?force=true to delete anyway.',
+        409
+      );
     }
     throw new AppError('Order not found in trash', 404);
   }
@@ -232,6 +239,14 @@ const getUserPurchasesInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, rows);
 });
 
+const getEnrollmentSourcesInternal = asyncHandler(async (req, res) => {
+  const courseId = req.params.courseId;
+  const userIds = String(req.query.userIds || '').split(',').filter(Boolean);
+  if (!courseId || !userIds.length) throw new AppError('courseId and userIds are required', 400);
+  const rows = await ordersService.getEnrollmentSources(courseId, userIds);
+  sendSuccess(res, rows);
+});
+
 const validateCouponPreviewInternal = asyncHandler(async (req, res) => {
   const { userId, couponCode, amount, type } = req.body;
   if (!couponCode || amount == null || !type) {
@@ -270,5 +285,6 @@ module.exports = {
   deleteOrderPermanently,
   refundOrder,
   getUserPurchasesInternal,
+  getEnrollmentSourcesInternal,
   validateCouponPreviewInternal,
 };
