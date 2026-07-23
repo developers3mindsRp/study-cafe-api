@@ -656,6 +656,7 @@ module.exports = {
     create,
     update,
     remove,
+    restore,
     listByIds,
     searchIds,
     distinctStates,
