@@ -13,6 +13,33 @@ const { sequelize, Coupon } = require('../models');
 const { Op } = require('sequelize');
 
 /**
+ * Run an async worker over `items` with a bounded number of concurrent tasks.
+ * Firing every request at once (e.g. Promise.all over 1000 emails) saturates the
+ * downstream services' socket/DB pools, so most calls sit queued past their 10s
+ * axios timeout and fail with "timeout of 10000ms exceeded". A small pool keeps
+ * throughput high while staying under those limits. Results preserve input order.
+ */
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+// Max in-flight per-email tasks for bulk operations. Each task hits course-service
+// then order-service sequentially, so 10 workers map 1:1 onto each downstream DB
+// pool (max 10) without queueing past the 10s axios timeout, while ~1000 users still
+// finish well inside the 120s api-gateway proxy timeout.
+const BULK_CONCURRENCY = 10;
+
+/**
  * Create a manual 'paid' course order so an admin-allotted course surfaces under
  * the user's "Purchased Course" tab (order-service GET /orders/my-purchases reads
  * the orders table). Best-effort: failures are logged, never thrown, so a broken
@@ -728,8 +755,7 @@ const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
   const { data: users } = await authClient.post('/internal/users/by-emails', { emails });
   const userMap = new Map((Array.isArray(users) ? users : []).map((u) => [u.email.toLowerCase(), u]));
 
-  const results = await Promise.all(
-    emails.map(async (email) => {
+  const results = await mapWithConcurrency(emails, BULK_CONCURRENCY, async (email) => {
       const normalized = email.toLowerCase();
       const user = userMap.get(normalized);
       if (!user) {
@@ -757,8 +783,7 @@ const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
       } catch (err) {
         return { email: normalized, status: 'error', message: err?.response?.data?.error || err.message };
       }
-    })
-  );
+  });
 
   sendSuccess(res, results);
 });
@@ -789,8 +814,7 @@ const bulkGrantMembershipByEmails = asyncHandler(async (req, res) => {
   const { data: users } = await authClient.post('/internal/users/by-emails', { emails });
   const userMap = new Map((Array.isArray(users) ? users : []).map((u) => [u.email.toLowerCase(), u]));
 
-  const results = await Promise.all(
-    emails.map(async (email) => {
+  const results = await mapWithConcurrency(emails, BULK_CONCURRENCY, async (email) => {
       const normalized = email.toLowerCase();
       const user = userMap.get(normalized);
       if (!user) {
@@ -830,8 +854,7 @@ const bulkGrantMembershipByEmails = asyncHandler(async (req, res) => {
       } catch (err) {
         return { email: normalized, status: 'error', message: err?.response?.data?.error || err.message };
       }
-    })
-  );
+  });
 
   sendSuccess(res, results);
 });
