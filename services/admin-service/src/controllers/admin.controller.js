@@ -46,7 +46,7 @@ const BULK_CONCURRENCY = 10;
  * order write can't fail the enrollment itself.
  */
 async function createCourseOrder({ userId, courseId, price, paymentId, contact }) {
-  if (!courseId) return;
+  if (!courseId) return false;
   try {
     let buyer = contact || null;
     if (!buyer) {
@@ -68,8 +68,10 @@ async function createCourseOrder({ userId, courseId, price, paymentId, contact }
       status: 'paid',
       payment_id: paymentId || undefined,
     });
+    return true;
   } catch (orderErr) {
     console.error('[createCourseOrder] order creation failed:', orderErr?.response?.data ?? orderErr?.message ?? orderErr);
+    return false;
   }
 }
 
@@ -769,14 +771,19 @@ const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
 
           // Always create a manual course order so the course shows under "Purchased
           // Course" (price/paymentId optional). We already have the buyer contact here.
+          // The user is already enrolled + granted access at this point, so a failed
+          // order must NOT fail the enrollment — surface it instead of hiding it.
           if (courseId) {
-            await createCourseOrder({
+            const orderCreated = await createCourseOrder({
               userId: user.id,
               courseId,
               price,
               paymentId,
               contact: { email: user.email, name: user.name || null, phone: user.phone || null },
             });
+            if (!orderCreated) {
+              return { email: normalized, status, orderCreated: false };
+            }
           }
         }
         return { email: normalized, status };
