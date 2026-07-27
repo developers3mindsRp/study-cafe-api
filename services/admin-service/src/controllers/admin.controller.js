@@ -743,10 +743,17 @@ const setUserCourseBatch = asyncHandler(async (req, res) => {
   sendSuccess(res, data);
 });
 
+// Course orders per bulk request to order-service. Each chunk creates its orders at
+// bounded concurrency inside order-service, so a large allotment never becomes a storm
+// of per-user order calls (the pattern that overloaded order-service).
+const BULK_ORDER_CHUNK = 150;
+
 const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
   const batchId = req.params.id;
-  const { emails: rawEmails, price, paymentId, courseId } = req.body;
+  // NOTE: paymentId is intentionally not used for bulk allotment — a single Razorpay
+  // id can't back many orders (unique index), so each order gets its own manual ref.
+  const { emails: rawEmails, price, courseId } = req.body;
   const emails = Array.isArray(rawEmails) ? rawEmails : [];
 
   if (emails.length === 0) {
@@ -757,41 +764,72 @@ const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
   const { data: users } = await authClient.post('/internal/users/by-emails', { emails });
   const userMap = new Map((Array.isArray(users) ? users : []).map((u) => [u.email.toLowerCase(), u]));
 
-  const results = await mapWithConcurrency(emails, BULK_CONCURRENCY, async (email) => {
-      const normalized = email.toLowerCase();
-      const user = userMap.get(normalized);
-      if (!user) {
-        return { email: normalized, status: 'user_not_found' };
+  // Phase 1 — enroll each user (batch_enrollment + access grant). This is one call per
+  // user and already scales; only the order step (phase 2) is batched.
+  const enrollResults = await mapWithConcurrency(emails, BULK_CONCURRENCY, async (email) => {
+    const normalized = email.toLowerCase();
+    const user = userMap.get(normalized);
+    if (!user) {
+      return { email: normalized, status: 'user_not_found' };
+    }
+    try {
+      const { data } = await courseClient.post(`/internal/batches/${batchId}/enrollments`, { user_id: user.id });
+      const status = data.created === false ? 'already_enrolled' : 'enrolled';
+      if (status === 'enrolled') {
+        await adminLogsService.logAction(adminId, 'ADD_BATCH_ENROLLMENT', 'batch_enrollment', String(data.id), { batchId, userId: user.id }, req.ip);
       }
-      try {
-        const { data } = await courseClient.post(`/internal/batches/${batchId}/enrollments`, { user_id: user.id });
-        const status = data.created === false ? 'already_enrolled' : 'enrolled';
-        if (status === 'enrolled') {
-          await adminLogsService.logAction(adminId, 'ADD_BATCH_ENROLLMENT', 'batch_enrollment', String(data.id), { batchId, userId: user.id }, req.ip);
-
-          // Always create a manual course order so the course shows under "Purchased
-          // Course" (price/paymentId optional). We already have the buyer contact here.
-          // The user is already enrolled + granted access at this point, so a failed
-          // order must NOT fail the enrollment — surface it instead of hiding it.
-          if (courseId) {
-            const orderCreated = await createCourseOrder({
-              userId: user.id,
-              courseId,
-              price,
-              paymentId,
-              contact: { email: user.email, name: user.name || null, phone: user.phone || null },
-            });
-            if (!orderCreated) {
-              return { email: normalized, status, orderCreated: false };
-            }
-          }
-        }
-        return { email: normalized, status };
-      } catch (err) {
-        return { email: normalized, status: 'error', message: err?.response?.data?.error || err.message };
-      }
+      return { email: normalized, status, user };
+    } catch (err) {
+      return { email: normalized, status: 'error', message: err?.response?.data?.error || err.message };
+    }
   });
 
+  // Phase 2 — create the "Purchased Course" orders for the newly-enrolled users via ONE
+  // bulk call per chunk. order-service runs the same createManualOrder path per user at
+  // bounded concurrency, so each order/payment/email is identical to a single allotment.
+  // The user is already enrolled + granted access, so a failed order must NOT fail the
+  // enrollment — it's surfaced via orderCreated:false instead of hidden.
+  if (courseId) {
+    const toOrder = enrollResults.filter((r) => r.status === 'enrolled' && r.user);
+    if (toOrder.length > 0) {
+      const amount = price ? Number(price) : 0;
+      const orderOkByUserId = new Map();
+      for (let i = 0; i < toOrder.length; i += BULK_ORDER_CHUNK) {
+        const chunk = toOrder.slice(i, i + BULK_ORDER_CHUNK);
+        try {
+          const { data: orderResults } = await orderClient.post(
+            '/internal/orders/course-bulk',
+            {
+              entity_id: String(courseId),
+              amount,
+              status: 'paid',
+              users: chunk.map((r) => ({
+                user_id: r.user.id,
+                buyer_name: r.user.name || null,
+                buyer_email: r.user.email || null,
+                buyer_mobile: r.user.phone || null,
+              })),
+            },
+            { timeout: 120000 },
+          );
+          for (const or of Array.isArray(orderResults) ? orderResults : []) {
+            orderOkByUserId.set(String(or.user_id), or.ok === true);
+          }
+        } catch (err) {
+          logger.warn(`[bulkEnroll] course-bulk order chunk failed (batch ${batchId}): ${err?.response?.data?.error || err.message}`);
+          for (const r of chunk) orderOkByUserId.set(String(r.user.id), false);
+        }
+      }
+      for (const r of enrollResults) {
+        if (r.status === 'enrolled' && r.user && orderOkByUserId.get(String(r.user.id)) === false) {
+          r.orderCreated = false;
+        }
+      }
+    }
+  }
+
+  // Strip the internal `user` object before returning.
+  const results = enrollResults.map(({ user, ...rest }) => rest);
   sendSuccess(res, results);
 });
 
