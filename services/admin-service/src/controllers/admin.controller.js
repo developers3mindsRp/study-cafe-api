@@ -745,42 +745,167 @@ const setUserCourseBatch = asyncHandler(async (req, res) => {
 
 // Course orders per bulk request to order-service. Each chunk creates its orders at
 // bounded concurrency inside order-service, so a large allotment never becomes a storm
-// of per-user order calls (the pattern that overloaded order-service).
-const BULK_ORDER_CHUNK = 150;
+// of per-user order calls (the pattern that overloaded order-service). Kept well under
+// what fits in BULK_ORDER_TIMEOUT_MS: a chunk that times out is reported failed for
+// every user in it — including orders that did commit — so re-running would double-book.
+const BULK_ORDER_CHUNK = 50;
+const BULK_ORDER_TIMEOUT_MS = 120000;
+
+const BULK_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Matches payments.razorpay_payment_id — a longer value fails at the DB layer.
+const MAX_PAYMENT_ID_LENGTH = 128;
+
+/**
+ * Parse an admin-supplied amount ("12,979", "₹12979", "Rs. 999", "", 12979) into a number.
+ *
+ * Currency prefixes, thousands separators and stray spaces are stripped rather than
+ * rejected — they're exactly what gateway exports and Excel produce. Anything still
+ * unparseable returns null so the caller can report that row: passing it straight to
+ * `Number(x) || 0` (as order-service does) would silently record a ₹12,979 paid
+ * allotment as a ₹0 free one, with a real payment id attached.
+ */
+function parseAllotmentAmount(value) {
+  if (value == null) return 0;
+  const raw = String(value).trim();
+  if (!raw) return 0;
+  const cleaned = raw.replace(/^(?:rs\.?|inr)\s*/i, '').replace(/[₹,\s]/g, '');
+  if (!cleaned) return 0;
+  if (!/^-?\d+(?:\.\d+)?$/.test(cleaned)) return null;
+  const num = Number(cleaned);
+  return Number.isFinite(num) ? num : null;
+}
+
+/**
+ * Normalize a bulk-allotment body into one validated row per user.
+ *
+ * Accepts the row form (`entries: [{ email, price, paymentId }]`, from the CSV) and the
+ * legacy flat form (`emails: string[]`); the top-level price/paymentId are defaults for
+ * rows that leave those cells blank. Every rejection becomes a per-row `invalid` result
+ * with a message the admin can act on — never a throw, so one bad row can't cost the
+ * rest of the upload.
+ */
+function normalizeAllotmentEntries(body) {
+  const rawRows = Array.isArray(body.entries) && body.entries.length > 0
+    ? body.entries
+    : (Array.isArray(body.emails) ? body.emails.map((email) => ({ email })) : []);
+
+  // A Razorpay id is unique per order, so a single form-level id can only ever back one
+  // row — applied across a multi-row upload it would 409 every row after the first.
+  const defaultPaymentId = rawRows.length === 1 ? String(body.paymentId ?? '').trim() : '';
+  const hasValue = (v) => v != null && String(v).trim() !== '';
+
+  const rows = [];
+  const seenEmails = new Set();
+  const seenPaymentIds = new Set();
+
+  rawRows.forEach((raw, index) => {
+    const entry = raw && typeof raw === 'object' ? raw : { email: raw };
+    const email = entry.email == null ? '' : String(entry.email).trim().toLowerCase();
+    const reject = (message) => rows.push({ index, email, status: 'invalid', message });
+
+    // A blank line in a pasted list or a trailing CSV newline isn't an error worth
+    // reporting — it's just noise. Anything non-blank that isn't an address is.
+    if (!email) return;
+    if (!BULK_EMAIL_RE.test(email)) {
+      return reject('Not a valid email address');
+    }
+    if (seenEmails.has(email)) {
+      return reject('Duplicate email in this file — only the first row was used');
+    }
+
+    const amount = parseAllotmentAmount(hasValue(entry.price) ? entry.price : body.price);
+    if (amount === null) {
+      return reject(`"${String(entry.price ?? body.price).trim()}" is not a valid amount — use a number like 12979`);
+    }
+    if (amount < 0) {
+      return reject('Amount cannot be negative');
+    }
+
+    // A payment id is recorded whatever the amount, matching the single-user allot form.
+    // On a ₹0 order the gateway still resolves to FREE (that's driven by the amount, not
+    // the id), so the order reads as "Free" while carrying the real capture reference.
+    const paymentId = String(hasValue(entry.paymentId) ? entry.paymentId : defaultPaymentId).trim();
+    if (paymentId) {
+      if (paymentId.length > MAX_PAYMENT_ID_LENGTH) {
+        return reject(`Payment ID must be ${MAX_PAYMENT_ID_LENGTH} characters or fewer`);
+      }
+      if (seenPaymentIds.has(paymentId)) {
+        return reject(`Payment ID ${paymentId} is used more than once in this file`);
+      }
+      seenPaymentIds.add(paymentId);
+    }
+
+    seenEmails.add(email);
+    rows.push({ index, email, amount, paymentId, status: 'pending' });
+  });
+
+  return rows;
+}
 
 const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
   const batchId = req.params.id;
-  // NOTE: paymentId is intentionally not used for bulk allotment — a single Razorpay
-  // id can't back many orders (unique index), so each order gets its own manual ref.
-  const { emails: rawEmails, price, courseId } = req.body;
-  const emails = Array.isArray(rawEmails) ? rawEmails : [];
+  const { courseId } = req.body;
 
-  if (emails.length === 0) {
+  const rows = normalizeAllotmentEntries(req.body);
+  if (rows.length === 0) {
     return sendSuccess(res, []);
   }
+  // Without a course id the order phase below is skipped entirely and everyone lands
+  // enrolled with no order and no payment record — a silent failure that reads as a
+  // clean run in the UI. Fail the request instead.
+  if (!courseId) {
+    throw new AppError('courseId is required to record allotment payments', 400);
+  }
 
-  // Resolve emails → user ids via auth service
-  const { data: users } = await authClient.post('/internal/users/by-emails', { emails });
-  const userMap = new Map((Array.isArray(users) ? users : []).map((u) => [u.email.toLowerCase(), u]));
+  const pending = rows.filter((r) => r.status === 'pending');
+
+  // Resolve emails → user ids via auth service. Guarded: a user row with a null email
+  // would throw here and take down the whole upload before anything is enrolled.
+  const { data: users } = await authClient.post('/internal/users/by-emails', {
+    emails: pending.map((r) => r.email),
+  });
+  const userMap = new Map(
+    (Array.isArray(users) ? users : [])
+      .filter((u) => u && typeof u.email === 'string')
+      .map((u) => [u.email.toLowerCase(), u]),
+  );
 
   // Phase 1 — enroll each user (batch_enrollment + access grant). This is one call per
-  // user and already scales; only the order step (phase 2) is batched.
-  const enrollResults = await mapWithConcurrency(emails, BULK_CONCURRENCY, async (email) => {
-    const normalized = email.toLowerCase();
-    const user = userMap.get(normalized);
-    if (!user) {
-      return { email: normalized, status: 'user_not_found' };
-    }
+  // user and already scales; only the order step (phase 2) is batched. Everything the
+  // worker touches stays inside the try: mapWithConcurrency does not catch, so a throw
+  // here rejects the whole request and loses the results for every other row too.
+  await mapWithConcurrency(pending, BULK_CONCURRENCY, async (row) => {
     try {
-      const { data } = await courseClient.post(`/internal/batches/${batchId}/enrollments`, { user_id: user.id });
-      const status = data.created === false ? 'already_enrolled' : 'enrolled';
-      if (status === 'enrolled') {
-        await adminLogsService.logAction(adminId, 'ADD_BATCH_ENROLLMENT', 'batch_enrollment', String(data.id), { batchId, userId: user.id }, req.ip);
+      const user = userMap.get(row.email);
+      if (!user) {
+        row.status = 'user_not_found';
+        row.message = 'No registered user with this email';
+        return;
       }
-      return { email: normalized, status, user };
+      const { data } = await courseClient.post(`/internal/batches/${batchId}/enrollments`, { user_id: user.id });
+      if (data.created === false) {
+        row.status = 'already_enrolled';
+        // Phase 2 only books orders for fresh enrollments, so a payment on a row for
+        // someone already enrolled is dropped. Say so rather than reporting a clean skip.
+        row.message = row.paymentId
+          ? 'Already enrolled — the payment in this row was NOT recorded'
+          : 'Already enrolled';
+        return;
+      }
+      row.user = user;
+      row.status = 'enrolled';
+      await adminLogsService.logAction(
+        adminId,
+        'ADD_BATCH_ENROLLMENT',
+        'batch_enrollment',
+        String(data.id),
+        { batchId, userId: user.id, amount: row.amount, paymentId: row.paymentId || null },
+        req.ip,
+      );
     } catch (err) {
-      return { email: normalized, status: 'error', message: err?.response?.data?.error || err.message };
+      row.status = 'error';
+      row.message = err?.response?.data?.error || err.message;
     }
   });
 
@@ -788,48 +913,56 @@ const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
   // bulk call per chunk. order-service runs the same createManualOrder path per user at
   // bounded concurrency, so each order/payment/email is identical to a single allotment.
   // The user is already enrolled + granted access, so a failed order must NOT fail the
-  // enrollment — it's surfaced via orderCreated:false instead of hidden.
-  if (courseId) {
-    const toOrder = enrollResults.filter((r) => r.status === 'enrolled' && r.user);
-    if (toOrder.length > 0) {
-      const amount = price ? Number(price) : 0;
-      const orderOkByUserId = new Map();
-      for (let i = 0; i < toOrder.length; i += BULK_ORDER_CHUNK) {
-        const chunk = toOrder.slice(i, i + BULK_ORDER_CHUNK);
-        try {
-          const { data: orderResults } = await orderClient.post(
-            '/internal/orders/course-bulk',
-            {
-              entity_id: String(courseId),
-              amount,
-              status: 'paid',
-              users: chunk.map((r) => ({
-                user_id: r.user.id,
-                buyer_name: r.user.name || null,
-                buyer_email: r.user.email || null,
-                buyer_mobile: r.user.phone || null,
-              })),
-            },
-            { timeout: 120000 },
-          );
-          for (const or of Array.isArray(orderResults) ? orderResults : []) {
-            orderOkByUserId.set(String(or.user_id), or.ok === true);
-          }
-        } catch (err) {
-          logger.warn(`[bulkEnroll] course-bulk order chunk failed (batch ${batchId}): ${err?.response?.data?.error || err.message}`);
-          for (const r of chunk) orderOkByUserId.set(String(r.user.id), false);
+  // enrollment — it's surfaced via orderCreated:false + orderError instead of hidden.
+  const toOrder = rows.filter((r) => r.status === 'enrolled' && r.user);
+  for (let i = 0; i < toOrder.length; i += BULK_ORDER_CHUNK) {
+    const chunk = toOrder.slice(i, i + BULK_ORDER_CHUNK);
+    try {
+      const { data: orderResults } = await orderClient.post(
+        '/internal/orders/course-bulk',
+        {
+          entity_id: String(courseId),
+          amount: 0,
+          status: 'paid',
+          users: chunk.map((r) => ({
+            user_id: r.user.id,
+            buyer_name: r.user.name || null,
+            buyer_email: r.user.email || null,
+            buyer_mobile: r.user.phone || null,
+            amount: r.amount,
+            payment_id: r.paymentId || undefined,
+          })),
+        },
+        { timeout: BULK_ORDER_TIMEOUT_MS },
+      );
+      const resultByUserId = new Map(
+        (Array.isArray(orderResults) ? orderResults : []).map((or) => [String(or.user_id), or]),
+      );
+      for (const r of chunk) {
+        const or = resultByUserId.get(String(r.user.id));
+        if (or && or.ok === false) {
+          r.orderCreated = false;
+          r.orderError = or.error || 'Order could not be created';
         }
       }
-      for (const r of enrollResults) {
-        if (r.status === 'enrolled' && r.user && orderOkByUserId.get(String(r.user.id)) === false) {
-          r.orderCreated = false;
-        }
+    } catch (err) {
+      const reason = err?.response?.data?.error || err.message;
+      logger.warn(`[bulkEnroll] course-bulk order chunk failed (batch ${batchId}): ${reason}`);
+      for (const r of chunk) {
+        r.orderCreated = false;
+        r.orderError = reason;
       }
     }
   }
 
-  // Strip the internal `user` object before returning.
-  const results = enrollResults.map(({ user, ...rest }) => rest);
+  // One result per input row, in file order. `index`/`user` are internal; amount and
+  // paymentId are echoed back so the admin panel can rebuild a corrected CSV of the
+  // rows that failed without re-deriving them.
+  const results = rows.map(({ index, user, amount, paymentId, ...rest }) => ({
+    ...rest,
+    amount: amount ?? null,
+    paymentId: paymentId || '',
+  }));
   sendSuccess(res, results);
 });
 
