@@ -139,6 +139,15 @@ const createManualOrder = asyncHandler(async (req, res) => {
   sendCreated(res, result);
 });
 
+const createBulkCourseOrders = asyncHandler(async (req, res) => {
+  const { entity_id, amount, status, users } = req.body;
+  if (!entity_id || !Array.isArray(users)) {
+    throw new AppError('entity_id and users[] are required', 400);
+  }
+  const results = await ordersService.createManualCourseOrdersBulk({ entity_id, amount, status, users });
+  sendSuccess(res, results);
+});
+
 const updateOrder = asyncHandler(async (req, res) => {
   const result = await ordersService.updateOrder(req.params.id, req.body);
   if (!result) throw new AppError('Order not found', 404);
@@ -279,6 +288,7 @@ module.exports = {
   createPaymentLink,
   verifyPaymentLink,
   createManualOrder,
+  createBulkCourseOrders,
   updateOrder,
   deleteOrder,
   restoreOrder,

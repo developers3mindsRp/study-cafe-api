@@ -31,6 +31,29 @@ function generateOrderId() {
   return 'ORD_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
 }
 
+/**
+ * Retry a DB operation on transient InnoDB lock errors (deadlock / lock-wait
+ * timeout). These always roll the whole transaction back, so re-running the
+ * atomic `fn` is safe and cannot double-write. Hardens concurrent order creation
+ * (bulk course allotment fires up to 10 order writes at once).
+ */
+async function withDeadlockRetry(fn, { attempts = 3, label = 'tx' } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      const code = err?.original?.code || err?.parent?.code || '';
+      const transient =
+        err?.name === 'SequelizeDeadlockError' ||
+        code === 'ER_LOCK_DEADLOCK' ||
+        code === 'ER_LOCK_WAIT_TIMEOUT';
+      if (!transient || attempt >= attempts) throw err;
+      logger.warn(`[orders] ${label}: transient lock error (attempt ${attempt}/${attempts}) — retrying: ${err.message}`);
+      await new Promise((resolve) => setTimeout(resolve, 60 * attempt));
+    }
+  }
+}
+
 const ORDER_GATEWAY = {
   RAZORPAY: 'razorpay',
   ADMIN: 'admin',
@@ -3131,12 +3154,38 @@ async function ensurePaymentCaptured(orderRow, razorpayPaymentId, { signature = 
   const ref = normalizeAdminPaymentId(razorpayPaymentId);
   if (!ref) throw new AppError('Payment ID is required when marking order as paid', 400);
 
+  // Reconcile an existing captured-payment row for this ref against the current
+  // order. Same rules whether the row was already present or surfaced by losing
+  // an insert race — so this stays correct without a gap-locking read.
+  const reconcile = async (existingPay) => {
+    if (String(existingPay.order_id) !== String(orderRow.id)) {
+      throw new AppError('Payment ID is already linked to another order', 409);
+    }
+    if (existingPay.status !== 'captured') {
+      await existingPay.update(
+        {
+          status: 'captured',
+          razorpay_signature: signature ?? existingPay.razorpay_signature,
+          amount: orderRow.amount,
+          source,
+        },
+        { transaction }
+      );
+    }
+    return ref;
+  };
+
+  // Non-locking read: MVCC snapshot, takes NO gap lock. The previous
+  // `lock: transaction.LOCK.UPDATE` gap-locked the unique razorpay_payment_id
+  // index on the not-yet-existing `manual:<orderId>` key, which deadlocked
+  // concurrent bulk order creation (all `manual:` keys fall in the same gap).
   const existingPay = await Payment.findOne({
     where: { razorpay_payment_id: ref },
     transaction,
-    lock: transaction.LOCK.UPDATE,
   });
-  if (!existingPay) {
+  if (existingPay) return reconcile(existingPay);
+
+  try {
     await Payment.create(
       {
         order_id: orderRow.id,
@@ -3149,22 +3198,21 @@ async function ensurePaymentCaptured(orderRow, razorpayPaymentId, { signature = 
       { transaction }
     );
     return ref;
+  } catch (err) {
+    // Lost a race — another transaction inserted the same ref first. Re-read it
+    // (locking is safe now: the row exists, so it takes a row lock, not a gap
+    // lock) and reconcile against it. Only same-ref concurrency reaches here;
+    // distinct `manual:<orderId>` refs from bulk allotment never collide.
+    if (err.name === 'SequelizeUniqueConstraintError') {
+      const raced = await Payment.findOne({
+        where: { razorpay_payment_id: ref },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (raced) return reconcile(raced);
+    }
+    throw err;
   }
-  if (String(existingPay.order_id) !== String(orderRow.id)) {
-    throw new AppError('Payment ID is already linked to another order', 409);
-  }
-  if (existingPay.status !== 'captured') {
-    await existingPay.update(
-      {
-        status: 'captured',
-        razorpay_signature: signature ?? existingPay.razorpay_signature,
-        amount: orderRow.amount,
-        source,
-      },
-      { transaction }
-    );
-  }
-  return ref;
 }
 
 async function createManualOrder(data) {
@@ -3220,7 +3268,7 @@ async function createManualOrder(data) {
     }
   }
 
-  const createdOrder = await sequelize.transaction(async (t) => {
+  const createdOrder = await withDeadlockRetry(() => sequelize.transaction(async (t) => {
     const created = await Order.create(
       {
         order_id: orderId,
@@ -3266,9 +3314,62 @@ async function createManualOrder(data) {
     }
 
     return locked;
-  });
+  }), { label: 'createManualOrder' });
 
   return createdOrder.get({ plain: true });
+}
+
+/**
+ * Bulk course-order creation for admin allotment.
+ *
+ * Runs the SAME createManualOrder path for each user at a bounded concurrency, so
+ * a large allotment (1000+ users) is created as one chunked call at controlled load
+ * instead of a storm of per-user HTTP calls (the pattern that overloaded and crashed
+ * order-service). Every order/payment/outbox row is therefore byte-identical to a
+ * single allotment — only the driver changes.
+ *
+ * No payment_id is used: each order gets its own unique `manual:<orderId>` capture
+ * ref (one Razorpay id can't be shared across many orders — unique index). Never
+ * throws for one user; returns a per-user result so the caller can report partials.
+ *
+ * @param {object} p
+ * @param {string|number} p.entity_id  course id
+ * @param {number} [p.amount]          per-order amount (allotment price; 0 = free)
+ * @param {string} [p.status]          order status (default 'paid')
+ * @param {Array<{user_id:number, buyer_name?:string, buyer_email?:string, buyer_mobile?:string}>} p.users
+ * @returns {Promise<Array<{user_id:number, ok:boolean, order_id?:string, error?:string}>>}
+ */
+async function createManualCourseOrdersBulk({ entity_id, amount = 0, status = 'paid', users = [] }) {
+  const list = Array.isArray(users) ? users : [];
+  const CONCURRENCY = 5;
+  const results = new Array(list.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(CONCURRENCY, list.length) }, async () => {
+    while (cursor < list.length) {
+      const i = cursor;
+      cursor += 1;
+      const u = list[i] || {};
+      const userId = u.user_id;
+      try {
+        const order = await createManualOrder({
+          user_id: userId,
+          type: 'course',
+          entity_id,
+          amount,
+          status,
+          buyer_name: u.buyer_name != null ? u.buyer_name : null,
+          buyer_email: u.buyer_email != null ? u.buyer_email : null,
+          buyer_mobile: u.buyer_mobile != null ? u.buyer_mobile : null,
+        });
+        results[i] = { user_id: userId, ok: true, order_id: order.order_id };
+      } catch (err) {
+        logger.warn(`[orders] bulk course order failed user=${userId} course=${entity_id}: ${err.message}`);
+        results[i] = { user_id: userId, ok: false, error: err.message || 'order_failed' };
+      }
+    }
+  });
+  await Promise.all(runners);
+  return results;
 }
 
 async function updateOrder(id, data) {
@@ -3613,6 +3714,7 @@ module.exports = {
   updateCoupon,
   deleteCoupon,
   createManualOrder,
+  createManualCourseOrdersBulk,
   updateOrder,
   deleteOrder,
   restoreOrder,
