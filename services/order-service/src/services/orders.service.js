@@ -3328,15 +3328,17 @@ async function createManualOrder(data) {
  * order-service). Every order/payment/outbox row is therefore byte-identical to a
  * single allotment — only the driver changes.
  *
- * No payment_id is used: each order gets its own unique `manual:<orderId>` capture
- * ref (one Razorpay id can't be shared across many orders — unique index). Never
- * throws for one user; returns a per-user result so the caller can report partials.
+ * Amount and payment_id are per user, falling back to the request-level `amount` when
+ * a row omits its own. A row without a payment_id gets its own unique `manual:<orderId>`
+ * capture ref — one Razorpay id can never be shared across orders (unique index), so a
+ * repeated id fails only its own row (409) and is reported back rather than thrown.
+ * Never throws for one user; returns a per-user result so the caller can report partials.
  *
  * @param {object} p
  * @param {string|number} p.entity_id  course id
- * @param {number} [p.amount]          per-order amount (allotment price; 0 = free)
+ * @param {number} [p.amount]          fallback per-order amount (0 = free)
  * @param {string} [p.status]          order status (default 'paid')
- * @param {Array<{user_id:number, buyer_name?:string, buyer_email?:string, buyer_mobile?:string}>} p.users
+ * @param {Array<{user_id:number, buyer_name?:string, buyer_email?:string, buyer_mobile?:string, amount?:number, payment_id?:string}>} p.users
  * @returns {Promise<Array<{user_id:number, ok:boolean, order_id?:string, error?:string}>>}
  */
 async function createManualCourseOrdersBulk({ entity_id, amount = 0, status = 'paid', users = [] }) {
@@ -3355,11 +3357,12 @@ async function createManualCourseOrdersBulk({ entity_id, amount = 0, status = 'p
           user_id: userId,
           type: 'course',
           entity_id,
-          amount,
+          amount: u.amount != null ? u.amount : amount,
           status,
           buyer_name: u.buyer_name != null ? u.buyer_name : null,
           buyer_email: u.buyer_email != null ? u.buyer_email : null,
           buyer_mobile: u.buyer_mobile != null ? u.buyer_mobile : null,
+          payment_id: u.payment_id || undefined,
         });
         results[i] = { user_id: userId, ok: true, order_id: order.order_id };
       } catch (err) {
