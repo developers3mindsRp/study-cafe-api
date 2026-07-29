@@ -203,7 +203,7 @@ async function resolveMembershipPlanDisplayName(entityId) {
   return null;
 }
 
-function buildMembershipPayload(order, plan, userContact = null) {
+function buildMembershipPayload(order, plan, userContact = null, isManual = false) {
   const now = new Date();
   const payload = {
     userId: order.user_id,
@@ -214,6 +214,9 @@ function buildMembershipPayload(order, plan, userContact = null) {
     buyerEmail: order.buyer_email || null,
     buyerName: order.buyer_name || null,
     membershipPlanName: plan?.name || order.entity_id || null,
+    // Admin/manual orders don't get an expiry shown in the confirmation email —
+    // access itself still expires normally, this only affects the email payload below.
+    isManualOrder: isManual,
   };
 
   if (plan && plan.is_lifetime) {
@@ -700,6 +703,7 @@ async function fetchCourseValidity(courseId) {
 /** Outbox: enrollment / membership + affiliate (only when order amount &gt; 0). */
 async function emitPurchaseOutbox(locked, t, options = {}) {
   const skipAffiliate = options && options.skipAffiliate === true;
+  const isManual = options && options.isManual === true;
   const oid = locked.order_id;
   const existingCourseIds = await fetchUserEnrolledCourseIds(locked.user_id);
 
@@ -737,7 +741,7 @@ async function emitPurchaseOutbox(locked, t, options = {}) {
     const plan = await fetchPlanDetails(locked.entity_id);
     // Fetch user's email from auth-service (authoritative source) rather than buyer_email on the order
     const userContact = locked.user_id ? await fetchUserContact(locked.user_id) : null;
-    const payload = buildMembershipPayload(locked, plan, userContact);
+    const payload = buildMembershipPayload(locked, plan, userContact, isManual);
     await OutboxEvent.create(
       {
         aggregate_type: 'order',
@@ -3255,7 +3259,7 @@ async function createManualOrder(data) {
       const adminPaymentRef =
         paymentRefInput || `manual:${orderId}`;
       await ensurePaymentCaptured(locked, adminPaymentRef, { source: 'manual', transaction: t });
-      await emitPurchaseOutbox(locked, t);
+      await emitPurchaseOutbox(locked, t, { isManual: true });
       // Membership orders already get their own email via MEMBERSHIP_ACTIVATED (emitPurchaseOutbox above).
       if (locked.type === 'course') {
         await emitCourseAccessEmailOutbox(locked, t);
@@ -3428,7 +3432,7 @@ async function updateOrder(id, data) {
       }
       const paymentRef = adminPaymentRef || `manual:${reloaded.order_id}`;
       await ensurePaymentCaptured(reloaded, paymentRef, { source: 'manual', transaction: t });
-      await emitPurchaseOutbox(reloaded, t);
+      await emitPurchaseOutbox(reloaded, t, { isManual: true });
       // Membership orders already get their own email via MEMBERSHIP_ACTIVATED (emitPurchaseOutbox above).
       if (reloaded.type === 'course') {
         await emitCourseAccessEmailOutbox(reloaded, t);
@@ -3452,7 +3456,7 @@ async function updateOrder(id, data) {
       logger.info(
         `[orders] admin entity swap — re-emit fulfillment order=${reloaded.order_id} entity=${reloaded.entity_id}`
       );
-      await emitPurchaseOutbox(reloaded, t, { skipAffiliate: true });
+      await emitPurchaseOutbox(reloaded, t, { skipAffiliate: true, isManual: true });
     }
 
     if (newStatus === 'refunded' && oldStatus !== 'refunded') {

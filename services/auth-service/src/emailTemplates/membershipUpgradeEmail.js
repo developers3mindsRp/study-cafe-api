@@ -48,10 +48,12 @@ function buildMembershipUpgradeEmailHtml(opts) {
       <td style="padding:8px 0;color:#6b7280;font-size:13px;vertical-align:top;">Starts</td>
       <td style="padding:8px 0;color:#374151;font-size:14px;font-weight:600;text-align:right;vertical-align:top;">${startsAt || '-'}</td>
     </tr>
+    ${expiresAt ? `
     <tr>
       <td style="padding:8px 0;color:#6b7280;font-size:13px;vertical-align:top;">Expires</td>
-      <td style="padding:8px 0;color:#374151;font-size:14px;font-weight:600;text-align:right;vertical-align:top;">${expiresAt || '-'}</td>
+      <td style="padding:8px 0;color:#374151;font-size:14px;font-weight:600;text-align:right;vertical-align:top;">${expiresAt}</td>
     </tr>
+    ` : ''}
   `;
 
   return `<!DOCTYPE html>
@@ -132,10 +134,11 @@ function buildMembershipUpgradeEmailPlainText(opts) {
   const orderId = opts.orderId || '';
   const email = opts.email || '';
   const startsAt = opts.startsAt ? new Date(opts.startsAt).toISOString().slice(0, 10) : '-';
-  const expiresAt = opts.expiresAt ? new Date(opts.expiresAt).toISOString().slice(0, 10) : '-';
+  const expiresAt = opts.expiresAt ? new Date(opts.expiresAt).toISOString().slice(0, 10) : null;
   const siteUrl = opts.siteUrl || '';
+  const expiresLine = expiresAt ? `Expires: ${expiresAt}\n` : '';
 
-  return `Membership upgrade confirmed - Study Cafe\n\nHi ${name},\n\nYour membership upgrade to "${plan}" is confirmed.\n\nOrder ID: ${orderId}\nEmail: ${email}\nStarts: ${startsAt}\nExpires: ${expiresAt}\n\nGo to your Dashboard: ${siteUrl}/dashboard\n`;
+  return `Membership upgrade confirmed - Study Cafe\n\nHi ${name},\n\nYour membership upgrade to "${plan}" is confirmed.\n\nOrder ID: ${orderId}\nEmail: ${email}\nStarts: ${startsAt}\n${expiresLine}\nGo to your Dashboard: ${siteUrl}/dashboard\n`;
 }
 
 module.exports = { buildMembershipUpgradeEmailHtml, buildMembershipUpgradeEmailPlainText };

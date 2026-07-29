@@ -80,7 +80,9 @@ async function processEvent(record) {
               orderId: data.orderId,
               membershipPlanName: data.membershipPlanName,
               startsAt: data.startsAt,
-              expiresAt: data.expiresAt,
+              // Admin/manual orders don't show an expiry in the confirmation email —
+              // actual membership access duration (grant-membership above) is unaffected.
+              expiresAt: data.isManualOrder ? undefined : data.expiresAt,
             },
             { headers: { 'x-internal-api-key': config.internalApiKey }, timeout: 15000 }
           )
