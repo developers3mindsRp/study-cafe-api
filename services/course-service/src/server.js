@@ -1,13 +1,9 @@
-const path = require('path');
-try {
-  require('dotenv').config({
-    path: path.join(__dirname, '../../../.env'),
-    /** Never replace vars already set by the shell / npm scripts (e.g. PORT=4002 from dev:course). */
-    override: false,
-  });
-} catch (_) {
-  /* optional */
-}
+/**
+ * Loads the resolved env file (honours APP_ENV / ENV_FILE, so `dev:prod` reaches
+ * .env.production) and never replaces vars already set by the shell / npm scripts
+ * (e.g. PORT=4002 from dev:course).
+ */
+require('../../../shared/env');
 
 const config = require('./config');
 const { createApp } = require('./app');

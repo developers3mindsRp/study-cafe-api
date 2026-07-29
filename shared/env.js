@@ -5,11 +5,57 @@ const dotenv = require('dotenv');
 
 let loaded = false;
 
-/** Load repo-root .env once (does not override existing process.env). */
+const REPO_ROOT = path.resolve(__dirname, '..');
+
+/**
+ * Which env file to load, in priority order:
+ *   1. ENV_FILE=<path>      — explicit override (absolute, or relative to repo root)
+ *   2. APP_ENV=production   — .env.production  (real prod DB / SMTP / gateway)
+ *   3. default              — .env             (local development)
+ *
+ * Selection is deliberately explicit: nothing points at production unless the
+ * caller asks for it by name, so a plain `npm run dev` can never reach prod.
+ */
+function resolveEnvFile() {
+  const explicit = (process.env.ENV_FILE || '').trim();
+  if (explicit) {
+    return path.isAbsolute(explicit) ? explicit : path.resolve(REPO_ROOT, explicit);
+  }
+  const appEnv = (process.env.APP_ENV || '').trim().toLowerCase();
+  if (appEnv === 'production' || appEnv === 'prod') {
+    return path.resolve(REPO_ROOT, '.env.production');
+  }
+  return path.resolve(REPO_ROOT, '.env');
+}
+
+/**
+ * Load the resolved env file once. Does not override vars already present in
+ * process.env, so shell / npm-script values (PORT, APP_ENV, …) always win.
+ */
 function loadRootEnv() {
   if (loaded) return;
-  dotenv.config({ path: path.resolve(__dirname, '../.env') });
+  const envFile = resolveEnvFile();
+  const result = dotenv.config({ path: envFile });
   loaded = true;
+
+  if (result.error && (process.env.ENV_FILE || process.env.APP_ENV)) {
+    // A caller explicitly asked for a specific env file — failing silently here
+    // would fall through to confusing "Missing required environment variable"
+    // errors, or worse, a half-configured process.
+    throw new Error(`Could not load env file: ${envFile} (${result.error.message})`);
+  }
+
+  // Loud, unmissable banner whenever a process is pointed at production.
+  if (path.basename(envFile) !== '.env') {
+    const target = process.env.MYSQL_DATABASE || 'unknown';
+    const host = process.env.MYSQL_HOST || 'unknown';
+    process.stderr.write(
+      `\n\x1b[41m\x1b[97m ⚠  NON-LOCAL ENV: ${path.basename(envFile)} \x1b[0m\n` +
+        `\x1b[33m   DB   : ${host}/${target}\n` +
+        `   SMTP : ${process.env.SMTP_HOST || 'unset'} (real email may be delivered)\n` +
+        `   Writes hit this database for real. Ctrl-C now if unintended.\x1b[0m\n\n`
+    );
+  }
 }
 
 loadRootEnv();
@@ -19,7 +65,13 @@ function required(name) {
   if (v === undefined || v === null || String(v).trim() === '') {
     throw new Error(`Missing required environment variable: ${name}`);
   }
-  return String(v).trim();
+  const trimmed = String(v).trim();
+  // Unfilled template placeholder — surface it here rather than let a service boot
+  // with a literal "REPLACE_ME" host/secret and fail confusingly at first use.
+  if (trimmed === 'REPLACE_ME') {
+    throw new Error(`Environment variable ${name} is still the placeholder REPLACE_ME — fill it in.`);
+  }
+  return trimmed;
 }
 
 function requiredInt(name) {
@@ -97,6 +149,7 @@ function serviceUrl(envName) {
 
 module.exports = {
   loadRootEnv,
+  resolveEnvFile,
   required,
   requiredInt,
   optionalInt,

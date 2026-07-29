@@ -1,0 +1,3 @@
+email,payment_id,amount
+user1@example.com,pay_ABC123,39999
+user2@example.com,pay_DEF456,39999

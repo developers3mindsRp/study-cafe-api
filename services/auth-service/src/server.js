@@ -1,9 +1,10 @@
-const path = require('path');
-const dotenv = require('dotenv');
-
-// Load env before ./config so SMTP_*, MYSQL_*, etc. apply (monorepo root .env is not auto-loaded by Node).
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+// Load env before ./config so SMTP_*, MYSQL_*, etc. apply (monorepo root .env is
+// not auto-loaded by Node). Requiring the shared env module performs the load and
+// honours APP_ENV / ENV_FILE, so `dev:prod` reaches .env.production here too.
+require('../../../shared/env');
+// Optional service-local override, kept from the original loader for parity with
+// any deployment that ships one. No-op when absent; never overrides vars already set.
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 
 const config = require('./config');
 const { createApp } = require('./app');
