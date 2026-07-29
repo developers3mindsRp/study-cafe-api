@@ -28,6 +28,7 @@ function register(router) {
   router.get('/internal/coupon-usages/summary', internalAuth, ordersController.getCouponUsageSummaryInternal);
   router.get('/internal/orders/:orderId', internalAuth, ordersController.getByOrderIdInternal);
   router.post('/internal/orders', internalAuth, ordersController.createManualOrder);
+  router.post('/internal/orders/course-bulk', internalAuth, ordersController.createBulkCourseOrders);
   router.put('/internal/orders/:id', internalAuth, ordersController.updateOrder);
   router.post('/internal/orders/:id/refund', internalAuth, ordersController.refundOrder);
   router.post('/internal/orders/:id/restore', internalAuth, ordersController.restoreOrder);

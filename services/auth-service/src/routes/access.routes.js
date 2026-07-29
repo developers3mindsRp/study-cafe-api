@@ -25,7 +25,10 @@ function register(router) {
     const emails = Array.isArray(req.body.emails) ? req.body.emails : [];
     const rows = await User.findAll({
       where: { email: emails },
-      attributes: ['id', 'name', 'email'],
+      // `phone` backs buyer_mobile on bulk-allotment orders — without it every order
+      // created from a bulk run stored a null mobile while the single-user path (which
+      // reads /internal/users/:id/contact) stored the real one.
+      attributes: ['id', 'name', 'email', 'phone'],
     });
     sendSuccess(res, rows.map((r) => r.get({ plain: true })));
   }));
