@@ -1070,6 +1070,82 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
   }
 }
 
+/**
+ * How recently a PAID order for the same course refuses a fresh paid checkout.
+ *
+ * Deliberately short. A repurchase weeks or months later is legitimate here — the same
+ * course is re-run as a new cohort, and learners do buy a later run — so the guard only
+ * covers the double-submit / double-payment window (a customer clicking Buy Now twice, or
+ * paying again because the first success screen never loaded). Widening this would start
+ * rejecting real payments: of the 231 historical duplicate pairs, only 13 were inside
+ * 30 minutes while 146 were 30 days to 12 months apart.
+ */
+const DUPLICATE_PAID_ORDER_WINDOW_MS = 15 * 60 * 1000;
+
+/**
+ * The live order (if any) by which this user already bought this exact course, plus whether
+ * the access it granted is still open.
+ *
+ * `Order` is paranoid, so an order moved to trash does NOT count — deleting a test order
+ * deliberately frees the learner to register again.
+ *
+ * Access window follows the same rule as listMyPurchases: `user_courses` is the live source
+ * of truth (no row = no access, expires_at NULL = lifetime, otherwise compare to now), and a
+ * legacy migrated order carrying wp_post_status='publish' is authoritative-active on its own.
+ *
+ * Returns null when the user never bought this course — note that membership-derived access
+ * writes no course order, so a membership learner buying the course standalone is never
+ * caught here.
+ */
+async function findExistingCoursePurchase(userId, entityIdStr) {
+  const uid = Number(userId);
+  const cid = Number(entityIdStr);
+  if (!Number.isFinite(uid) || uid <= 0 || !Number.isFinite(cid) || cid <= 0) return null;
+
+  const existing = await Order.findOne({
+    where: {
+      user_id: uid,
+      type: 'course',
+      entity_id: String(entityIdStr),
+      [Op.or]: [
+        { status: { [Op.in]: PAID_ORDER_STATUSES } },
+        { wp_post_status: 'publish' },
+      ],
+    },
+    order: [['created_at', 'DESC']],
+  });
+  if (!existing) return null;
+  const order = existing.get({ plain: true });
+
+  let grantRow = null;
+  try {
+    const rows = await sequelize.query(
+      `SELECT expires_at FROM user_courses WHERE user_id = :uid AND course_id = :cid LIMIT 1`,
+      { replacements: { uid, cid }, type: QueryTypes.SELECT }
+    );
+    grantRow = rows[0] || null;
+  } catch (err) {
+    // Never let an access lookup failure block a checkout — fall through as "no grant",
+    // which only ever makes the guard MORE permissive.
+    logger.warn(`[orders] access-window lookup failed for user ${uid} course ${cid}: ${err.message}`);
+  }
+
+  const grantExpiresAt = grantRow ? grantRow.expires_at ?? null : null;
+  const grantActive = !!grantRow && (!grantExpiresAt || new Date(grantExpiresAt) > new Date());
+  const accessActive = grantActive || order.wp_post_status === 'publish';
+
+  return { order, accessActive, accessExpiresAt: grantActive ? grantExpiresAt : null };
+}
+
+function formatAccessExpiryLabel(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString('en-IN', {
+    day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata',
+  });
+}
+
 // ─── createOrder ─────────────────────────────────────────────────────────────
 // SECURITY: Always fetches price from backend. Client-supplied `amount` is IGNORED.
 // Coupon is validated server-side and discount recorded on the order row.
@@ -1146,6 +1222,77 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
   // 3. Apply 18% GST on the post-discount amount
   const gstAmount = Number((afterDiscount * GST_RATE).toFixed(2));
   const grandTotal = Number((afterDiscount + gstAmount).toFixed(2));
+
+  // 3b. Already-owned guard for COURSE (MEMBERSHIP has its own upgrade guard in 1b above).
+  //
+  // The Redis lock below only holds for the duration of one request — it is deleted the
+  // moment the order succeeds — so it stops concurrent submits but not a second click a
+  // few seconds later. And the pending/failed row-reuse further down cannot see an already
+  // PAID order, so every repeat click used to insert a fresh paid row: one learner, many
+  // orders. That is the whole "17 enrolled / 18 orders" gap (all Rs.0 registrations).
+  //
+  // Two different situations, deliberately handled differently:
+  //  - Nothing to charge (free course / 100% coupon) and access still open → there is
+  //    nothing to create, so hand back the order the learner already has. Idempotent, and
+  //    the caller cannot tell it apart from a fresh free registration.
+  //  - Real money → only the double-payment window is refused (see the constant). Access
+  //    being active is NOT enough to reject a paid checkout.
+  //
+  // Expired access always falls through to a normal new order in both cases: that is a
+  // genuine renewal and must keep working.
+  if (typeUpper === 'COURSE') {
+    const owned = await findExistingCoursePurchase(userId, entityId);
+    if (owned) {
+      if (grandTotal <= 0 && owned.accessActive) {
+        const contact = await fetchUserContact(userId);
+        logger.info(
+          `[orders] free re-registration ignored for user ${userId} course ${entityId} — already held by order ${owned.order.order_id}`
+        );
+        return {
+          orderId: owned.order.order_id,
+          free: true,
+          paid: true,
+          // Lets a caller distinguish "you already had this" from a brand-new free
+          // registration. Existing callers that only check `free && paid` are unaffected.
+          alreadyEnrolled: true,
+          accessExpiresAt: owned.accessExpiresAt
+            ? new Date(owned.accessExpiresAt).toISOString()
+            : null,
+          razorpayOrderId: null,
+          amount: 0,
+          originalAmount: Math.round(originalAmount * 100),
+          upgradeAdjustment: 0,
+          adjustedMembershipAmount: Math.round(adjustedAmount * 100),
+          discountAmount: Math.round(discountAmount * 100),
+          gstAmount: Math.round(gstAmount * 100),
+          grandTotal: 0,
+          currency,
+          key: null,
+          prefill: {
+            name: contact?.name || '',
+            email: contact?.email || '',
+            contact: contact?.phone || '',
+          },
+        };
+      }
+
+      if (grandTotal > 0) {
+        const placedAt = new Date(owned.order.created_at).getTime();
+        const ageMs = Number.isFinite(placedAt) ? Date.now() - placedAt : Infinity;
+        if (ageMs >= 0 && ageMs < DUPLICATE_PAID_ORDER_WINDOW_MS) {
+          const expiryLabel = formatAccessExpiryLabel(owned.accessExpiresAt);
+          throw new AppError(
+            `Your payment for this course has already gone through (order ${owned.order.order_id}). ` +
+              (expiryLabel
+                ? `Your access is valid until ${expiryLabel}. `
+                : 'The course is already available in My Courses. ') +
+              'Please wait a few minutes before trying again, or contact support if you cannot see it.',
+            409
+          );
+        }
+      }
+    }
+  }
 
   // 4. Guard: idempotency lock per (user, type, entity) — prevents race-created duplicates
   const lockKey = `order:lock:${userId}:${typeUpper}:${entityId}`;
