@@ -87,6 +87,17 @@ function normalizeStructuredFeatures(raw) {
 }
 
 /**
+ * Public plan shape for `features`: `mrp` is stored inside the features JSON but it is a
+ * price, not a feature line — lift it to a top-level `mrp` key next to `price` so the site
+ * can render the strike-through amount without digging into `features`.
+ * Internal/admin responses keep `mrp` inside `features` (that's what the admin form posts).
+ */
+function splitPlanFeatures(raw) {
+  const { mrp, ...features } = normalizeStructuredFeatures(raw);
+  return { mrp, features };
+}
+
+/**
  * Robust read of MySQL TINYINT(1)/BOOLEAN columns (avoid `!!'0'` and Sequelize upsert edge cases).
  */
 function coerceSqlBoolean(value) {
@@ -958,7 +969,7 @@ async function getPlansPublic() {
       const feat = f.get({ plain: true });
       return { id: feat.id, name: feat.name, available: planAvail.get(feat.id) ?? false };
     });
-    return { ...p, features: normalizeStructuredFeatures(p.features), comparison_features };
+    return { ...p, ...splitPlanFeatures(p.features), comparison_features };
   });
 }
 
@@ -988,7 +999,7 @@ async function getPlanBySlugPublic(slug) {
     return { id: feat.id, name: feat.name, available: availMap.get(feat.id) ?? false };
   });
 
-  return { ...p, features: normalizeStructuredFeatures(p.features), comparison_features };
+  return { ...p, ...splitPlanFeatures(p.features), comparison_features };
 }
 
 async function getPlansInternal() {
@@ -4291,7 +4302,7 @@ async function upsertCmsPageBySlug(slug, data) {
 // ── Media (unified table: WordPress legacy + admin library + icons) ──
 
 const IMAGE_URL_EXT = /\.(jpe?g|png|gif|webp|svg)(\?.*)?$/i;
-const DOC_URL_EXT = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx)(\?.*)?$/i;
+const DOC_URL_EXT = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|zip)(\?.*)?$/i;
 
 function formatMediaRow(row) {
   const plain = typeof row.get === 'function' ? row.get({ plain: true }) : row;
@@ -4318,6 +4329,7 @@ function buildMediaAssetTypeWhere(type) {
         { mime_type: 'application/pdf' },
         { mime_type: { [Op.like]: 'application/vnd.%' } },
         { mime_type: 'application/msword' },
+        { mime_type: { [Op.like]: '%zip%' } },
         { mime_type: 'application/octet-stream' },
         { url: { [Op.regexp]: DOC_URL_EXT.source } },
       ],

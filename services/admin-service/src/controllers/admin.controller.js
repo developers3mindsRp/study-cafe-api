@@ -415,16 +415,24 @@ const listBatches = asyncHandler(async (req, res) => {
       },
     })
   ).data;
-  // courseClient interceptor spreads meta fields to root: { data, total, page, limit, ... }
+  // courseClient deliberately does NOT unwrap paginated responses (it skips any body with
+  // a `meta` key), so course-service's counts arrive under payload.meta — not at the root.
+  // Reading them off the root reported total: 0 on every request, which also silently
+  // disabled the Live Sessions batch table's pagination (it renders only when total > 0).
+  // Root is kept as a fallback in case the upstream shape is ever flattened.
+  const upstreamMeta =
+    payload && typeof payload === 'object' && payload.meta && typeof payload.meta === 'object'
+      ? payload.meta
+      : payload || {};
   sendPaginated(res, {
     data: Array.isArray(payload.data) ? payload.data : [],
     meta: {
-      total: payload.total ?? 0,
-      page: payload.page ?? 1,
-      limit: payload.limit ?? 10,
-      totalPages: payload.totalPages ?? 0,
-      hasNextPage: payload.hasNextPage ?? false,
-      hasPreviousPage: payload.hasPreviousPage ?? false,
+      total: upstreamMeta.total ?? 0,
+      page: upstreamMeta.page ?? 1,
+      limit: upstreamMeta.limit ?? 10,
+      totalPages: upstreamMeta.totalPages ?? 0,
+      hasNextPage: upstreamMeta.hasNextPage ?? false,
+      hasPreviousPage: upstreamMeta.hasPreviousPage ?? false,
     },
   });
 });

@@ -43,13 +43,27 @@ function destinationToYearMonth(_req, _file, cb) {
   cb(null, dest);
 }
 
+// Slugified original name, so stored files stay recognisable in copied URLs
+// (e.g. gst-notice-banner-1785474085524-jx561i5.jpg). The timestamp + random
+// suffix still guarantees uniqueness, so same-named uploads never collide.
+function sanitizeBaseName(originalname) {
+  const base = path
+    .basename(originalname || '', path.extname(originalname || ''))
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  return base || 'file';
+}
+
 // ── Image storage (existing) ────────────────────────────────────────
 const imageStorage = multer.diskStorage({
   destination: destinationToYearMonth,
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname) || '.jpg';
     const safeExt = /^\.(jpe?g|png|gif|webp|svg)$/i.test(ext) ? ext : '.jpg';
-    const name = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${safeExt}`;
+    const slug = sanitizeBaseName(file.originalname);
+    const name = `${slug}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${safeExt}`;
     cb(null, name);
   },
 });
@@ -67,7 +81,7 @@ const uploadImage = multer({
 }).single('file');
 
 // ── Generic file (PDF + Office docs) storage ───────────────────────
-const ALLOWED_DOC_EXTENSIONS = /^\.(pdf|doc|docx|xls|xlsx|ppt|pptx)$/i;
+const ALLOWED_DOC_EXTENSIONS = /^\.(pdf|doc|docx|xls|xlsx|ppt|pptx|zip)$/i;
 const ALLOWED_DOC_MIME_TYPES = new Set([
   'application/pdf',
   'application/msword',
@@ -76,19 +90,14 @@ const ALLOWED_DOC_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-powerpoint',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  // ZIP mime varies by browser/OS (Chrome/Windows sends x-zip-compressed)
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-zip',
+  'multipart/x-zip',
   // Some browsers/clients send octet-stream for .doc/.xls — accept and validate via extension
   'application/octet-stream',
 ]);
-
-function sanitizeBaseName(originalname) {
-  const base = path
-    .basename(originalname || '', path.extname(originalname || ''))
-    .toLowerCase()
-    .replace(/[^a-z0-9-_]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60);
-  return base || 'file';
-}
 
 const fileStorage = multer.diskStorage({
   destination: destinationToYearMonth,
@@ -106,7 +115,7 @@ const fileFilter = (_req, file, cb) => {
   const extOk = ALLOWED_DOC_EXTENSIONS.test(ext);
   const mimeOk = ALLOWED_DOC_MIME_TYPES.has(file.mimetype);
   if (extOk && mimeOk) cb(null, true);
-  else cb(new AppError('Only PDF and Office documents (.pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx) are allowed', 400), false);
+  else cb(new AppError('Only PDF, Office documents and ZIP archives (.pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx, .zip) are allowed', 400), false);
 };
 
 const uploadFile = multer({
