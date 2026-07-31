@@ -4302,7 +4302,7 @@ async function upsertCmsPageBySlug(slug, data) {
 // ── Media (unified table: WordPress legacy + admin library + icons) ──
 
 const IMAGE_URL_EXT = /\.(jpe?g|png|gif|webp|svg)(\?.*)?$/i;
-const DOC_URL_EXT = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx)(\?.*)?$/i;
+const DOC_URL_EXT = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|zip)(\?.*)?$/i;
 
 function formatMediaRow(row) {
   const plain = typeof row.get === 'function' ? row.get({ plain: true }) : row;
@@ -4329,6 +4329,7 @@ function buildMediaAssetTypeWhere(type) {
         { mime_type: 'application/pdf' },
         { mime_type: { [Op.like]: 'application/vnd.%' } },
         { mime_type: 'application/msword' },
+        { mime_type: { [Op.like]: '%zip%' } },
         { mime_type: 'application/octet-stream' },
         { url: { [Op.regexp]: DOC_URL_EXT.source } },
       ],

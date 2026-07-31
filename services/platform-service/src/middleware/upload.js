@@ -81,7 +81,7 @@ const uploadImage = multer({
 }).single('file');
 
 // ── Generic file (PDF + Office docs) storage ───────────────────────
-const ALLOWED_DOC_EXTENSIONS = /^\.(pdf|doc|docx|xls|xlsx|ppt|pptx)$/i;
+const ALLOWED_DOC_EXTENSIONS = /^\.(pdf|doc|docx|xls|xlsx|ppt|pptx|zip)$/i;
 const ALLOWED_DOC_MIME_TYPES = new Set([
   'application/pdf',
   'application/msword',
@@ -90,6 +90,11 @@ const ALLOWED_DOC_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-powerpoint',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  // ZIP mime varies by browser/OS (Chrome/Windows sends x-zip-compressed)
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-zip',
+  'multipart/x-zip',
   // Some browsers/clients send octet-stream for .doc/.xls — accept and validate via extension
   'application/octet-stream',
 ]);
@@ -110,7 +115,7 @@ const fileFilter = (_req, file, cb) => {
   const extOk = ALLOWED_DOC_EXTENSIONS.test(ext);
   const mimeOk = ALLOWED_DOC_MIME_TYPES.has(file.mimetype);
   if (extOk && mimeOk) cb(null, true);
-  else cb(new AppError('Only PDF and Office documents (.pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx) are allowed', 400), false);
+  else cb(new AppError('Only PDF, Office documents and ZIP archives (.pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx, .zip) are allowed', 400), false);
 };
 
 const uploadFile = multer({

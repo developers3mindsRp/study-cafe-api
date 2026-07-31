@@ -19,7 +19,7 @@ const uploadImage = multer({
 // ── Generic file (PDF + Office docs) ─────────────────────────────────
 // Mirrors platform-service/src/middleware/upload.js so the admin layer rejects
 // disallowed types early (before forwarding) and surfaces a clean error.
-const ALLOWED_DOC_EXTENSIONS = /^\.(pdf|doc|docx|xls|xlsx|ppt|pptx)$/i;
+const ALLOWED_DOC_EXTENSIONS = /^\.(pdf|doc|docx|xls|xlsx|ppt|pptx|zip)$/i;
 const ALLOWED_DOC_MIME_TYPES = new Set([
   'application/pdf',
   'application/msword',
@@ -28,6 +28,10 @@ const ALLOWED_DOC_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-powerpoint',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-zip',
+  'multipart/x-zip',
   'application/octet-stream',
 ]);
 
@@ -36,7 +40,7 @@ const fileFilter = (_req, file, cb) => {
   const extOk = ALLOWED_DOC_EXTENSIONS.test(ext);
   const mimeOk = ALLOWED_DOC_MIME_TYPES.has(file.mimetype);
   if (extOk && mimeOk) cb(null, true);
-  else cb(new Error('Only PDF and Office documents (.pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx) are allowed'), false);
+  else cb(new Error('Only PDF, Office documents and ZIP archives (.pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx, .zip) are allowed'), false);
 };
 
 const uploadFile = multer({
