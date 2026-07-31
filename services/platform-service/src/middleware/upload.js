@@ -43,13 +43,27 @@ function destinationToYearMonth(_req, _file, cb) {
   cb(null, dest);
 }
 
+// Slugified original name, so stored files stay recognisable in copied URLs
+// (e.g. gst-notice-banner-1785474085524-jx561i5.jpg). The timestamp + random
+// suffix still guarantees uniqueness, so same-named uploads never collide.
+function sanitizeBaseName(originalname) {
+  const base = path
+    .basename(originalname || '', path.extname(originalname || ''))
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  return base || 'file';
+}
+
 // ── Image storage (existing) ────────────────────────────────────────
 const imageStorage = multer.diskStorage({
   destination: destinationToYearMonth,
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname) || '.jpg';
     const safeExt = /^\.(jpe?g|png|gif|webp|svg)$/i.test(ext) ? ext : '.jpg';
-    const name = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${safeExt}`;
+    const slug = sanitizeBaseName(file.originalname);
+    const name = `${slug}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${safeExt}`;
     cb(null, name);
   },
 });
@@ -79,16 +93,6 @@ const ALLOWED_DOC_MIME_TYPES = new Set([
   // Some browsers/clients send octet-stream for .doc/.xls — accept and validate via extension
   'application/octet-stream',
 ]);
-
-function sanitizeBaseName(originalname) {
-  const base = path
-    .basename(originalname || '', path.extname(originalname || ''))
-    .toLowerCase()
-    .replace(/[^a-z0-9-_]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60);
-  return base || 'file';
-}
 
 const fileStorage = multer.diskStorage({
   destination: destinationToYearMonth,
