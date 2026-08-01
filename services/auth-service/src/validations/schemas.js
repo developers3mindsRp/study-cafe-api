@@ -23,6 +23,22 @@ const register = {
     }),
 };
 
+/**
+ * Checkout signup (/signup) — identity + credential only.
+ * Profession / city / state are collected later via PATCH /user/profile so a
+ * course link does not put a 10-field form between the buyer and the payment.
+ */
+const registerQuick = {
+    body: Joi.object({
+        email: Joi.string().email().required(),
+        password: Joi.string().min(6).max(128).required(),
+        confirmPassword: Joi.string().max(128).allow('', null),
+        name: Joi.string().trim().min(1).max(255).required(),
+        phone: e164Phone.required(),
+        referralCode: Joi.string().max(32).allow('', null),
+    }),
+};
+
 const login = {
     body: Joi.object({
         // Email, WP username (login), or legacy numeric Studycafe / wp_user_id
@@ -192,6 +208,7 @@ const removeMembership = {
 
 module.exports = {
     register,
+    registerQuick,
     login,
     loginOtpRequest,
     loginOtp,

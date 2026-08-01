@@ -261,88 +261,40 @@ async function sessionFromUserEntity(user) {
   };
 }
 
-async function register({
-  email,
-  password,
-  name,
-  referralCode,
-  phone,
-  profession,
-  company,
-  designation,
-  city,
-  state,
-  country,
-  gst,
-}) {
-  const userRole = await Role.findOne({
-    where: { name: 'user' },
-    attributes: ['id'],
-  });
-  if (!userRole) {
-    throw new AppError('Default user role is not configured', 500);
-  }
-
-  let referredBy = null;
-  if (referralCode) {
-    const referrer = await User.findOne({ where: { referral_code: referralCode } });
-    if (referrer) referredBy = referrer.id;
-  }
-
-  const emailNorm = String(email).trim().toLowerCase();
-  const phoneNorm = phone ? String(phone).trim() : null;
-
-  const [emailTaken, phoneTaken] = await Promise.all([
-    User.findOne({ where: { email: emailNorm }, attributes: ['id'] }),
-    phoneNorm ? User.findOne({ where: { phone: phoneNorm }, attributes: ['id'] }) : Promise.resolve(null),
-  ]);
-  if (emailTaken) {
-    throw new AppError('This email is already registered. Try signing in or use a different email.', 409);
-  }
-  if (phoneTaken) {
-    throw new AppError('This phone number is already registered. Sign in or use a different number.', 409);
-  }
-
-  const password_hash = await bcrypt.hash(password, 10);
-  const newReferralCode = generateReferralCode();
-  const user = await User.scope('withPassword').create({
-    email: emailNorm,
-    password_hash,
-    name: name ? String(name).trim() : null,
-    phone: phoneNorm,
-    profession: profession ? String(profession).trim() : null,
-    company: emptyToNull(company),
-    designation: emptyToNull(designation),
-    city: city ? String(city).trim() : null,
-    state: state ? String(state).trim() : null,
-    country:
-      country != null && String(country).trim() !== ''
-        ? String(country).trim()
-        : 'India',
-    gst: gst ? String(gst).trim() : null,
-    role_id: userRole.id,
-    referral_code: newReferralCode,
-    referred_by: referredBy,
-    referred_at: referredBy ? new Date() : null,
-    email_verified_at: null
-  });
-
+/**
+ * Save the verification code, then hand the email to SMTP without blocking the
+ * response. The account is already committed by the time this runs, so a slow
+ * or failing mail server must not time the request out — the browser's 15s
+ * limit used to fire first, leaving an account that the obvious retry could
+ * only collide with. Delivery failures are recoverable from the OTP screen's
+ * "Resend code".
+ */
+async function dispatchSignupOtp({ userId, email }) {
   const otp = generateSixDigitOtp();
-  await saveOtp('verify_email', String(user.id), otp);
-  const sendResult = await emailService.sendOtpEmail({ to: emailNorm, otp, purpose: 'signup' });
-  if (!sendResult.sent) {
-    logger.warn('[register] OTP not emailed (configure SMTP_HOST for production)', {
-      email: emailNorm,
-      otp,
-      reason: sendResult.reason,
+  await saveOtp('verify_email', String(userId), otp);
+
+  emailService
+    .sendOtpEmail({ to: email, otp, purpose: 'signup' })
+    .then((result) => {
+      if (!result.sent) {
+        logger.warn('[register] OTP not emailed (configure SMTP_HOST for production)', {
+          email,
+          otp,
+          reason: result.reason,
+        });
+      }
+    })
+    .catch((err) => {
+      logger.error('[register] OTP email failed — user can request a new code', {
+        email,
+        err: err?.message || String(err),
+      });
     });
-  }
+}
 
-  emailService.sendWelcomeEmail({ to: emailNorm, name: name ? String(name).trim() : null }).catch((err) => {
-    logger.warn('[register] Welcome email failed (non-blocking)', { email: emailNorm, err: err?.message });
-  });
-
-  const withRole = await User.findByPk(user.id, {
+/** Signup response shape, shared by a fresh account and a resumed one. */
+async function signupResultForUser(userId) {
+  const withRole = await User.findByPk(userId, {
     include: [roleIncludeForSession()],
     attributes: [
       'id', 'email', 'name', 'referral_code', 'phone', 'profession', 'company', 'designation',
@@ -373,6 +325,172 @@ async function register({
     bank_branch: r.bank_branch || null,
     bank_details_updated_at: r.bank_details_updated_at || null,
   };
+}
+
+/**
+ * Recover a signup that was committed here but never reached the browser.
+ *
+ * A dropped connection — or the client timing out on a slow mail server — left
+ * an unverified account holding the email and phone, so the natural retry
+ * dead-ended on "this email is already registered" with no way forward.
+ * Re-submitting the same credentials now resumes that account: new code, new
+ * session, same row.
+ *
+ * Only unverified, self-registered accounts qualify, and only when the password
+ * matches — which proves exactly as much as signing in would. Everything else
+ * falls through to the usual 409.
+ */
+async function resumeUnverifiedSignup(existing, { password, name, phoneNorm, phoneOwnerId }) {
+  const plain = existing.get({ plain: true });
+  if (plain.is_active !== true) return null;
+  if (plain.wp_user_id != null) return null; // migrated WP accounts sign in normally
+  if (userIsEmailVerified(plain)) return null;
+
+  const passwordValid = await verifyAndMaybeUpgradePassword(password, existing);
+  if (!passwordValid) return null;
+
+  // A number that now belongs to somebody else still blocks the retry.
+  if (phoneNorm && phoneOwnerId != null && String(phoneOwnerId) !== String(plain.id)) {
+    throw new AppError('This phone number is already registered. Sign in or use a different number.', 409);
+  }
+
+  const patch = {};
+  const nameTrimmed = name ? String(name).trim() : '';
+  if (nameTrimmed && nameTrimmed !== plain.name) patch.name = nameTrimmed;
+  if (phoneNorm && phoneNorm !== plain.phone) patch.phone = phoneNorm;
+  if (Object.keys(patch).length > 0) await existing.update(patch);
+
+  await dispatchSignupOtp({ userId: plain.id, email: plain.email });
+  logger.info('[register] resumed an unverified signup', { userId: plain.id });
+  return signupResultForUser(plain.id);
+}
+
+/**
+ * Shared account creation for both signup paths:
+ *   register()      — full profile form on /register (unchanged)
+ *   registerQuick() — checkout signup on /signup
+ * Fields the quick path does not ask for arrive undefined and are stored as null;
+ * they are collected later through PATCH /user/profile.
+ */
+async function createUserAccount({
+  email,
+  password,
+  name,
+  referralCode,
+  phone,
+  profession,
+  company,
+  designation,
+  city,
+  state,
+  country,
+  gst,
+}) {
+  const userRole = await Role.findOne({
+    where: { name: 'user' },
+    attributes: ['id'],
+  });
+  if (!userRole) {
+    throw new AppError('Default user role is not configured', 500);
+  }
+
+  let referredBy = null;
+  if (referralCode) {
+    const referrer = await User.findOne({ where: { referral_code: referralCode } });
+    if (referrer) referredBy = referrer.id;
+  }
+
+  const emailNorm = String(email).trim().toLowerCase();
+  const phoneNorm = phone ? String(phone).trim() : null;
+
+  const [existingByEmail, existingByPhone] = await Promise.all([
+    User.scope('withPassword').findOne({ where: { email: emailNorm } }),
+    phoneNorm ? User.findOne({ where: { phone: phoneNorm }, attributes: ['id'] }) : Promise.resolve(null),
+  ]);
+  if (existingByEmail) {
+    const resumed = await resumeUnverifiedSignup(existingByEmail, {
+      password,
+      name,
+      phoneNorm,
+      phoneOwnerId: existingByPhone ? existingByPhone.id : null,
+    });
+    if (resumed) return resumed;
+    throw new AppError('This email is already registered. Try signing in or use a different email.', 409);
+  }
+  if (existingByPhone) {
+    throw new AppError('This phone number is already registered. Sign in or use a different number.', 409);
+  }
+
+  const password_hash = await bcrypt.hash(password, 10);
+  const newReferralCode = generateReferralCode();
+  const user = await User.scope('withPassword').create({
+    email: emailNorm,
+    password_hash,
+    name: name ? String(name).trim() : null,
+    phone: phoneNorm,
+    profession: profession ? String(profession).trim() : null,
+    company: emptyToNull(company),
+    designation: emptyToNull(designation),
+    city: city ? String(city).trim() : null,
+    state: state ? String(state).trim() : null,
+    country:
+      country != null && String(country).trim() !== ''
+        ? String(country).trim()
+        : 'India',
+    gst: gst ? String(gst).trim() : null,
+    role_id: userRole.id,
+    referral_code: newReferralCode,
+    referred_by: referredBy,
+    referred_at: referredBy ? new Date() : null,
+    email_verified_at: null
+  });
+
+  await dispatchSignupOtp({ userId: user.id, email: emailNorm });
+
+  emailService.sendWelcomeEmail({ to: emailNorm, name: name ? String(name).trim() : null }).catch((err) => {
+    logger.warn('[register] Welcome email failed (non-blocking)', { email: emailNorm, err: err?.message });
+  });
+
+  return signupResultForUser(user.id);
+}
+
+async function register(fields) {
+  return createUserAccount(fields);
+}
+
+/** Offices and colleges NAT many genuine buyers behind one IP, so the IP bucket is deliberately looser than the per-email one. */
+const QUICK_REGISTER_IP_BUCKET_MULTIPLIER = 5;
+
+/**
+ * Quick signup is a short public form, so it carries its own throttle — the
+ * gateway's rateLimit middleware exists but is not mounted on any route.
+ * Per-email stops someone OTP-bombing one inbox. The IP bucket is applied only
+ * when a proxy actually gave us a client IP; without that check every signup
+ * would share the gateway's own IP and one bucket could lock out the whole site.
+ */
+async function rateLimitQuickRegister({ emailNorm, clientIp }) {
+  const maxPerHour = config.quickRegisterMaxPerHour ?? config.loginOtpMaxPerHour;
+  const buckets = [{ key: `ratelimit:register_quick:email:${emailNorm}`, max: maxPerHour }];
+  if (clientIp) {
+    buckets.push({
+      key: `ratelimit:register_quick:ip:${clientIp}`,
+      max: maxPerHour * QUICK_REGISTER_IP_BUCKET_MULTIPLIER,
+    });
+  }
+
+  const redis = await getRedis();
+  for (const bucket of buckets) {
+    const n = await redis.incr(bucket.key);
+    if (n === 1) await redis.expire(bucket.key, 3600);
+    if (n > bucket.max) {
+      throw new AppError('Too many signup attempts. Try again later.', 429);
+    }
+  }
+}
+
+async function registerQuick({ email, password, name, phone, referralCode, clientIp }) {
+  await rateLimitQuickRegister({ emailNorm: String(email).trim().toLowerCase(), clientIp });
+  return createUserAccount({ email, password, name, phone, referralCode });
 }
 
 async function findActiveUserByLoginIdentifier(identifier) {
@@ -662,6 +780,7 @@ module.exports = {
   verifyAccess,
   verifyRefresh,
   register,
+  registerQuick,
   loginWithPassword,
   loginWithEmailOtp,
   requestLoginOtp,

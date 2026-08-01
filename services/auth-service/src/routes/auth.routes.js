@@ -4,6 +4,7 @@ const { validate } = require('../../../../shared');
 
 function register(router) {
   router.post('/auth/register', validate(schemas.register), authController.register);
+  router.post('/auth/register/quick', validate(schemas.registerQuick), authController.registerQuick);
   router.post('/auth/login', validate(schemas.login), authController.login);
   router.post('/auth/login/otp/request', validate(schemas.loginOtpRequest), authController.loginRequestOtp);
   router.post('/auth/login/otp', validate(schemas.loginOtp), authController.loginWithOtp);

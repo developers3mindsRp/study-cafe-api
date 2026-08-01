@@ -8,6 +8,8 @@ function register(app) {
     target: config.authServiceUrl,
     changeOrigin: true,
     pathRewrite: { '^/api/auth': '/auth', '^/api/access': '/access' },
+    /** Pass the caller's IP through so auth-service can throttle signup per client, not per gateway. */
+    xfwd: true,
   });
   const courseProxy = createProxyMiddleware({
     target: config.courseServiceUrl,

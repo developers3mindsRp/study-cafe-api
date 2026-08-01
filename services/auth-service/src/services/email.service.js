@@ -54,6 +54,14 @@ async function getTransporter() {
           user: config.smtp.user,
           pass: config.smtp.pass,
         },
+        /**
+         * Bound every send. Nodemailer defaults to 2 min to connect and 10 min
+         * on the socket, so an unresponsive host would otherwise hold the
+         * request (and its socket) far past any client timeout.
+         */
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 30000,
       })
     );
   }

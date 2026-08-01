@@ -1,6 +1,7 @@
 const {
   required,
   requiredInt,
+  optionalInt,
   mysqlConfig,
   serviceUrl,
 } = require('../../../../shared/env');
@@ -21,6 +22,8 @@ module.exports = {
   otpPepper: required('OTP_PEPPER'),
   otpTtlSeconds: requiredInt('OTP_TTL_SECONDS'),
   loginOtpMaxPerHour: requiredInt('LOGIN_OTP_RATE_PER_HOUR'),
+  /** Optional — quick signup falls back to LOGIN_OTP_RATE_PER_HOUR when unset. */
+  quickRegisterMaxPerHour: optionalInt('QUICK_REGISTER_RATE_PER_HOUR'),
   smtp: {
     host: required('SMTP_HOST'),
     port: requiredInt('SMTP_PORT'),

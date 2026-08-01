@@ -7,6 +7,50 @@ function bearerToken(req) {
   return auth.slice(7);
 }
 
+/** Client IP from the proxy chain, or null when nothing upstream set one (see rateLimitQuickRegister). */
+function forwardedClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim().slice(0, 45);
+  }
+  const realIp = req.headers['x-real-ip'];
+  if (typeof realIp === 'string' && realIp.trim()) return realIp.trim().slice(0, 45);
+  return null;
+}
+
+/** Session payload returned by both signup paths — keep the shape identical. */
+function newAccountSession(user) {
+  const accessToken = authService.signAccess({
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+    emailVerified: !!user.email_verified,
+  });
+  const refreshToken = authService.signRefresh({ userId: user.id });
+  return {
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      has_active_membership: !!user.has_active_membership,
+      phone: user.phone,
+      profession: user.profession,
+      company: user.company,
+      designation: user.designation,
+      city: user.city,
+      state: user.state,
+      country: user.country,
+      gst: user.gst || null,
+      referral_code: user.referral_code,
+      email_verified: !!user.email_verified,
+    },
+    accessToken,
+    refreshToken,
+    expiresIn: authService.expiresInSecondsFromAccessToken(accessToken),
+  };
+}
+
 const register = asyncHandler(async (req, res) => {
   const {
     email,
@@ -36,35 +80,24 @@ const register = asyncHandler(async (req, res) => {
     country,
     gst,
   });
-  const accessToken = authService.signAccess({
-    userId: user.id,
-    email: user.email,
-    role: user.role,
-    emailVerified: !!user.email_verified,
+  sendCreated(res, newAccountSession(user));
+});
+
+/** Checkout signup: name, email, phone, password only — everything else is collected after purchase. */
+const registerQuick = asyncHandler(async (req, res) => {
+  const { email, password, confirmPassword, name, phone, referralCode } = req.body;
+  if (confirmPassword && confirmPassword !== password) {
+    throw new AppError('Passwords do not match', 400);
+  }
+  const user = await authService.registerQuick({
+    email,
+    password,
+    name,
+    phone,
+    referralCode,
+    clientIp: forwardedClientIp(req),
   });
-  const refreshToken = authService.signRefresh({ userId: user.id });
-  sendCreated(res, {
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      has_active_membership: !!user.has_active_membership,
-      phone: user.phone,
-      profession: user.profession,
-      company: user.company,
-      designation: user.designation,
-      city: user.city,
-      state: user.state,
-      country: user.country,
-      gst: user.gst || null,
-      referral_code: user.referral_code,
-      email_verified: !!user.email_verified,
-    },
-    accessToken,
-    refreshToken,
-    expiresIn: authService.expiresInSecondsFromAccessToken(accessToken),
-  });
+  sendCreated(res, newAccountSession(user));
 });
 
 const login = asyncHandler(async (req, res) => {
@@ -187,6 +220,7 @@ const resetPassword = asyncHandler(async (req, res) => {
 
 module.exports = {
   register,
+  registerQuick,
   login,
   loginRequestOtp,
   loginWithOtp,
