@@ -260,7 +260,14 @@ async function fetchCourseMeta(courseId) {
 }
 
 function courseMatchesSearch(term, { title, slug, category }) {
-  const needle = String(term).trim().toLowerCase();
+  // `term == null` must short-circuit BEFORE String(): String(undefined) is the
+  // literal "undefined" (truthy), which slipped past the !needle guard and then
+  // matched nothing — silently filtering out EVERY course whenever no search was
+  // supplied. Both callers hit that path (the internal endpoint always passes no
+  // search; the student route passes undefined when the box is empty), so
+  // user_courses-only grants — admin allotments and membership-linked courses —
+  // vanished from "My Courses" and the admin user view.
+  const needle = term == null ? '' : String(term).trim().toLowerCase();
   if (!needle) return true;
   const fields = [title, slug, category].filter((v) => v != null && String(v).trim());
   return fields.some((v) => String(v).toLowerCase().includes(needle));
