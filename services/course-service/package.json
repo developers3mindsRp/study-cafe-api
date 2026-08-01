@@ -4,8 +4,8 @@
   "description": "StudyCafe Course & Content Service",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
+    "start": "node init && node src/server.js",
+    "dev": "node init && node --watch src/server.js",
     "migrate:affiliate-commission": "node scripts/add-courses-affiliate-commission-column.js",
     "migrate:detail-sections": "node scripts/add-courses-detail-sections-column.js"
   },

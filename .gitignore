@@ -1,10 +1,8 @@
 node_modules/
 /logs/
 package-lock.json
-.env
 # Every env variant (.env.production, .env.prod.bak, .env.local, …) holds real
 # credentials and must never be committed. .env.example is the only exception.
-.env.*
 !.env.example
 # Operational data drops (customer emails, payment ids) used by backfill scripts.
 # Sample/template CSVs are still tracked.
@@ -17,3 +15,4 @@ scripts/*.csv
 /infrastructure
 /postman
 **/uploads/
+config.bat
