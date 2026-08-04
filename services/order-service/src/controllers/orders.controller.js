@@ -148,6 +148,38 @@ const createBulkCourseOrders = asyncHandler(async (req, res) => {
   sendSuccess(res, results);
 });
 
+/**
+ * Bulk membership orders for admin allotment.
+ *
+ * Always record-only: admin allotment grants the membership itself, with the purchase
+ * date and expiry chosen on the form. Letting these orders fulfil themselves would
+ * re-grant each membership with now-based dates and fan out one COURSE_PURCHASED per
+ * linked plan course. See emitMembershipRecordOnlyOutbox.
+ */
+const createBulkMembershipOrders = asyncHandler(async (req, res) => {
+  const {
+    entity_id, amount, status, users, membership_starts_at, membership_expires_at, skip_email,
+  } = req.body;
+  if (!entity_id || !Array.isArray(users)) {
+    throw new AppError('entity_id and users[] are required', 400);
+  }
+  const results = await ordersService.createManualOrdersBulk({
+    type: 'membership',
+    entity_id,
+    amount,
+    status,
+    users,
+    skip_fulfillment: true,
+    // One Razorpay settlement commonly covers a whole allotment, so the same reference
+    // is accepted on every order in the run.
+    shared_payment_id: true,
+    skip_email: skip_email === true,
+    membership_starts_at,
+    membership_expires_at,
+  });
+  sendSuccess(res, results);
+});
+
 const updateOrder = asyncHandler(async (req, res) => {
   const result = await ordersService.updateOrder(req.params.id, req.body);
   if (!result) throw new AppError('Order not found', 404);
@@ -289,6 +321,7 @@ module.exports = {
   verifyPaymentLink,
   createManualOrder,
   createBulkCourseOrders,
+  createBulkMembershipOrders,
   updateOrder,
   deleteOrder,
   restoreOrder,
