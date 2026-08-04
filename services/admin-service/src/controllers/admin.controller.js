@@ -791,15 +791,21 @@ function parseAllotmentAmount(value) {
  * rows that leave those cells blank. Every rejection becomes a per-row `invalid` result
  * with a message the admin can act on — never a throw, so one bad row can't cost the
  * rest of the upload.
+ *
+ * `allowSharedPaymentId` reflects how the caller's order route books payments. Course
+ * allotment gives each order the payment id verbatim, so one id can only back one order
+ * and a repeat must be rejected here. Membership allotment books orders in shared mode
+ * (see sharedPaymentRef in orders.service), where one settlement reference legitimately
+ * covers the whole run — so repeats are allowed and the form-level id applies to every
+ * row rather than only a single-row upload.
  */
-function normalizeAllotmentEntries(body) {
+function normalizeAllotmentEntries(body, { allowSharedPaymentId = false } = {}) {
   const rawRows = Array.isArray(body.entries) && body.entries.length > 0
     ? body.entries
     : (Array.isArray(body.emails) ? body.emails.map((email) => ({ email })) : []);
 
-  // A Razorpay id is unique per order, so a single form-level id can only ever back one
-  // row — applied across a multi-row upload it would 409 every row after the first.
-  const defaultPaymentId = rawRows.length === 1 ? String(body.paymentId ?? '').trim() : '';
+  const defaultPaymentId =
+    allowSharedPaymentId || rawRows.length === 1 ? String(body.paymentId ?? '').trim() : '';
   const hasValue = (v) => v != null && String(v).trim() !== '';
 
   const rows = [];
@@ -837,7 +843,7 @@ function normalizeAllotmentEntries(body) {
       if (paymentId.length > MAX_PAYMENT_ID_LENGTH) {
         return reject(`Payment ID must be ${MAX_PAYMENT_ID_LENGTH} characters or fewer`);
       }
-      if (seenPaymentIds.has(paymentId)) {
+      if (!allowSharedPaymentId && seenPaymentIds.has(paymentId)) {
         return reject(`Payment ID ${paymentId} is used more than once in this file`);
       }
       seenPaymentIds.add(paymentId);
@@ -974,74 +980,233 @@ const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
   sendSuccess(res, results);
 });
 
+/**
+ * Bulk membership allotment — one order per allotted user.
+ *
+ * Mirrors the course-allotment flow (validated per-row entries, chunked bulk order
+ * creation, never fail the whole upload for one row) with two deliberate differences:
+ *
+ *  - ORDER FIRST, then grant. `revokeMembership` matches on { user_id, order_id }, so a
+ *    membership row with a null order_id can never be revoked when its order is
+ *    refunded. Booking the order first lets the grant carry the real order id. It also
+ *    gives clean per-row semantics: a duplicate payment id fails the order and the row
+ *    is reported, instead of leaving access granted with no revenue record.
+ *  - The orders are record-only (see emitMembershipRecordOnlyOutbox in order-service).
+ *    Access is granted here, with the admin's chosen dates; the order records the money
+ *    and triggers the membership email.
+ *
+ * Rows for users already active on this same plan are skipped entirely — no order, no
+ * grant. Re-uploading the same file is therefore a no-op rather than a second set of
+ * orders plus a membership row that expires the first. No tier-direction check is
+ * applied: an admin allotting a different plan replaces whatever is active.
+ */
 const bulkGrantMembershipByEmails = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
-  const { emails, membershipType, startsAt, expiresAt, price, paymentId, planValidity, planPurchasedFormatted, planExpiryFormatted } = req.body;
+  const { membershipType, startsAt, expiresAt, planValidity, planPurchasedFormatted, planExpiryFormatted } = req.body;
 
-  if (!Array.isArray(emails) || emails.length === 0) {
-    return sendSuccess(res, []);
-  }
   if (!membershipType || !startsAt || !expiresAt) {
     throw new AppError('membershipType, startsAt and expiresAt are required', 400);
   }
 
-  // Build the plan JSON object to store on users.plan when any payment detail is provided.
-  const planJson = (price || paymentId || planValidity || planPurchasedFormatted)
-    ? {
-        price: price ? String(price) : undefined,
-        plan_validity: planValidity ? String(planValidity) : undefined,
-        plan_purchased: planPurchasedFormatted || startsAt,
-        plan_expiry: planExpiryFormatted || expiresAt,
-        payment_id: paymentId ? String(paymentId) : undefined,
-      }
-    : null;
+  // Membership orders are booked in shared-payment mode, so one settlement reference can
+  // back every row and the form-level id applies to the whole upload.
+  const rows = normalizeAllotmentEntries(req.body, { allowSharedPaymentId: true });
+  if (rows.length === 0) {
+    return sendSuccess(res, []);
+  }
 
-  // Resolve emails → user ids
-  const { data: users } = await authClient.post('/internal/users/by-emails', { emails });
-  const userMap = new Map((Array.isArray(users) ? users : []).map((u) => [u.email.toLowerCase(), u]));
+  // Validate the plan up front. entity_id is stored as the slug, and an unknown slug
+  // would otherwise produce orders and membership rows pointing at nothing.
+  const { data: planList } = await platformClient.get('/internal/platform/plans', { params: { limit: 200 } });
+  const plans = Array.isArray(planList) ? planList : planList?.data ?? [];
+  const plan = plans.find((p) => p?.slug && String(p.slug).toLowerCase() === String(membershipType).toLowerCase());
+  if (!plan) {
+    throw new AppError(`Unknown membership plan "${membershipType}"`, 400);
+  }
 
-  const results = await mapWithConcurrency(emails, BULK_CONCURRENCY, async (email) => {
-      const normalized = email.toLowerCase();
-      const user = userMap.get(normalized);
-      if (!user) {
-        return { email: normalized, status: 'user_not_found' };
-      }
-      try {
-        await authClient.post('/access/grant-membership', {
-          userId: user.id,
-          membershipType,
-          startsAt,
-          expiresAt,
-          orderId: null,
-          ...(planJson ? { planJson } : {}),
-        });
+  /**
+   * Guard the backdated-allotment trap.
+   *
+   * `expiresAt` is derived from the admin's Date of Purchase plus the plan duration, so
+   * backdating further than the plan lasts produces an expiry already in the past. That
+   * grant lands dead on arrival: the order is booked and paid, but the membership row is
+   * expired, so the user has no access — and because the duplicate guard below only sees
+   * ACTIVE memberships, re-uploading the same file books a fresh order every time.
+   *
+   * Recording a genuinely lapsed historical purchase is legitimate, so this is an
+   * explicit opt-in rather than a hard block. Without it, the request is rejected.
+   */
+  const expiresAtDate = new Date(expiresAt);
+  const startsAtDate = new Date(startsAt);
+  if (Number.isNaN(expiresAtDate.getTime()) || Number.isNaN(startsAtDate.getTime())) {
+    throw new AppError('startsAt and expiresAt must be valid dates', 400);
+  }
+  const allotmentIsExpired = expiresAtDate <= new Date();
+  if (allotmentIsExpired && req.body.allowExpired !== true) {
+    throw new AppError(
+      `This allotment expires ${expiresAtDate.toISOString().slice(0, 10)}, which has already passed — `
+        + `every user would get a paid order but no access. Move the date of purchase forward, `
+        + `or confirm the expired backfill to proceed.`,
+      400,
+    );
+  }
 
-        // Create a manual order record when price or paymentId is provided
-        if (price || paymentId) {
-          try {
-            await orderClient.post('/internal/orders', {
-              user_id: user.id,
-              type: 'membership',
-              entity_id: membershipType,
-              amount: price ? Number(price) : 0,
-              buyer_email: user.email,
-              buyer_name: user.name || null,
-              buyer_mobile: user.phone || null,
-              status: 'paid',
-              payment_id: paymentId || undefined,
-            });
-          } catch (orderErr) {
-            console.error('[bulkGrantMembership] order creation failed:', orderErr?.response?.data ?? orderErr?.message ?? orderErr);
-          }
+  const pending = rows.filter((r) => r.status === 'pending');
+
+  // Resolve emails → users. Guarded: a user row with a null email would throw here and
+  // take down the whole upload before anything is allotted.
+  const { data: users } = await authClient.post('/internal/users/by-emails', {
+    emails: pending.map((r) => r.email),
+  });
+  const userMap = new Map(
+    (Array.isArray(users) ? users : [])
+      .filter((u) => u && typeof u.email === 'string')
+      .map((u) => [u.email.toLowerCase(), u]),
+  );
+
+  for (const row of pending) {
+    const user = userMap.get(row.email);
+    if (!user) {
+      row.status = 'user_not_found';
+      row.message = 'No registered user with this email';
+      continue;
+    }
+    row.user = user;
+  }
+
+  // Skip anyone already active on this same plan. One batched call — a row-by-row
+  // lookup would be 1000 requests on a full upload.
+  const resolved = rows.filter((r) => r.status === 'pending' && r.user);
+  if (resolved.length > 0) {
+    try {
+      const { data: active } = await authClient.post('/internal/users/active-memberships', {
+        userIds: resolved.map((r) => r.user.id),
+      });
+      const activeByUserId = new Map(
+        (Array.isArray(active) ? active : []).map((m) => [String(m.user_id), m]),
+      );
+      for (const row of resolved) {
+        const current = activeByUserId.get(String(row.user.id));
+        if (!current) continue;
+        const currentType = String(current.membership_type || '').toLowerCase();
+        if (currentType === String(membershipType).toLowerCase()) {
+          row.status = 'already_member';
+          // Phase 2 books no order for a skipped row, so a payment in this row is
+          // dropped. Say so rather than reporting a clean skip.
+          row.message = row.paymentId
+            ? `Already on ${plan.name} — the payment in this row was NOT recorded`
+            : `Already on ${plan.name}`;
+        } else {
+          // Allotted anyway — admins are not subject to the tier-direction rule the
+          // checkout path enforces. Named so the admin can see what was replaced.
+          row.replacedPlan = current.membership_type;
         }
-
-        await adminLogsService.logAction(adminId, 'BULK_GRANT_MEMBERSHIP', 'user_membership', String(user.id), { membershipType, startsAt, expiresAt, paymentId }, req.ip);
-        return { email: normalized, status: 'granted' };
-      } catch (err) {
-        return { email: normalized, status: 'error', message: err?.response?.data?.error || err.message };
       }
+    } catch (err) {
+      // A failed guard must not fail the upload; worst case is the pre-existing
+      // behaviour of re-granting an identical membership.
+      logger.warn(`[bulkGrantMembership] active-membership lookup failed: ${err?.response?.data?.error || err.message}`);
+    }
+  }
+
+  // Phase 1 — book the orders, in chunks, via ONE bulk call each. order-service runs the
+  // same createManualOrder path per user at bounded concurrency, so every order/payment
+  // row is identical to a single allotment.
+  const toOrder = rows.filter((r) => r.status === 'pending' && r.user);
+  for (let i = 0; i < toOrder.length; i += BULK_ORDER_CHUNK) {
+    const chunk = toOrder.slice(i, i + BULK_ORDER_CHUNK);
+    try {
+      const { data: orderResults } = await orderClient.post(
+        '/internal/orders/membership-bulk',
+        {
+          entity_id: plan.slug,
+          amount: 0,
+          status: 'paid',
+          membership_starts_at: startsAt,
+          membership_expires_at: expiresAt,
+          // "Your membership is active" would be false for a lapsed backfill.
+          skip_email: allotmentIsExpired,
+          users: chunk.map((r) => ({
+            user_id: r.user.id,
+            buyer_name: r.user.name || null,
+            buyer_email: r.user.email || null,
+            buyer_mobile: r.user.phone || null,
+            amount: r.amount,
+            payment_id: r.paymentId || undefined,
+          })),
+        },
+        { timeout: BULK_ORDER_TIMEOUT_MS },
+      );
+      const resultByUserId = new Map(
+        (Array.isArray(orderResults) ? orderResults : []).map((or) => [String(or.user_id), or]),
+      );
+      for (const r of chunk) {
+        const or = resultByUserId.get(String(r.user.id));
+        if (or && or.ok) {
+          r.orderId = or.order_id;
+        } else {
+          r.status = 'error';
+          r.orderCreated = false;
+          r.message = or?.error || 'Order could not be created — membership not allotted';
+        }
+      }
+    } catch (err) {
+      const reason = err?.response?.data?.error || err.message;
+      logger.warn(`[bulkGrantMembership] membership-bulk order chunk failed (plan ${plan.slug}): ${reason}`);
+      for (const r of chunk) {
+        r.status = 'error';
+        r.orderCreated = false;
+        r.message = reason;
+      }
+    }
+  }
+
+  // Phase 2 — grant the membership for every row whose order was booked, carrying that
+  // order id so a later refund can revoke the right membership row.
+  const toGrant = rows.filter((r) => r.status === 'pending' && r.user && r.orderId);
+  await mapWithConcurrency(toGrant, BULK_CONCURRENCY, async (row) => {
+    const planJson = {
+      price: String(row.amount ?? 0),
+      plan_validity: planValidity ? String(planValidity) : undefined,
+      plan_purchased: planPurchasedFormatted || startsAt,
+      plan_expiry: planExpiryFormatted || expiresAt,
+      payment_id: row.paymentId || row.orderId,
+    };
+    try {
+      await authClient.post('/access/grant-membership', {
+        userId: row.user.id,
+        membershipType: plan.slug,
+        startsAt,
+        expiresAt,
+        orderId: row.orderId,
+        planJson,
+      });
+      // Distinct status so an already-expired backfill never reports as a clean grant.
+      row.status = allotmentIsExpired ? 'granted_expired' : 'granted';
+      await adminLogsService.logAction(
+        adminId,
+        'BULK_GRANT_MEMBERSHIP',
+        'user_membership',
+        String(row.user.id),
+        { membershipType: plan.slug, startsAt, expiresAt, amount: row.amount, paymentId: row.paymentId || null, orderId: row.orderId },
+        req.ip,
+      );
+    } catch (err) {
+      // The order is already booked and paid. Flag it loudly: this user has a paid
+      // order and no membership, which needs a manual fix.
+      row.status = 'error';
+      row.message = `Order ${row.orderId} was created but the membership could not be granted: ${err?.response?.data?.error || err.message}`;
+    }
   });
 
+  // One result per input row, in file order. `index`/`user` are internal; amount and
+  // paymentId are echoed back so the admin panel can rebuild a corrected file of the
+  // rows that failed without re-deriving them.
+  const results = rows.map(({ index, user, amount, paymentId, ...rest }) => ({
+    ...rest,
+    amount: amount ?? null,
+    paymentId: paymentId || '',
+  }));
   sendSuccess(res, results);
 });
 

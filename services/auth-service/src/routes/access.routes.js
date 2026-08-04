@@ -61,6 +61,58 @@ function register(router) {
     sendSuccess(res, activeMembership);
   }));
 
+  /**
+   * Active memberships for many users at once.
+   *
+   * Backs the admin bulk-allotment duplicate guard: a 1000-row upload cannot make
+   * 1000 calls to /internal/users/:id/active-membership. Resolves the same way
+   * accessService.getActiveMembership does — matching on BOTH the internal id and
+   * wp_user_id, since memberships migrated from WP are keyed on the latter — and
+   * returns one row per requested user id (the latest-expiring active one).
+   */
+  router.post('/internal/users/active-memberships', requireGrantAuth, asyncHandler(async (req, res) => {
+    const { UserMembership } = require('../models');
+    const { Op } = require('sequelize');
+
+    const ids = (Array.isArray(req.body.userIds) ? req.body.userIds : [])
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v) && v > 0);
+    if (ids.length === 0) return sendSuccess(res, []);
+
+    const users = await User.findAll({
+      where: { id: { [Op.in]: ids } },
+      attributes: ['id', 'wp_user_id'],
+      raw: true,
+    });
+
+    // wp_user_id -> internal id, so a membership row found under the legacy id is
+    // reported against the user the caller actually asked about.
+    const ownerByLookupId = new Map();
+    for (const u of users) {
+      ownerByLookupId.set(Number(u.id), Number(u.id));
+      if (u.wp_user_id != null) ownerByLookupId.set(Number(u.wp_user_id), Number(u.id));
+    }
+
+    const rows = await UserMembership.findAll({
+      where: {
+        user_id: { [Op.in]: [...ownerByLookupId.keys()] },
+        expires_at: { [Op.gt]: new Date() },
+      },
+      order: [['expires_at', 'ASC']],
+      raw: true,
+    });
+
+    // Ascending expiry + overwrite leaves the latest-expiring row per user, matching
+    // getActiveMembership's `order by expires_at DESC` + findOne.
+    const activeByUserId = new Map();
+    for (const row of rows) {
+      const ownerId = ownerByLookupId.get(Number(row.user_id));
+      if (ownerId != null) activeByUserId.set(ownerId, { ...row, user_id: ownerId });
+    }
+
+    sendSuccess(res, [...activeByUserId.values()]);
+  }));
+
   router.get('/internal/users/:id/memberships', requireGrantAuth, asyncHandler(async (req, res) => {
     const { UserMembership } = require('../models');
     const { Op } = require('sequelize');

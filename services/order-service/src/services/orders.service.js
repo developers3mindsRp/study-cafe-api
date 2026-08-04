@@ -858,6 +858,47 @@ async function emitPurchaseOutbox(locked, t, options = {}) {
   }
 }
 
+/**
+ * Outbox for a membership order that must NOT fulfil itself.
+ *
+ * Admin bulk allotment grants the membership directly, with the purchase date and
+ * expiry the admin chose on the form. The order exists to record the money — so
+ * running the normal `emitPurchaseOutbox` membership path would be actively wrong
+ * twice over:
+ *
+ *  - MEMBERSHIP_ACTIVATED calls grant-membership a second time, and since
+ *    buildMembershipPayload derives its dates from `now`, that grant expires the
+ *    row the admin just created and replaces it with now-based dates.
+ *  - The plan's linked courses fan out to one COURSE_PURCHASED per course (57 for
+ *    Ultimate, so 59 events per order). Across a 1000-user upload that is ~59,000
+ *    events and ~118,000 worker HTTP calls, for access the membership already
+ *    confers lazily.
+ *
+ * So we emit exactly one MEMBERSHIP_ACTIVATED carrying `skipMembershipGrant`: the
+ * worker sends the membership email and does not touch access. The membership's
+ * real dates are passed through so the email matches what was actually granted
+ * rather than the order's creation time.
+ */
+async function emitMembershipRecordOnlyOutbox(locked, t, { startsAt, expiresAt } = {}) {
+  const plan = await fetchPlanDetails(locked.entity_id);
+  const userContact = locked.user_id ? await fetchUserContact(locked.user_id) : null;
+  const payload = buildMembershipPayload(locked, plan, userContact, true);
+
+  payload.skipMembershipGrant = true;
+  if (startsAt) payload.startsAt = startsAt;
+  if (expiresAt) payload.expiresAt = expiresAt;
+
+  await OutboxEvent.create(
+    {
+      aggregate_type: 'order',
+      aggregate_id: locked.order_id,
+      event_type: 'MEMBERSHIP_ACTIVATED',
+      payload,
+    },
+    { transaction: t }
+  );
+}
+
 // ─── Payment email outbox helper ──────────────────────────────────────────────
 
 async function resolveItemName(order) {
@@ -3128,7 +3169,16 @@ async function enrichAdminOrderResponse(p) {
     }
   }
 
-  const paymentId = payment ? payment.razorpay_payment_id : p.rp_payment_id || null;
+  // `manual:`/`free:` refs are internally generated, not something an admin typed. When
+  // the payment row carries one of those, prefer the order's own reference — that's
+  // where a shared bulk-allotment settlement id is recorded. Orders with a real captured
+  // ref are unaffected.
+  const capturedRef = payment ? payment.razorpay_payment_id : null;
+  const capturedRefIsSynthetic =
+    !!capturedRef && (capturedRef.startsWith('manual:') || capturedRef.startsWith('free:'));
+  const paymentId = capturedRef && !capturedRefIsSynthetic
+    ? capturedRef
+    : p.rp_payment_id || capturedRef || null;
 
   return {
     ...p,
@@ -3383,9 +3433,23 @@ async function createManualOrder(data) {
     payment_id,
     razorpay_payment_id,
     gateway,
+    // Record-only mode: write the order + captured payment, but do not let the
+    // order fulfil itself. Used by admin membership allotment, which grants access
+    // itself with admin-chosen dates. See emitMembershipRecordOnlyOutbox.
+    skip_fulfillment,
+    membership_starts_at,
+    membership_expires_at,
+    // Suppress the membership email. Set when allotting a membership that is already
+    // expired on arrival (a historical backfill), where "your membership is active"
+    // would be false.
+    skip_email,
+    // One gateway payment covering many orders (a single settlement for a bulk
+    // allotment). See sharedPaymentRef below.
+    shared_payment_id,
   } = data;
 
   const typeUpper = normalizeOrderType(type);
+  const skipFulfillment = skip_fulfillment === true;
   const orderId = generateOrderId();
   const paymentRefInput = normalizeAdminPaymentId(payment_id || razorpay_payment_id);
   const resolvedGateway = resolveOrderGateway({
@@ -3398,16 +3462,39 @@ async function createManualOrder(data) {
     throw new AppError('Razorpay Payment ID is required for Razorpay payments', 400);
   }
 
+  /**
+   * One real gateway payment can legitimately cover a whole bulk allotment — the admin
+   * settles once and allots N users against that single reference. But `payments` is
+   * UNIQUE on (razorpay_payment_id, status), which is what stops a real Razorpay payment
+   * from being credited to two orders on the checkout path, so it must stay.
+   *
+   * So in shared mode the reference is recorded on `orders.rp_payment_id` (no unique
+   * constraint — this is the natural home for "which settlement did this order come
+   * from") while the payments row keeps its own unique `manual:<orderId>` capture ref.
+   * Every order still gets a payment row, the reference is still visible on each order,
+   * and the checkout-path guard is untouched.
+   */
+  const sharedPaymentRef = shared_payment_id === true && paymentRefInput ? paymentRefInput : null;
+
   let resolvedBatchId = null;
   if (typeUpper === 'COURSE') {
     resolvedBatchId = await fetchPurchaseBatchId(entity_id);
   }
 
+  // The list price of the course/plan, for the "original amount" column. A bulk run
+  // books hundreds of orders against ONE entity, so the driver resolves this once and
+  // passes it down rather than making the same lookup per order. Only a real number is
+  // accepted as a pre-resolved value — `null`/`''` would otherwise coerce to a ₹0 list
+  // price and silently misreport every order in the run.
   let originalAmount = 0;
-  try {
-    originalAmount = await resolveAmountForEntity(typeUpper, entity_id);
-  } catch (e) {
-    logger.warn(`Could not resolve original amount for ${typeUpper} ${entity_id}: ${e.message}`);
+  if (typeof data.original_amount === 'number' && Number.isFinite(data.original_amount)) {
+    originalAmount = data.original_amount;
+  } else {
+    try {
+      originalAmount = await resolveAmountForEntity(typeUpper, entity_id);
+    } catch (e) {
+      logger.warn(`Could not resolve original amount for ${typeUpper} ${entity_id}: ${e.message}`);
+    }
   }
 
   let couponResult = null;
@@ -3433,6 +3520,7 @@ async function createManualOrder(data) {
         buyer_email: buyer_email || null,
         buyer_mobile: buyer_mobile || null,
         buyer_gst: buyer_gst || null,
+        rp_payment_id: sharedPaymentRef,
         status: status,
         affiliate: normalizeReferralForOrder(affiliate),
         gateway: resolvedGateway,
@@ -3451,13 +3539,27 @@ async function createManualOrder(data) {
     });
 
     if (status === 'paid') {
+      // In shared mode the real reference lives on the order, so the payment row takes a
+      // per-order ref and one settlement can back the whole allotment without colliding.
       const adminPaymentRef =
-        paymentRefInput || `manual:${orderId}`;
+        (sharedPaymentRef ? null : paymentRefInput) || `manual:${orderId}`;
       await ensurePaymentCaptured(locked, adminPaymentRef, { source: 'manual', transaction: t });
-      await emitPurchaseOutbox(locked, t, { isManual: true });
-      // Membership orders already get their own email via MEMBERSHIP_ACTIVATED (emitPurchaseOutbox above).
-      if (locked.type === 'course') {
-        await emitCourseAccessEmailOutbox(locked, t);
+
+      if (skipFulfillment && locked.type === 'membership') {
+        // The record-only event exists solely to send the membership email — it grants
+        // nothing. With the email suppressed there is nothing left to emit.
+        if (skip_email !== true) {
+          await emitMembershipRecordOnlyOutbox(locked, t, {
+            startsAt: membership_starts_at,
+            expiresAt: membership_expires_at,
+          });
+        }
+      } else {
+        await emitPurchaseOutbox(locked, t, { isManual: true });
+        // Membership orders already get their own email via MEMBERSHIP_ACTIVATED (emitPurchaseOutbox above).
+        if (locked.type === 'course') {
+          await emitCourseAccessEmailOutbox(locked, t);
+        }
       }
       if (couponResult) {
         await recordCouponUsage(couponResult.coupon.id, user_id, orderId, t);
@@ -3471,7 +3573,7 @@ async function createManualOrder(data) {
 }
 
 /**
- * Bulk course-order creation for admin allotment.
+ * Bulk order creation for admin allotment (course enrolment and membership alike).
  *
  * Runs the SAME createManualOrder path for each user at a bounded concurrency, so
  * a large allotment (1000+ users) is created as one chunked call at controlled load
@@ -3481,20 +3583,51 @@ async function createManualOrder(data) {
  *
  * Amount and payment_id are per user, falling back to the request-level `amount` when
  * a row omits its own. A row without a payment_id gets its own unique `manual:<orderId>`
- * capture ref — one Razorpay id can never be shared across orders (unique index), so a
- * repeated id fails only its own row (409) and is reported back rather than thrown.
- * Never throws for one user; returns a per-user result so the caller can report partials.
+ * capture ref. By default `payments` is unique on (razorpay_payment_id, status), so a
+ * repeated id fails only its own row (409) and is reported back rather than thrown; pass
+ * `shared_payment_id` when one settlement legitimately covers the whole run and the same
+ * reference should be accepted on every order. Never throws for one user; returns a
+ * per-user result so the caller can report partials.
+ *
+ * The entity's list price is resolved ONCE here rather than per order: every row in a
+ * bulk run targets the same course/plan, so the per-order lookup was N identical calls.
  *
  * @param {object} p
- * @param {string|number} p.entity_id  course id
- * @param {number} [p.amount]          fallback per-order amount (0 = free)
- * @param {string} [p.status]          order status (default 'paid')
+ * @param {'course'|'membership'} [p.type]  order type (default 'course')
+ * @param {string|number} p.entity_id       course id, or plan id/slug for membership
+ * @param {number} [p.amount]               fallback per-order amount (0 = free)
+ * @param {string} [p.status]               order status (default 'paid')
+ * @param {boolean} [p.skip_fulfillment]    record-only (membership allotment); see createManualOrder
+ * @param {boolean} [p.shared_payment_id]   allow one payment reference across every order
+ * @param {boolean} [p.skip_email]          suppress the membership email (expired backfill)
+ * @param {string} [p.membership_starts_at] membership start, for the record-only email
+ * @param {string} [p.membership_expires_at] membership expiry, for the record-only email
  * @param {Array<{user_id:number, buyer_name?:string, buyer_email?:string, buyer_mobile?:string, amount?:number, payment_id?:string}>} p.users
  * @returns {Promise<Array<{user_id:number, ok:boolean, order_id?:string, error?:string}>>}
  */
-async function createManualCourseOrdersBulk({ entity_id, amount = 0, status = 'paid', users = [] }) {
+async function createManualOrdersBulk({
+  type = 'course',
+  entity_id,
+  amount = 0,
+  status = 'paid',
+  users = [],
+  skip_fulfillment = false,
+  shared_payment_id = false,
+  skip_email = false,
+  membership_starts_at,
+  membership_expires_at,
+}) {
   const list = Array.isArray(users) ? users : [];
+  if (list.length === 0) return [];
   const CONCURRENCY = 5;
+
+  let originalAmount;
+  try {
+    originalAmount = await resolveAmountForEntity(normalizeOrderType(type), entity_id);
+  } catch (e) {
+    logger.warn(`[orders] bulk could not resolve original amount for ${type} ${entity_id}: ${e.message}`);
+  }
+
   const results = new Array(list.length);
   let cursor = 0;
   const runners = Array.from({ length: Math.min(CONCURRENCY, list.length) }, async () => {
@@ -3506,7 +3639,7 @@ async function createManualCourseOrdersBulk({ entity_id, amount = 0, status = 'p
       try {
         const order = await createManualOrder({
           user_id: userId,
-          type: 'course',
+          type,
           entity_id,
           amount: u.amount != null ? u.amount : amount,
           status,
@@ -3514,16 +3647,27 @@ async function createManualCourseOrdersBulk({ entity_id, amount = 0, status = 'p
           buyer_email: u.buyer_email != null ? u.buyer_email : null,
           buyer_mobile: u.buyer_mobile != null ? u.buyer_mobile : null,
           payment_id: u.payment_id || undefined,
+          original_amount: originalAmount,
+          skip_fulfillment,
+          shared_payment_id,
+          skip_email,
+          membership_starts_at,
+          membership_expires_at,
         });
         results[i] = { user_id: userId, ok: true, order_id: order.order_id };
       } catch (err) {
-        logger.warn(`[orders] bulk course order failed user=${userId} course=${entity_id}: ${err.message}`);
+        logger.warn(`[orders] bulk ${type} order failed user=${userId} entity=${entity_id}: ${err.message}`);
         results[i] = { user_id: userId, ok: false, error: err.message || 'order_failed' };
       }
     }
   });
   await Promise.all(runners);
   return results;
+}
+
+/** Course-allotment driver — kept as a named entry point for the existing route. */
+function createManualCourseOrdersBulk(params) {
+  return createManualOrdersBulk({ ...params, type: 'course' });
 }
 
 async function updateOrder(id, data) {
@@ -3868,6 +4012,7 @@ module.exports = {
   updateCoupon,
   deleteCoupon,
   createManualOrder,
+  createManualOrdersBulk,
   createManualCourseOrdersBulk,
   updateOrder,
   deleteOrder,

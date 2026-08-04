@@ -52,18 +52,23 @@ async function processEvent(record) {
         ),
       ]);
     } else if (event_type === 'MEMBERSHIP_ACTIVATED') {
-      await axios.post(
-        `${config.authServiceUrl}/access/grant-membership`,
-        {
-          userId: data.userId,
-          membershipType: data.membershipType,
-          orderId: data.orderId,
-          startsAt: data.startsAt,
-          expiresAt: data.expiresAt,
-          planJson: data.planJson,
-        },
-        { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
-      );
+      // Record-only orders (admin bulk allotment) have already granted the membership
+      // with the admin's chosen dates. Re-granting here would expire that row and
+      // replace it with now-based dates — so send the email only.
+      if (!data.skipMembershipGrant) {
+        await axios.post(
+          `${config.authServiceUrl}/access/grant-membership`,
+          {
+            userId: data.userId,
+            membershipType: data.membershipType,
+            orderId: data.orderId,
+            startsAt: data.startsAt,
+            expiresAt: data.expiresAt,
+            planJson: data.planJson,
+          },
+          { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 10000 }
+        );
+      }
 
       // Fire-and-forget membership upgrade email.
       // Prefer userEmail (fetched from auth-service at outbox creation time) over buyerEmail.
