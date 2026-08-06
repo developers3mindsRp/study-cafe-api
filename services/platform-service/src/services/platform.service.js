@@ -1196,7 +1196,7 @@ function publishedActiveArticleWhere(extra = {}) {
 }
 
 async function getArticlesPublic(options = {}) {
-  const { page = 1, limit = 20, search, category, accessTier } = options;
+  const { page = 1, limit = 20, search, category, accessTier, withTotal = true } = options;
   const normalizedCategory = category && String(category).trim()
     ? String(category).trim().toLowerCase()
     : undefined;
@@ -1227,7 +1227,7 @@ async function getArticlesPublic(options = {}) {
       { replacements: { slug: normalizedCategory }, type: QueryTypes.SELECT },
     );
     if (!catRows.length) {
-      return { data: [], total: 0, page: safePage, limit: safeLimit, totalPages: 0 };
+      return { data: [], total: 0, page: safePage, limit: safeLimit, totalPages: 0, hasMore: false };
     }
     conditions.push(`EXISTS (
       SELECT 1 FROM article_categories ac
@@ -1238,23 +1238,41 @@ async function getArticlesPublic(options = {}) {
 
   const whereSql = conditions.join(' AND ');
 
-  const [countRow] = await sequelize.query(
-    `SELECT COUNT(*) AS total FROM articles a WHERE ${whereSql}`,
-    { replacements, type: QueryTypes.SELECT },
-  );
-  const total = Number(countRow?.total || 0);
-  const totalPages = Math.ceil(total / safeLimit) || 0;
+  // COUNT(*) over `articles` is a full index/table scan (~29k published rows) and costs far
+  // more than the page fetch itself. Callers that only need a fixed slice (e.g. the homepage
+  // blog strip) pass withTotal=false to skip it; `hasMore` still tells them if a next page
+  // exists, via the standard fetch-one-extra-row trick.
+  let total = null;
+  let totalPages = null;
 
-  const rows = total > 0
+  if (withTotal) {
+    const [countRow] = await sequelize.query(
+      `SELECT COUNT(*) AS total FROM articles a WHERE ${whereSql}`,
+      { replacements, type: QueryTypes.SELECT },
+    );
+    total = Number(countRow?.total || 0);
+    totalPages = Math.ceil(total / safeLimit) || 0;
+  }
+
+  // Without a count we cannot short-circuit on total === 0, so always run the page query.
+  const shouldFetchRows = !withTotal || total > 0;
+  const fetchLimit = withTotal ? safeLimit : safeLimit + 1;
+
+  const fetched = shouldFetchRows
     ? await sequelize.query(
       `SELECT a.id, a.title, a.slug, a.excerpt, a.thumbnail_url, a.author_id, a.published_at, a.created_at
        FROM articles a
        WHERE ${whereSql}
        ORDER BY a.created_at DESC, a.id DESC
        LIMIT :limit OFFSET :offset`,
-      { replacements, type: QueryTypes.SELECT },
+      { replacements: { ...replacements, limit: fetchLimit }, type: QueryTypes.SELECT },
     )
     : [];
+
+  const hasMore = withTotal
+    ? safePage * safeLimit < total
+    : fetched.length > safeLimit;
+  const rows = withTotal ? fetched : fetched.slice(0, safeLimit);
 
   const out = {
     data: rows,
@@ -1262,6 +1280,7 @@ async function getArticlesPublic(options = {}) {
     page: safePage,
     limit: safeLimit,
     totalPages,
+    hasMore,
   };
 
   if (out.data.length > 0) {
