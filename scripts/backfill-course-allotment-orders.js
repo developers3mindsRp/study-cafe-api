@@ -301,6 +301,15 @@ async function main() {
     headers: { 'Content-Type': 'application/json', 'x-internal-api-key': INTERNAL_API_KEY },
   });
 
+  // order-service replies { success, data }. admin-service's orderClient unwraps that in
+  // an interceptor; without the same step every row reads as 'no result returned' even
+  // though the orders were created — a false failure report that invites a needless re-run.
+  orderClient.interceptors.response.use((response) => {
+    const b = response.data;
+    if (b && typeof b === 'object' && b.success === true && 'data' in b) response.data = b.data;
+    return response;
+  });
+
   console.log('\n── CREATING ' + toCreate.length + ' ORDER(S) ──');
   const results = [];
   for (let i = 0; i < toCreate.length; i += CHUNK) {

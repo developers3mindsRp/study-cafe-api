@@ -938,6 +938,14 @@ const bulkAddBatchEnrollmentByEmails = asyncHandler(async (req, res) => {
           entity_id: String(courseId),
           amount: 0,
           status: 'paid',
+          // One settlement often backs several products — a membership and a course sold
+          // as a bundle, or the same reference reused across two allotments. `payments` is
+          // UNIQUE on (razorpay_payment_id, status), so without shared mode the second
+          // order to carry a given reference dies on that index. Phase 1 has already
+          // enrolled the learner by then, which is exactly how an allotment ends up with
+          // access granted and no order. Shared mode keeps the real reference visible on
+          // orders.rp_payment_id and gives the payments row a per-order capture ref.
+          shared_payment_id: true,
           users: chunk.map((r) => ({
             user_id: r.user.id,
             buyer_name: r.user.name || null,

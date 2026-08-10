@@ -3554,6 +3554,11 @@ async function createManualOrder(data) {
             expiresAt: membership_expires_at,
           });
         }
+      } else if (skipFulfillment && locked.type === 'course') {
+        // Record-only course order. Emitted nothing on purpose: the learner already has
+        // the course — allotment phase 1 enrolled them, or this is a backfill of an order
+        // that failed after they were enrolled — so emitPurchaseOutbox would re-grant
+        // access and send a second "you have access" email for something they already own.
       } else {
         await emitPurchaseOutbox(locked, t, { isManual: true });
         // Membership orders already get their own email via MEMBERSHIP_ACTIVATED (emitPurchaseOutbox above).
@@ -3597,7 +3602,7 @@ async function createManualOrder(data) {
  * @param {string|number} p.entity_id       course id, or plan id/slug for membership
  * @param {number} [p.amount]               fallback per-order amount (0 = free)
  * @param {string} [p.status]               order status (default 'paid')
- * @param {boolean} [p.skip_fulfillment]    record-only (membership allotment); see createManualOrder
+ * @param {boolean} [p.skip_fulfillment]    record-only (membership or course allotment); see createManualOrder
  * @param {boolean} [p.shared_payment_id]   allow one payment reference across every order
  * @param {boolean} [p.skip_email]          suppress the membership email (expired backfill)
  * @param {string} [p.membership_starts_at] membership start, for the record-only email
