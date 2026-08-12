@@ -24,7 +24,7 @@ function register(router) {
   router.get('/platform/plans/:slug', validate(schemas.slugParam), controller.getPlanBySlug);
   router.get('/platform/memberships', controller.getPlans);
   router.post('/platform/membership/upgrade-summary', controller.getMembershipUpgradeSummary);
-  router.get('/platform/articles', controller.getArticles);
+  router.get('/platform/articles', optionalWebUser, controller.getArticles);
   router.get('/platform/case-laws', optionalWebUser, controller.getCaseLaws);
   router.get('/platform/articles/blog-spotlight', optionalWebUser, controller.getBlogSpotlightFeed);
   router.get(
