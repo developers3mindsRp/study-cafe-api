@@ -347,7 +347,20 @@ const getArticles = asyncHandler(async (req, res) => {
   // so existing paginated callers are unaffected.
   const rawWithTotal = req.query.with_total;
   const withTotal = !(rawWithTotal === 'false' || rawWithTotal === '0');
-  const data = await platformService.articles.getArticlesPublic({ page, limit, search, category, accessTier, withTotal });
+  // Opt-in: include_content renders the article HTML on top of the metadata — a LONGTEXT read
+  // per row plus a sanitize pass per article, too heavy to run on every list request.
+  const rawIncludeContent = req.query.include_content;
+  const includeContent = rawIncludeContent === 'true' || rawIncludeContent === '1';
+  const data = await platformService.articles.getArticlesPublic({
+    page,
+    limit,
+    search,
+    category,
+    accessTier,
+    withTotal,
+    includeContent,
+    viewer: req.viewer || null,
+  });
   sendSuccess(res, data);
 });
 

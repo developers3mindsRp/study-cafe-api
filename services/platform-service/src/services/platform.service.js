@@ -1195,8 +1195,188 @@ function publishedActiveArticleWhere(extra = {}) {
   return withActiveArticleWhere({ status: 'publish', ...extra });
 }
 
+/**
+ * Columns the public article list returns — every column the detail endpoint exposes, minus
+ * `content` (opt into that with include_content). This is the default projection: the list and
+ * the detail payload deliberately carry the same fields so clients can render either one.
+ */
+const PUBLIC_ARTICLE_LIST_COLUMNS = [
+  'id', 'wp_post_id', 'title', 'slug', 'excerpt', 'sub_heading', 'author_id', 'updated_by',
+  'thumbnail_url', 'thumbnail_alt', 'thumbnail_link_url', 'thumbnail_caption', 'views',
+  'meta_title', 'meta_description', 'meta_keywords', 'canonical_url', 'robots',
+  'og_title', 'og_description', 'og_image_url',
+  'case_name', 'citation', 'appeal_number', 'judgement_date', 'assessment_year', 'court_name', 'section',
+  'noti_no', 'noti_date', 'type_of_tax',
+  'ext_link', 'upload_url', 'rel_download_url', 'external_links',
+  'status', 'published_at', 'scheduled_publish_at', 'blog_access_tier',
+  'deleted_at', 'created_at', 'updated_at',
+];
+
+/** Author profile for many ids at once; Map<authorId, info> with wp_user_id aliased to the same info. */
+async function getAuthorInfoBatch(authorIds) {
+  const uniq = [...new Set(authorIds)].filter((id) => id != null);
+  if (uniq.length === 0) return new Map();
+  const rows = await sequelize.query(
+    `SELECT id, wp_user_id, first_name, last_name, display_name, name, email,
+            bio, profession, designation, profile_pic_url, linkedin
+     FROM users
+     WHERE (id IN (?) OR wp_user_id IN (?)) AND ${sqlDeletedAtIsNull()}`,
+    { replacements: [uniq, uniq], type: QueryTypes.SELECT },
+  );
+  const map = new Map();
+  for (const r of rows) {
+    const info = {
+      name: buildAuthorLabel(r),
+      bio: r.bio || null,
+      profession: r.profession || null,
+      designation: r.designation || null,
+      profile_pic_url: r.profile_pic_url || null,
+      linkedin: r.linkedin || null,
+    };
+    map.set(Number(r.id), info);
+    if (r.wp_user_id != null) map.set(Number(r.wp_user_id), info);
+  }
+  return map;
+}
+
+/**
+ * Expand raw `articles` rows into the shape the public detail endpoint returns: access envelope,
+ * author profile, categories/tags/types, citation + notification, share and download links.
+ * Every lookup is batched, so the cost is a fixed handful of queries regardless of page size.
+ *
+ * `body`/`content` are only rendered when includeContent is set — that pipeline costs a sanitize
+ * pass per article plus a query for any article carrying [related id="N"] markers, which is too
+ * heavy to run on every list request.
+ */
+async function decorateArticleRowsPublic(rows, viewer = null, { includeContent = false } = {}) {
+  if (!rows.length) return [];
+  const articleIds = rows.map((r) => Number(r.id));
+
+  const [authorInfos, catMaps, tagMaps, typeMaps] = await Promise.all([
+    getAuthorInfoBatch(rows.map((r) => r.author_id)),
+    ArticleCategoryMap.findAll({ where: { article_id: { [Op.in]: articleIds } }, attributes: ['article_id', 'category_id'] }),
+    ArticleTagMap.findAll({ where: { article_id: { [Op.in]: articleIds } }, attributes: ['article_id', 'tag_id'] }),
+    ArticleTypeMap.findAll({ where: { article_id: { [Op.in]: articleIds } }, attributes: ['article_id', 'article_type_id'] }),
+  ]);
+
+  const catIds = [...new Set(catMaps.map((r) => Number(r.category_id)))];
+  const tagIds = [...new Set(tagMaps.map((r) => Number(r.tag_id)))];
+  const typeIds = [...new Set(typeMaps.map((r) => Number(r.article_type_id)))];
+
+  const [catRows, tagRows, typeRows] = await Promise.all([
+    // Not raw: whatsapp_links / telegram_links are JSON columns and must go through the
+    // model getters to come back as arrays (same as the article detail endpoint).
+    catIds.length
+      ? Category.findAll({
+        where: { id: { [Op.in]: catIds } },
+        attributes: ['id', 'name', 'slug', 'whatsapp_links', 'telegram_links', 'google_news_url'],
+      })
+      : [],
+    tagIds.length ? Tag.findAll({ where: { id: { [Op.in]: tagIds } }, attributes: ['id', 'name'], raw: true }) : [],
+    typeIds.length ? ArticleType.findAll({ where: { id: { [Op.in]: typeIds } }, attributes: ['id', 'name', 'slug'], raw: true }) : [],
+  ]);
+
+  const catById = new Map(catRows.map((r) => [Number(r.id), r.get({ plain: true })]));
+  const tagNameById = new Map(tagRows.map((r) => [Number(r.id), r.name || '']));
+  const typeById = new Map(typeRows.map((r) => [Number(r.id), r]));
+
+  /** Map<article_id, [relatedId, …]>, preserving map-table order like the detail endpoint. */
+  const groupByArticle = (maps, key) => {
+    const m = new Map();
+    for (const row of maps) {
+      const aid = Number(row.article_id);
+      if (!m.has(aid)) m.set(aid, []);
+      m.get(aid).push(Number(row[key]));
+    }
+    return m;
+  };
+  const catIdsByArticle = groupByArticle(catMaps, 'category_id');
+  const tagIdsByArticle = groupByArticle(tagMaps, 'tag_id');
+  const typeIdsByArticle = groupByArticle(typeMaps, 'article_type_id');
+
+  return Promise.all(rows.map(async (p) => {
+    const { blog_access_tier, access, canViewPremiumMetadata } = buildArticlePublicAccess(p.blog_access_tier, viewer);
+    const authorInfo = authorInfos.get(Number(p.author_id)) ?? null;
+
+    const categories = [];
+    const allWhatsapp = [];
+    const allTelegram = [];
+    let google_news_url = null;
+    for (const id of catIdsByArticle.get(Number(p.id)) || []) {
+      const c = catById.get(id);
+      if (!c) continue;
+      categories.push({ id, name: c.name ?? '', slug: c.slug ?? '' });
+      if (Array.isArray(c.whatsapp_links)) allWhatsapp.push(...c.whatsapp_links);
+      if (Array.isArray(c.telegram_links)) allTelegram.push(...c.telegram_links);
+      if (!google_news_url && c.google_news_url) google_news_url = c.google_news_url;
+    }
+
+    const tags = (tagIdsByArticle.get(Number(p.id)) || [])
+      .map((id) => ({ id, name: tagNameById.get(id) ?? '' }))
+      .filter((t) => t.name);
+
+    const article_types = (typeIdsByArticle.get(Number(p.id)) || [])
+      .map((id) => {
+        const t = typeById.get(id);
+        return t ? { id, name: t.name ?? '', slug: t.slug ?? '' } : null;
+      })
+      .filter((t) => t && t.name);
+
+    const notification = buildArticleNotificationFromRow(p);
+    const { content: rawContent, ...rest } = p;
+
+    const out = {
+      ...rest,
+      blog_access_tier,
+      access,
+      cover_image_url: p.thumbnail_url,
+      author_name: authorInfo?.name ?? null,
+      author_bio: authorInfo?.bio ?? null,
+      author_profession: authorInfo?.profession ?? null,
+      author_designation: authorInfo?.designation ?? null,
+      author_pic: authorInfo?.profile_pic_url ?? null,
+      author_linkedin: authorInfo?.linkedin ?? null,
+      citation: canViewPremiumMetadata ? buildArticleCitationFromRow(p) : null,
+      notification: canViewPremiumMetadata ? notification : null,
+      noti_no: canViewPremiumMetadata ? (notification?.noti_no ?? null) : null,
+      noti_date: canViewPremiumMetadata ? (notification?.noti_date ?? null) : null,
+      type_of_tax: canViewPremiumMetadata ? (notification?.type_of_tax ?? null) : null,
+      has_notification: canViewPremiumMetadata ? Boolean(notification) : false,
+      download_url: p.rel_download_url || p.upload_url || null,
+      whatsapp_link: pickRandom([...new Set(allWhatsapp.filter(Boolean))]),
+      telegram_link: pickRandom([...new Set(allTelegram.filter(Boolean))]),
+      google_news_url,
+      tags,
+      categories,
+      article_types,
+    };
+
+    if (includeContent) {
+      const expanded = prepareArticleHtmlForDisplay(rawContent || '');
+      const fullBody = sanitizeArticleHtml(await embedRelatedArticles(expanded));
+      const body = access.can_read_full ? fullBody : buildPremiumPreviewHtml(p.excerpt, rawContent);
+      /** Renderable HTML — embed markers expanded like admin ArticleContentRenderer. */
+      out.body = body;
+      /** Same as `body` for clients that read `content`. */
+      out.content = body;
+      out.embed_scripts = collectEmbedScriptsForHtml(body);
+    }
+
+    return stripPremiumMetadataFromArticlePublic(out, canViewPremiumMetadata);
+  }));
+}
+
 async function getArticlesPublic(options = {}) {
-  const { page = 1, limit = 20, search, category, accessTier, withTotal = true } = options;
+  const {
+    page = 1,
+    limit = 20,
+    search,
+    category,
+    accessTier,
+    withTotal = true,
+    viewer = null,
+    includeContent = false,
+  } = options;
   const normalizedCategory = category && String(category).trim()
     ? String(category).trim().toLowerCase()
     : undefined;
@@ -1257,10 +1437,14 @@ async function getArticlesPublic(options = {}) {
   // Without a count we cannot short-circuit on total === 0, so always run the page query.
   const shouldFetchRows = !withTotal || total > 0;
   const fetchLimit = withTotal ? safeLimit : safeLimit + 1;
+  // `content` is LONGTEXT — leaving it out keeps MySQL off the overflow pages entirely.
+  const selectColumns = (includeContent ? [...PUBLIC_ARTICLE_LIST_COLUMNS, 'content'] : PUBLIC_ARTICLE_LIST_COLUMNS)
+    .map((c) => `a.${c}`)
+    .join(', ');
 
   const fetched = shouldFetchRows
     ? await sequelize.query(
-      `SELECT a.id, a.title, a.slug, a.excerpt, a.thumbnail_url, a.author_id, a.published_at, a.created_at
+      `SELECT ${selectColumns}
        FROM articles a
        WHERE ${whereSql}
        ORDER BY a.created_at DESC, a.id DESC
@@ -1274,41 +1458,14 @@ async function getArticlesPublic(options = {}) {
     : fetched.length > safeLimit;
   const rows = withTotal ? fetched : fetched.slice(0, safeLimit);
 
-  const out = {
-    data: rows,
+  return {
+    data: await decorateArticleRowsPublic(rows, viewer, { includeContent }),
     total,
     page: safePage,
     limit: safeLimit,
     totalPages,
     hasMore,
   };
-
-  if (out.data.length > 0) {
-    const authorIds = out.data.map((p) => p.author_id).filter(Boolean);
-    const authorNames = await getAuthorDisplayNamesBatch(authorIds);
-
-    // Batch-fetch categories for each article
-    const articleIds = out.data.map((p) => p.id);
-    const catMaps = await ArticleCategoryMap.findAll({ where: { article_id: { [Op.in]: articleIds } }, attributes: ['article_id', 'category_id'] });
-    const catIds = [...new Set(catMaps.map((r) => r.category_id))];
-    const catRows = catIds.length ? await Category.findAll({ where: { id: { [Op.in]: catIds } }, attributes: ['id', 'name', 'slug'] }) : [];
-    const catById = new Map(catRows.map((r) => [Number(r.id), r.get({ plain: true })]));
-    const articleCats = new Map();
-    for (const m of catMaps) {
-      if (!articleCats.has(Number(m.article_id))) articleCats.set(Number(m.article_id), []);
-      const cat = catById.get(Number(m.category_id));
-      if (cat) articleCats.get(Number(m.article_id)).push(cat);
-    }
-
-    out.data = out.data.map((p) => ({
-      ...p,
-      cover_image_url: p.thumbnail_url,
-      author_name: authorNames.get(p.author_id) ?? null,
-      categories: articleCats.get(Number(p.id)) || [],
-    }));
-  }
-
-  return out;
 }
 
 /**
