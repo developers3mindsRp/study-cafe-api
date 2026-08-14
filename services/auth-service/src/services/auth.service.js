@@ -493,6 +493,39 @@ async function registerQuick({ email, password, name, phone, referralCode, clien
   return createUserAccount({ email, password, name, phone, referralCode });
 }
 
+async function rateLimitAccountLookup(clientIp) {
+  if (!clientIp) return;
+  const redis = await getRedis();
+  const key = `ratelimit:account_lookup:ip:${clientIp}`;
+  const n = await redis.incr(key);
+  if (n === 1) await redis.expire(key, 3600);
+  // Generous — a buyer correcting a typo on a checkout form should never hit this,
+  // while a script walking an address list will.
+  if (n > 120) {
+    throw new AppError('Too many lookups. Try again later.', 429);
+  }
+}
+
+/**
+ * Does this email already have an account? Drives the checkout form's fork between
+ * "sign in to continue" and "pick a password".
+ *
+ * Deliberately returns nothing but a boolean. It is an enumeration surface, but no
+ * more than the sign-in code request already is (that 404s on unknown emails), and
+ * asking a buyer to guess whether they have an account is a reliable way to lose the
+ * sale. Rate limited per IP.
+ */
+async function accountExistsForEmail({ email, clientIp }) {
+  await rateLimitAccountLookup(clientIp);
+  const emailNorm = String(email || '').trim().toLowerCase();
+  if (!emailNorm) return { exists: false };
+  const user = await User.findOne({
+    where: { email: emailNorm, is_active: true },
+    attributes: ['id'],
+  });
+  return { exists: !!user };
+}
+
 async function findActiveUserByLoginIdentifier(identifier) {
   const raw = String(identifier || '').trim();
   if (!raw) return null;
@@ -781,6 +814,7 @@ module.exports = {
   verifyRefresh,
   register,
   registerQuick,
+  accountExistsForEmail,
   loginWithPassword,
   loginWithEmailOtp,
   requestLoginOtp,

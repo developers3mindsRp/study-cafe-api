@@ -36,6 +36,16 @@ module.exports = (sequelize) => {
       refund_amount: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
       refund_remarks: { type: DataTypes.TEXT, allowNull: true },
       utm: { type: DataTypes.JSON, allowNull: true },
+      /**
+       * What this order must grant, snapshotted when the order is created:
+       * { product_type: 'course'|'membership'|'custom', product_id, batch_id }.
+       *
+       * Payment-link orders only. Taken at create time on purpose — the admin can
+       * edit the link (or repoint it at another course) between the buyer opening
+       * Razorpay and paying, and the buyer must receive what the page promised
+       * them, not whatever the link says at verify time.
+       */
+      fulfilment: { type: DataTypes.JSON, allowNull: true },
     },
     {
       tableName: 'orders',

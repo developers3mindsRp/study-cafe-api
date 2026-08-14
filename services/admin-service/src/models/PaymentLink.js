@@ -22,6 +22,18 @@ module.exports = (sequelize) => {
         defaultValue: 0,
       },
       status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'draft' },
+      /**
+       * What a paid checkout on this link grants:
+       *  'custom'     — nothing (money only; an admin assigns access by hand). Legacy default.
+       *  'course'     — the course in product_id
+       *  'membership' — the plan in product_id, with its linked courses
+       */
+      product_type: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'custom' },
+      product_id: { type: DataTypes.STRING(64), allowNull: true },
+      /** Course links only. NULL = resolve the purchase batch at checkout time. */
+      batch_id: { type: DataTypes.BIGINT.UNSIGNED, allowNull: true },
+      /** Off = record the sale but withhold the grant (admin fulfils manually). */
+      auto_enroll: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     },
     {
       tableName: 'payment_links',

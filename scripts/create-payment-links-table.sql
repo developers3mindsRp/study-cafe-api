@@ -12,8 +12,13 @@ CREATE TABLE IF NOT EXISTS payment_links (
   random_value VARCHAR(32) NULL,
   random_boost_accumulator INT UNSIGNED NOT NULL DEFAULT 0,
   status VARCHAR(20) NOT NULL DEFAULT 'draft',
+  product_type VARCHAR(20) NOT NULL DEFAULT 'custom' COMMENT 'custom | course | membership',
+  product_id VARCHAR(64) NULL COMMENT 'course id or membership plan id, per product_type',
+  batch_id BIGINT UNSIGNED NULL COMMENT 'course links only; NULL = auto-select at purchase',
+  auto_enroll TINYINT(1) NOT NULL DEFAULT 1,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uk_payment_links_slug (slug),
-  KEY idx_payment_links_status (status)
+  KEY idx_payment_links_status (status),
+  KEY idx_payment_links_product (product_type, product_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

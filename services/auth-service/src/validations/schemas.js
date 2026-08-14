@@ -47,6 +47,12 @@ const login = {
     }),
 };
 
+const accountExists = {
+    body: Joi.object({
+        email: Joi.string().trim().email().max(255).required(),
+    }),
+};
+
 const loginOtpRequest = {
     body: Joi.object({
         email: Joi.string().email().required(),
@@ -209,6 +215,7 @@ const removeMembership = {
 module.exports = {
     register,
     registerQuick,
+    accountExists,
     login,
     loginOtpRequest,
     loginOtp,

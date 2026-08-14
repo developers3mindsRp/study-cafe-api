@@ -67,6 +67,29 @@ CREATE TABLE IF NOT EXISTS payment_links (
     if (err?.parent?.errno !== 1060 && err?.original?.errno !== 1060) throw err;
   }
 
+  // Self-fulfilling links: what the link sells, so a paid checkout can grant it.
+  // Existing rows default to 'custom' — collect money, grant nothing — which is
+  // exactly how every link behaved before this. See scripts/ensure-payment-link-product-columns.js
+  // for the same change as a standalone migration.
+  for (const columnDdl of [
+    "ADD COLUMN product_type VARCHAR(20) NOT NULL DEFAULT 'custom' AFTER status",
+    'ADD COLUMN product_id VARCHAR(64) NULL AFTER product_type',
+    'ADD COLUMN batch_id BIGINT UNSIGNED NULL AFTER product_id',
+    'ADD COLUMN auto_enroll TINYINT(1) NOT NULL DEFAULT 1 AFTER batch_id',
+  ]) {
+    try {
+      await sequelize.query(`ALTER TABLE payment_links ${columnDdl}`);
+    } catch (err) {
+      if (err?.parent?.errno !== 1060 && err?.original?.errno !== 1060) throw err;
+    }
+  }
+  try {
+    await sequelize.query('ALTER TABLE payment_links ADD KEY idx_payment_links_product (product_type, product_id)');
+  } catch (err) {
+    // 1061 = duplicate key name.
+    if (err?.parent?.errno !== 1061 && err?.original?.errno !== 1061) throw err;
+  }
+
   try {
     await sequelize.query(`
 CREATE TABLE IF NOT EXISTS payment_gateways (

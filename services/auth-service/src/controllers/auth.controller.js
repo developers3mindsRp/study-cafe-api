@@ -100,6 +100,15 @@ const registerQuick = asyncHandler(async (req, res) => {
   sendCreated(res, newAccountSession(user));
 });
 
+/** Checkout fork: does this buyer already have an account, or do they need to make one? */
+const accountExists = asyncHandler(async (req, res) => {
+  const out = await authService.accountExistsForEmail({
+    email: req.body.email,
+    clientIp: forwardedClientIp(req),
+  });
+  sendSuccess(res, out);
+});
+
 const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   const result = await authService.loginWithPassword({ email, password });
@@ -221,6 +230,7 @@ const resetPassword = asyncHandler(async (req, res) => {
 module.exports = {
   register,
   registerQuick,
+  accountExists,
   login,
   loginRequestOtp,
   loginWithOtp,
