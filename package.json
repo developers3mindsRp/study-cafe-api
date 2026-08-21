@@ -48,7 +48,8 @@
     "seo:backfill-entity-fields": "node scripts/backfill-article-course-seo-fields.js",
     "seo:backfill-meta-descriptions": "node scripts/backfill-article-meta-descriptions.js",
     "ensure-site-seo-routes": "node scripts/ensure-site-seo-routes-table.js",
-    "migrate:api-request-logs": "node scripts/create-api-request-logs-table.js"
+    "migrate:api-request-logs": "node scripts/create-api-request-logs-table.js",
+    "migrate:payment-link-products": "node scripts/ensure-payment-link-product-columns.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

@@ -13,6 +13,12 @@ function register(router) {
 
   router.get('/internal/marketing-pages', internalAuth, marketingPagesController.listInternal);
   router.get(
+    '/internal/marketing-pages/by-slug/:slug',
+    internalAuth,
+    validate(schemas.slugParam),
+    marketingPagesController.getBySlugInternal,
+  );
+  router.get(
     '/internal/marketing-pages/:id',
     internalAuth,
     validate(schemas.idParam),

@@ -8,6 +8,9 @@ const createOrder = {
         currency: Joi.string().length(3).uppercase().default('INR'),
         couponCode: Joi.string().max(64).allow('', null),
         referralCode: Joi.string().max(32).allow('', null),
+        // Marketing landing page the buyer came from — server resolves its campaign
+        // price; the client never sends an amount.
+        marketingSlug: Joi.string().max(200).allow('', null),
         buyer_name: Joi.string().max(250).allow('', null),
         buyer_email: Joi.string().email().max(255).allow('', null),
         buyer_mobile: Joi.string().max(20).allow('', null),

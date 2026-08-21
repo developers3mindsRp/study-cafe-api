@@ -36,6 +36,10 @@ const registerQuick = {
         name: Joi.string().trim().min(1).max(255).required(),
         phone: e164Phone.required(),
         referralCode: Joi.string().max(32).allow('', null),
+        // Checkout signups skip the immediate verification-code email: the buyer is
+        // auto-verified when payment completes, so the code arriving mid-payment only
+        // confuses. Abandoned checkouts can still get a code via "Resend".
+        skipVerificationEmail: Joi.boolean().default(false),
     }),
 };
 
@@ -44,6 +48,12 @@ const login = {
         // Email, WP username (login), or legacy numeric Studycafe / wp_user_id
         email: Joi.string().trim().min(1).max(255).required(),
         password: Joi.string().required(),
+    }),
+};
+
+const accountExists = {
+    body: Joi.object({
+        email: Joi.string().trim().email().max(255).required(),
     }),
 };
 
@@ -209,6 +219,7 @@ const removeMembership = {
 module.exports = {
     register,
     registerQuick,
+    accountExists,
     login,
     loginOtpRequest,
     loginOtp,

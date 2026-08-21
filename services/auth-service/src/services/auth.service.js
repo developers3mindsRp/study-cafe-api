@@ -340,7 +340,7 @@ async function signupResultForUser(userId) {
  * matches — which proves exactly as much as signing in would. Everything else
  * falls through to the usual 409.
  */
-async function resumeUnverifiedSignup(existing, { password, name, phoneNorm, phoneOwnerId }) {
+async function resumeUnverifiedSignup(existing, { password, name, phoneNorm, phoneOwnerId, sendVerifyOtp = true }) {
   const plain = existing.get({ plain: true });
   if (plain.is_active !== true) return null;
   if (plain.wp_user_id != null) return null; // migrated WP accounts sign in normally
@@ -360,7 +360,7 @@ async function resumeUnverifiedSignup(existing, { password, name, phoneNorm, pho
   if (phoneNorm && phoneNorm !== plain.phone) patch.phone = phoneNorm;
   if (Object.keys(patch).length > 0) await existing.update(patch);
 
-  await dispatchSignupOtp({ userId: plain.id, email: plain.email });
+  if (sendVerifyOtp) await dispatchSignupOtp({ userId: plain.id, email: plain.email });
   logger.info('[register] resumed an unverified signup', { userId: plain.id });
   return signupResultForUser(plain.id);
 }
@@ -385,7 +385,7 @@ async function createUserAccount({
   state,
   country,
   gst,
-}) {
+}, { sendVerifyOtp = true } = {}) {
   const userRole = await Role.findOne({
     where: { name: 'user' },
     attributes: ['id'],
@@ -413,6 +413,7 @@ async function createUserAccount({
       name,
       phoneNorm,
       phoneOwnerId: existingByPhone ? existingByPhone.id : null,
+      sendVerifyOtp,
     });
     if (resumed) return resumed;
     throw new AppError('This email is already registered. Try signing in or use a different email.', 409);
@@ -445,7 +446,7 @@ async function createUserAccount({
     email_verified_at: null
   });
 
-  await dispatchSignupOtp({ userId: user.id, email: emailNorm });
+  if (sendVerifyOtp) await dispatchSignupOtp({ userId: user.id, email: emailNorm });
 
   emailService.sendWelcomeEmail({ to: emailNorm, name: name ? String(name).trim() : null }).catch((err) => {
     logger.warn('[register] Welcome email failed (non-blocking)', { email: emailNorm, err: err?.message });
@@ -488,9 +489,45 @@ async function rateLimitQuickRegister({ emailNorm, clientIp }) {
   }
 }
 
-async function registerQuick({ email, password, name, phone, referralCode, clientIp }) {
+async function registerQuick({ email, password, name, phone, referralCode, skipVerificationEmail = false, clientIp }) {
   await rateLimitQuickRegister({ emailNorm: String(email).trim().toLowerCase(), clientIp });
-  return createUserAccount({ email, password, name, phone, referralCode });
+  return createUserAccount(
+    { email, password, name, phone, referralCode },
+    { sendVerifyOtp: !skipVerificationEmail }
+  );
+}
+
+async function rateLimitAccountLookup(clientIp) {
+  if (!clientIp) return;
+  const redis = await getRedis();
+  const key = `ratelimit:account_lookup:ip:${clientIp}`;
+  const n = await redis.incr(key);
+  if (n === 1) await redis.expire(key, 3600);
+  // Generous — a buyer correcting a typo on a checkout form should never hit this,
+  // while a script walking an address list will.
+  if (n > 120) {
+    throw new AppError('Too many lookups. Try again later.', 429);
+  }
+}
+
+/**
+ * Does this email already have an account? Drives the checkout form's fork between
+ * "sign in to continue" and "pick a password".
+ *
+ * Deliberately returns nothing but a boolean. It is an enumeration surface, but no
+ * more than the sign-in code request already is (that 404s on unknown emails), and
+ * asking a buyer to guess whether they have an account is a reliable way to lose the
+ * sale. Rate limited per IP.
+ */
+async function accountExistsForEmail({ email, clientIp }) {
+  await rateLimitAccountLookup(clientIp);
+  const emailNorm = String(email || '').trim().toLowerCase();
+  if (!emailNorm) return { exists: false };
+  const user = await User.findOne({
+    where: { email: emailNorm, is_active: true },
+    attributes: ['id'],
+  });
+  return { exists: !!user };
 }
 
 async function findActiveUserByLoginIdentifier(identifier) {
@@ -781,6 +818,7 @@ module.exports = {
   verifyRefresh,
   register,
   registerQuick,
+  accountExistsForEmail,
   loginWithPassword,
   loginWithEmailOtp,
   requestLoginOtp,

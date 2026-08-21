@@ -50,6 +50,16 @@ async function connect() {
       throw err;
     }
   }
+  // What a payment-link order must grant, frozen at order-create time. Without this
+  // column every order query fails on boot, so it is added here rather than left to a
+  // manual migration step (scripts/ensure-payment-link-product-columns.js does the same).
+  try {
+    await sequelize.query('ALTER TABLE orders ADD COLUMN fulfilment JSON NULL AFTER utm');
+  } catch (err) {
+    if (err?.parent?.errno !== 1060 && err?.original?.errno !== 1060) {
+      throw err;
+    }
+  }
   try {
     await sequelize.query('ALTER TABLE orders ADD COLUMN buyer_gst VARCHAR(32) NULL AFTER buyer_mobile');
   } catch (err) {

@@ -25,6 +25,10 @@ const marketingMetaSchema = Joi.object({
     cta_subtitle: Joi.string().allow('', null),
     cta_price_text: Joi.string().allow('', null),
     increased_price_text: Joi.string().allow('', null),
+    // Campaign pricing: what the inline checkout on this page actually charges
+    // (order-service reads sale_price server-side). amount is the struck-through MRP.
+    amount: Joi.alternatives().try(Joi.number().min(0), Joi.string().max(20)).allow('', null),
+    sale_price: Joi.alternatives().try(Joi.number().min(0), Joi.string().max(20)).allow('', null),
     countdown_minutes: Joi.number().integer().min(1).max(180).allow(null),
     use_global_faq: Joi.boolean(),
     use_course_faq: Joi.boolean(),

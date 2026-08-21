@@ -312,6 +312,32 @@ async function fetchUserContact(userId) {
   }
 }
 
+/**
+ * A completed checkout is proof enough of the inbox — the receipt and access
+ * emails land there. Marking the buyer verified here keeps a quick-registered
+ * buyer (no-OTP checkout signup) from paying and then being bounced to the
+ * /verify-email wall before they can see their purchase or open the course.
+ *
+ * Awaited by callers so the flag is set BEFORE the checkout verify response
+ * returns (the web app refetches /auth/me right after). Never throws — a
+ * failure here must not undo a payment that already went through; the buyer
+ * can still verify by email as before.
+ */
+async function markBuyerEmailVerified(userId, orderId) {
+  if (!userId) return;
+  try {
+    await axios.post(
+      `${config.authServiceUrl}/internal/users/${userId}/mark-email-verified`,
+      {},
+      { headers: { 'x-internal-api-key': config.internalApiKey }, timeout: 5000 }
+    );
+  } catch (err) {
+    logger.warn(
+      `[orders] mark-email-verified failed for user ${userId} order=${orderId || '?'}: ${err.message}`
+    );
+  }
+}
+
 function normalizeOrderType(type) {
   if (!type || typeof type !== 'string') return '';
   return type.trim().toUpperCase();
@@ -342,6 +368,56 @@ async function fetchCourseAmount(entityId) {
   const effective = hasSale && saleNum != null && Number.isFinite(saleNum) ? saleNum : listNum;
   if (!Number.isFinite(effective) || effective < 0) throw new AppError('Course price unavailable', 400);
   return effective;
+}
+
+/**
+ * Campaign price for a course sold through a marketing landing page.
+ *
+ * The client only names the page (`marketingSlug`); the amount itself is read
+ * server-side from course-service, so a tampered request can never set its own
+ * price. Returns the page's sale price when the page is published, points at
+ * this exact course, and carries a usable number — anything else returns null
+ * and the checkout falls back to the course's own canonical price. Falling back
+ * (rather than erroring) is deliberate: a stale or misconfigured landing page
+ * should degrade to the regular price, not block the sale.
+ */
+async function resolveMarketingCampaignPrice(marketingSlug, courseId) {
+  try {
+    const { data, status } = await axios.get(
+      `${config.courseServiceUrl}/internal/marketing-pages/by-slug/${encodeURIComponent(marketingSlug)}`,
+      {
+        timeout: 8000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200 || s === 404,
+      }
+    );
+    if (status !== 200) {
+      logger.warn(`[orders] marketing page "${marketingSlug}" not found — using course price`);
+      return null;
+    }
+    const page = parseApiResponse(data);
+    if (!page || !page.is_published) {
+      logger.warn(`[orders] marketing page "${marketingSlug}" unpublished — using course price`);
+      return null;
+    }
+    if (String(page.course_id) !== String(courseId)) {
+      logger.warn(
+        `[orders] marketing page "${marketingSlug}" sells course ${page.course_id}, not ${courseId} — using course price`
+      );
+      return null;
+    }
+    const rawSale = page.meta?.sale_price;
+    if (rawSale == null || rawSale === '') return null;
+    const sale = Number(rawSale);
+    if (!Number.isFinite(sale) || sale < 0) {
+      logger.warn(`[orders] marketing page "${marketingSlug}" has invalid sale_price "${rawSale}" — using course price`);
+      return null;
+    }
+    return sale;
+  } catch (err) {
+    logger.warn(`[orders] resolveMarketingCampaignPrice("${marketingSlug}") failed: ${err.message}`);
+    return null;
+  }
 }
 
 /**
@@ -723,6 +799,188 @@ async function fetchCourseValidity(courseId) {
   }
 }
 
+/**
+ * One COURSE_PURCHASED event.
+ *
+ * Even when the learner already has course access (so the worker skips re-granting /
+ * extending it), this order still recorded a specific purchase batch — the batch
+ * assignment must still be synced, or the order's batch_id is permanently orphaned
+ * from what batch_enrollments actually reflects. Always emit the event; only the
+ * access-grant side is conditional.
+ */
+async function emitCourseGrant(locked, t, { courseId, batchId, existingCourseIds, isMembershipLinked = false }) {
+  const oid = locked.order_id;
+  const cid = Number(courseId);
+  const alreadyEnrolled = Number.isFinite(cid) && cid > 0 && existingCourseIds.has(cid);
+  if (alreadyEnrolled) {
+    logger.info(
+      `[orders] user already has access to ${isMembershipLinked ? 'membership-linked ' : ''}course=${cid} order=${oid} — skipping access grant, batch will still be synced`
+    );
+  }
+  const validity = await fetchCourseValidity(courseId);
+  await OutboxEvent.create(
+    {
+      aggregate_type: 'order',
+      aggregate_id: oid,
+      event_type: 'COURSE_PURCHASED',
+      payload: {
+        userId: locked.user_id,
+        orderId: oid,
+        courseId: String(courseId),
+        batchId: batchId ? Number(batchId) : null,
+        ...(isMembershipLinked ? { isMembershipLinked: true } : {}),
+        validity,
+        skipAccessGrant: alreadyEnrolled,
+      },
+    },
+    { transaction: t }
+  );
+}
+
+/**
+ * MEMBERSHIP_ACTIVATED plus one COURSE_PURCHASED per course the plan bundles.
+ *
+ * `planRef` is a plan id or slug. It is passed in rather than read off the order
+ * because a payment-link order stores the *link* id in entity_id — see the orderView
+ * note below for why that distinction matters.
+ */
+async function emitMembershipGrant(locked, t, { planRef, planSlug = null, existingCourseIds, isManual = false }) {
+  const oid = locked.order_id;
+  const plan = await fetchPlanDetails(planRef);
+  // Fetch user's email from auth-service (authoritative source) rather than buyer_email on the order
+  const userContact = locked.user_id ? await fetchUserContact(locked.user_id) : null;
+
+  // When the plan can't be resolved, buildMembershipPayload falls back to the order's
+  // entity_id for the membership tier. On a payment-link order that is the link id, so
+  // the fallback would grant a membership named "42". Hand it the plan reference (the
+  // slug snapshotted at checkout, when available) so even the degraded path is right.
+  const needsPlanRefView = String(planRef) !== String(locked.entity_id);
+  const orderView = needsPlanRefView
+    ? {
+        ...(typeof locked.get === 'function' ? locked.get({ plain: true }) : locked),
+        entity_id: planSlug || String(planRef),
+      }
+    : locked;
+  const payload = buildMembershipPayload(orderView, plan, userContact, isManual);
+
+  await OutboxEvent.create(
+    {
+      aggregate_type: 'order',
+      aggregate_id: oid,
+      event_type: 'MEMBERSHIP_ACTIVATED',
+      payload,
+    },
+    { transaction: t }
+  );
+
+  // Auto-assign courses linked to this membership plan.
+  // planRef may be a slug (admin grants) — use the resolved plan's numeric id
+  // since the linked-courses endpoint is numeric-only.
+  const linkedCoursesPlanRef = plan?.id != null ? plan.id : planRef;
+  const { course_ids = [], course_cat_ids = [] } = await fetchPlanLinkedCourses(linkedCoursesPlanRef);
+
+  // 1. Handle explicit course IDs
+  const courseSet = new Set(course_ids.map(Number).filter(Boolean));
+
+  // 2. Resolve course IDs from categories
+  if (course_cat_ids.length > 0) {
+    try {
+      const { data } = await axios.post(
+        `${config.courseServiceUrl}/internal/courses/by-ids`,
+        { cat_ids: course_cat_ids },
+        {
+          timeout: 10000,
+          headers: { 'x-internal-api-key': config.internalApiKey },
+          validateStatus: (s) => s === 200,
+        }
+      );
+      const resolved = parseApiResponse(data);
+      if (Array.isArray(resolved)) {
+        resolved.forEach(c => courseSet.add(Number(c.id)));
+      }
+    } catch (err) {
+      logger.warn(`[orders] failed to resolve course categories for plan ${planRef}: ${err.message}`);
+    }
+  }
+
+  // 3. Emit COURSE_PURCHASED for each linked course (skip if user already has access — e.g. prior standalone purchase)
+  for (const cid of courseSet) {
+    // We resolve batch synchronously for EACH course to ensure consistency
+    const batchId = await fetchPurchaseBatchId(cid);
+    await emitCourseGrant(locked, t, {
+      courseId: cid,
+      batchId,
+      existingCourseIds,
+      isMembershipLinked: true,
+    });
+  }
+}
+
+/**
+ * What a payment-link order promised the buyer, snapshotted onto the order at create
+ * time: { product_type, product_id, batch_id, plan_slug, auto_enroll }.
+ */
+function parseFulfilment(locked) {
+  const raw = locked.fulfilment;
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      logger.warn(`[orders] unreadable fulfilment snapshot on order=${locked.order_id}`);
+      return null;
+    }
+  }
+  return typeof raw === 'object' ? raw : null;
+}
+
+/**
+ * Payment-link fulfilment — grant whatever the link was selling.
+ *
+ * Every early return here leaves the order exactly where payment links used to end
+ * up before they could fulfil themselves: paid, recorded, awaiting a manual grant.
+ * That is a safe degradation, but a silent one, so each is logged at error level with
+ * the order id — nothing here is expected in normal operation except 'custom' links.
+ */
+async function emitPaymentLinkGrant(locked, t, { existingCourseIds, isManual = false }) {
+  const oid = locked.order_id;
+  const snapshot = parseFulfilment(locked);
+  const productType = snapshot?.product_type ? String(snapshot.product_type) : 'custom';
+
+  // Money-only link (and every link created before this feature existed).
+  if (productType === 'custom') return;
+
+  if (snapshot.auto_enroll === false) {
+    logger.info(`[orders] payment link order=${oid} has auto-enroll off — recording sale only`);
+    return;
+  }
+  if (!locked.user_id) {
+    logger.error(`[orders] payment link order=${oid} is paid but has no user — cannot grant ${productType}`);
+    return;
+  }
+  if (!snapshot.product_id) {
+    logger.error(`[orders] payment link order=${oid} has product_type=${productType} but no product_id`);
+    return;
+  }
+
+  if (productType === 'course') {
+    await emitCourseGrant(locked, t, {
+      courseId: snapshot.product_id,
+      batchId: snapshot.batch_id != null ? snapshot.batch_id : locked.batch_id,
+      existingCourseIds,
+    });
+  } else if (productType === 'membership') {
+    await emitMembershipGrant(locked, t, {
+      planRef: snapshot.product_id,
+      planSlug: snapshot.plan_slug || null,
+      existingCourseIds,
+      isManual,
+    });
+  } else {
+    logger.error(`[orders] payment link order=${oid} has unknown product_type=${productType}`);
+  }
+}
+
 /** Outbox: enrollment / membership + affiliate (only when order amount &gt; 0). */
 async function emitPurchaseOutbox(locked, t, options = {}) {
   const skipAffiliate = options && options.skipAffiliate === true;
@@ -731,110 +989,19 @@ async function emitPurchaseOutbox(locked, t, options = {}) {
   const existingCourseIds = await fetchUserEnrolledCourseIds(locked.user_id);
 
   if (locked.type === 'course') {
-    const cid = Number(locked.entity_id);
-    const alreadyEnrolled = Number.isFinite(cid) && cid > 0 && existingCourseIds.has(cid);
-    // Even when the learner already has course access (so we skip re-granting/extending
-    // it below), this order still recorded a specific purchase batch — the batch
-    // assignment must still be synced, or the order's batch_id is permanently orphaned
-    // from what batch_enrollments actually reflects. Always emit the event; only the
-    // access-grant side is conditional.
-    if (alreadyEnrolled) {
-      logger.info(
-        `[orders] user already has access to course=${cid} order=${oid} — skipping access grant, batch will still be synced`
-      );
-    }
-    const validity = await fetchCourseValidity(locked.entity_id);
-    await OutboxEvent.create(
-      {
-        aggregate_type: 'order',
-        aggregate_id: oid,
-        event_type: 'COURSE_PURCHASED',
-        payload: {
-          userId: locked.user_id,
-          orderId: oid,
-          courseId: locked.entity_id,
-          batchId: locked.batch_id ? Number(locked.batch_id) : null,
-          validity,
-          skipAccessGrant: alreadyEnrolled,
-        },
-      },
-      { transaction: t }
-    );
+    await emitCourseGrant(locked, t, {
+      courseId: locked.entity_id,
+      batchId: locked.batch_id,
+      existingCourseIds,
+    });
   } else if (locked.type === 'membership') {
-    const plan = await fetchPlanDetails(locked.entity_id);
-    // Fetch user's email from auth-service (authoritative source) rather than buyer_email on the order
-    const userContact = locked.user_id ? await fetchUserContact(locked.user_id) : null;
-    const payload = buildMembershipPayload(locked, plan, userContact, isManual);
-    await OutboxEvent.create(
-      {
-        aggregate_type: 'order',
-        aggregate_id: oid,
-        event_type: 'MEMBERSHIP_ACTIVATED',
-        payload,
-      },
-      { transaction: t }
-    );
-
-    // Auto-assign courses linked to this membership plan.
-    // entity_id may be a slug (admin grants) — use the resolved plan's numeric id
-    // since the linked-courses endpoint is numeric-only.
-    const linkedCoursesPlanRef = plan?.id != null ? plan.id : locked.entity_id;
-    const { course_ids = [], course_cat_ids = [] } = await fetchPlanLinkedCourses(linkedCoursesPlanRef);
-
-    // 1. Handle explicit course IDs
-    const courseSet = new Set(course_ids.map(Number).filter(Boolean));
-
-    // 2. Resolve course IDs from categories
-    if (course_cat_ids.length > 0) {
-      try {
-        const { data } = await axios.post(
-          `${config.courseServiceUrl}/internal/courses/by-ids`,
-          { cat_ids: course_cat_ids },
-          {
-            timeout: 10000,
-            headers: { 'x-internal-api-key': config.internalApiKey },
-            validateStatus: (s) => s === 200,
-          }
-        );
-        const resolved = parseApiResponse(data);
-        if (Array.isArray(resolved)) {
-          resolved.forEach(c => courseSet.add(Number(c.id)));
-        }
-      } catch (err) {
-        logger.warn(`[orders] failed to resolve course categories for plan ${locked.entity_id}: ${err.message}`);
-      }
-    }
-
-    // 3. Emit COURSE_PURCHASED for each linked course (skip if user already has access — e.g. prior standalone purchase)
-    for (const cid of courseSet) {
-      const courseNum = Number(cid);
-      const alreadyEnrolled = Number.isFinite(courseNum) && courseNum > 0 && existingCourseIds.has(courseNum);
-      if (alreadyEnrolled) {
-        logger.info(
-          `[orders] user already has access to membership-linked course=${courseNum} order=${oid} — skipping access grant, batch will still be synced`
-        );
-      }
-      // We resolve batch synchronously for EACH course to ensure consistency
-      const batchId = await fetchPurchaseBatchId(cid);
-      const validity = await fetchCourseValidity(cid);
-      await OutboxEvent.create(
-        {
-          aggregate_type: 'order',
-          aggregate_id: oid,
-          event_type: 'COURSE_PURCHASED',
-          payload: {
-            userId: locked.user_id,
-            orderId: oid,
-            courseId: String(cid),
-            batchId: batchId ? Number(batchId) : null,
-            isMembershipLinked: true,
-            validity,
-            skipAccessGrant: alreadyEnrolled,
-          },
-        },
-        { transaction: t }
-      );
-    }
+    await emitMembershipGrant(locked, t, {
+      planRef: locked.entity_id,
+      existingCourseIds,
+      isManual,
+    });
+  } else if (locked.type === 'payment_link') {
+    await emitPaymentLinkGrant(locked, t, { existingCourseIds, isManual });
   }
 
   const orderAmt = parseFloat(locked.amount);
@@ -901,28 +1068,51 @@ async function emitMembershipRecordOnlyOutbox(locked, t, { startsAt, expiresAt }
 
 // ─── Payment email outbox helper ──────────────────────────────────────────────
 
+/** Course title for receipts/emails, or null when it can't be resolved. */
+async function resolveCourseTitle(courseId) {
+  try {
+    const { data } = await axios.get(`${config.courseServiceUrl}/internal/courses/${courseId}`, {
+      timeout: 5000,
+      headers: { 'x-internal-api-key': config.internalApiKey },
+      validateStatus: (s) => s === 200,
+    });
+    const payload = parseApiResponse(data);
+    return payload?.title || payload?.name || null;
+  } catch (err) {
+    logger.warn(`[orders] course title fetch failed for course ${courseId}: ${err.message}`);
+    return null;
+  }
+}
+
 async function resolveItemName(order) {
   const t = String(order.type || '').toLowerCase();
   const eid = order.entity_id;
   if (t === 'course' && eid) {
-    try {
-      const { data } = await axios.get(`${config.courseServiceUrl}/internal/courses/${eid}`, {
-        timeout: 5000,
-        headers: { 'x-internal-api-key': config.internalApiKey },
-        validateStatus: (s) => s === 200,
-      });
-      const payload = parseApiResponse(data);
-      return payload?.title || payload?.name || 'Course';
-    } catch (err) {
-      logger.warn(`[orders] resolveItemName course fetch failed for entity ${eid}: ${err.message}`);
-      return 'Course';
-    }
+    return (await resolveCourseTitle(eid)) || 'Course';
   }
   if (t === 'membership' && eid) {
     const name = await resolveMembershipPlanDisplayName(eid);
     return name || 'Membership Plan';
   }
-  return t === 'payment_link' ? 'Payment Link Purchase' : 'Purchase';
+  if (t === 'payment_link') {
+    // A link that sells a course/plan should say so on the receipt — "Payment Link
+    // Purchase" tells the buyer nothing about what they just bought.
+    const snapshot = parseFulfilment(order);
+    if (snapshot && snapshot.product_id) {
+      const productType = String(snapshot.product_type || '');
+      if (productType === 'course') {
+        return (await resolveCourseTitle(snapshot.product_id)) || 'Course';
+      }
+      if (productType === 'membership') {
+        const name =
+          (await resolveMembershipPlanDisplayName(snapshot.product_id)) ||
+          (snapshot.plan_slug ? await resolveMembershipPlanDisplayName(snapshot.plan_slug) : null);
+        return name || 'Membership Plan';
+      }
+    }
+    return 'Payment Link Purchase';
+  }
+  return 'Purchase';
 }
 
 async function resolveRecipientEmail(order) {
@@ -1031,6 +1221,129 @@ async function captureRazorpayPayment(razorpayPaymentId, amountRupees, currency 
   }
 }
 
+// ─── Guest checkout → real account ────────────────────────────────────────────
+// Payment links can be paid without signing in. The checkout page signs the buyer
+// up before it opens Razorpay, so orders normally arrive with a user_id already —
+// but if that ever fails (session dropped, older client, admin-created order) a
+// paid order would have nobody to enrol. These resolve that at payment time so
+// "paid" and "enrolled" cannot come apart.
+
+/** Internal id of an existing account for this email, or null. */
+async function fetchUserIdByEmail(email) {
+  try {
+    const { data } = await axios.post(
+      `${config.authServiceUrl}/internal/users/by-emails`,
+      { emails: [email] },
+      {
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        timeout: 10000,
+        validateStatus: (s) => s === 200,
+      }
+    );
+    const rows = parseApiResponse(data);
+    const found = Array.isArray(rows) ? rows[0] : null;
+    const id = found && found.id != null ? Number(found.id) : NaN;
+    return Number.isFinite(id) && id > 0 ? id : null;
+  } catch (err) {
+    logger.warn(`[orders] user lookup by email failed: ${err.message}`);
+    return null;
+  }
+}
+
+/** Account for a buyer we've never seen. Returns the new user id, or null if we couldn't. */
+async function createUserForBuyer({ email, name, phone }) {
+  const attempt = async (payload) => {
+    const { data } = await axios.post(`${config.authServiceUrl}/users`, payload, {
+      headers: { 'x-internal-api-key': config.internalApiKey },
+      timeout: 15000,
+      validateStatus: (s) => s >= 200 && s < 300,
+    });
+    const created = parseApiResponse(data);
+    const id = created && created.id != null ? Number(created.id) : NaN;
+    return Number.isFinite(id) && id > 0 ? id : null;
+  };
+
+  const fallbackName = email.split('@')[0].replace(/[._-]+/g, ' ').trim();
+  const base = { email, name: name || fallbackName || email, role: 'user' };
+
+  try {
+    return await attempt(phone ? { ...base, phone } : base);
+  } catch (err) {
+    if (!phone) {
+      logger.error(`[orders] could not create account for buyer ${email}: ${err.message}`);
+      return null;
+    }
+    // users.phone is uniquely indexed. A buyer paying under a new email but a phone
+    // already on file would lose their enrolment to a duplicate-key error — the phone
+    // is not worth that, so drop it and keep the account.
+    logger.warn(`[orders] account create with phone failed for ${email} (${err.message}) — retrying without phone`);
+    try {
+      return await attempt(base);
+    } catch (err2) {
+      logger.error(`[orders] could not create account for buyer ${email}: ${err2.message}`);
+      return null;
+    }
+  }
+}
+
+/**
+ * The account an auto-created buyer has no password for yet. Fire-and-forget: a
+ * failed email must never hold up a grant they have already paid for.
+ */
+function sendAccountSetupEmail(email) {
+  axios
+    .post(`${config.authServiceUrl}/auth/forgot-password`, { email }, { timeout: 10000 })
+    .catch((err) => {
+      logger.warn(`[orders] password-setup email failed for ${email}: ${err.message}`);
+    });
+}
+
+/**
+ * The user this order's access belongs to.
+ *
+ * `allowCreate` is off for money-only links: matching an existing account is always
+ * useful (the purchase shows up in their history), but minting an account for someone
+ * who bought a one-off item that grants nothing would just litter the user table.
+ */
+async function resolveBuyerUserId(order, { allowCreate }) {
+  if (order.user_id) return Number(order.user_id);
+
+  const email = String(order.buyer_email || '').trim().toLowerCase();
+  if (!email) {
+    logger.error(`[orders] order=${order.order_id} has no user and no buyer email — cannot resolve a buyer`);
+    return null;
+  }
+
+  const existing = await fetchUserIdByEmail(email);
+  if (existing) return existing;
+  if (!allowCreate) return null;
+
+  const created = await createUserForBuyer({
+    email,
+    name: order.buyer_name || null,
+    phone: order.buyer_mobile || null,
+  });
+  if (created) {
+    logger.info(`[orders] created account ${created} for guest checkout order=${order.order_id}`);
+    sendAccountSetupEmail(email);
+  }
+  return created;
+}
+
+/** Whether this order's snapshot actually grants something a user is needed for. */
+function orderNeedsBuyerAccount(order) {
+  const snapshot = parseFulfilment(order);
+  if (!snapshot) return false;
+  const type = snapshot.product_type ? String(snapshot.product_type) : 'custom';
+  return type !== 'custom' && snapshot.auto_enroll !== false && !!snapshot.product_id;
+}
+
+/** null when the order already has a user or none could be resolved. */
+async function resolveMissingBuyerForPaymentLink(order) {
+  if (order.user_id || String(order.type) !== 'payment_link') return null;
+  return resolveBuyerUserId(order, { allowCreate: orderNeedsBuyerAccount(order) });
+}
+
 // ─── completePayment ──────────────────────────────────────────────────────────
 // Called by both checkout verify and webhook. Uses SELECT … FOR UPDATE to
 // prevent a double-payment race when verify + webhook arrive simultaneously.
@@ -1049,7 +1362,11 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
     // stays "authorized" and Razorpay auto-refunds it after ~1 day.
     await captureRazorpayPayment(razorpayPaymentId, current.amount, current.currency);
 
-    return await sequelize.transaction(async (t) => {
+    // Outside the transaction on purpose — this can create an account in auth-service,
+    // and that HTTP round trip should not be holding a row lock on the order.
+    const resolvedBuyerId = await resolveMissingBuyerForPaymentLink(current);
+
+    const outcome = await sequelize.transaction(async (t) => {
       const locked = await Order.findOne({
         where: { id: order.id },
         lock: t.LOCK.UPDATE,
@@ -1060,7 +1377,9 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
         return { alreadyPaid: true, message: 'Already paid' };
       }
 
-      await locked.update({ status: 'paid', gateway: ORDER_GATEWAY.RAZORPAY }, { transaction: t });
+      const paidPatch = { status: 'paid', gateway: ORDER_GATEWAY.RAZORPAY };
+      if (resolvedBuyerId && !locked.user_id) paidPatch.user_id = resolvedBuyerId;
+      await locked.update(paidPatch, { transaction: t });
 
       const existingPay = await Payment.findOne({
         where: { razorpay_payment_id: razorpayPaymentId },
@@ -1100,6 +1419,13 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
       await emitPaymentEmailOutbox(locked, razorpayPaymentId, 'success', t);
       return { verified: true };
     });
+
+    // Awaited so checkout's verify response returns AFTER the flag is set — the web
+    // app refetches /auth/me immediately after and must not see a stale "unverified".
+    if (outcome && outcome.verified) {
+      await markBuyerEmailVerified(resolvedBuyerId || current.user_id, current.order_id);
+    }
+    return outcome;
   } catch (err) {
     if (err.name === 'SequelizeUniqueConstraintError') {
       const fresh = await Order.findByPk(order.id);
@@ -1193,11 +1519,19 @@ function formatAccessExpiryLabel(value) {
 // IDEMPOTENCY: Reuses a single pending/failed checkout row per (user, type, entity) so
 // repeat /orders/create calls do not insert duplicate orders for the same purchase intent.
 
-async function createOrder(userId, { type, entityId, couponCode, referralCode, currency = 'INR', utm, buyer_name, buyer_email, buyer_mobile }) {
+async function createOrder(userId, { type, entityId, couponCode, referralCode, currency = 'INR', utm, buyer_name, buyer_email, buyer_mobile, marketingSlug }) {
   const typeUpper = normalizeOrderType(type);
 
   // 1. Fetch canonical price from the owning service — never trust client
-  const originalAmount = await resolveAmountForEntity(typeUpper, entityId);
+  let originalAmount = await resolveAmountForEntity(typeUpper, entityId);
+
+  // 1a. Marketing landing pages can sell the course at a campaign price. Still
+  // server-canonical — the client only names the page, the price is read from
+  // course-service and only honoured when the published page sells THIS course.
+  if (typeUpper === 'COURSE' && marketingSlug && String(marketingSlug).trim()) {
+    const campaignPrice = await resolveMarketingCampaignPrice(String(marketingSlug).trim(), entityId);
+    if (campaignPrice != null) originalAmount = campaignPrice;
+  }
 
   // 1b. Membership upgrade guard — enforce one-active-membership and upgrade-only direction
   let upgradeDeduction = 0;
@@ -1289,6 +1623,9 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
         logger.info(
           `[orders] free re-registration ignored for user ${userId} course ${entityId} — already held by order ${owned.order.order_id}`
         );
+        // Still a completed checkout from the caller's perspective — the success
+        // page is gated on a verified email, so flip the flag here too.
+        await markBuyerEmailVerified(userId, owned.order.order_id);
         return {
           orderId: owned.order.order_id,
           free: true,
@@ -1441,6 +1778,9 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
         }
       });
       await redis.del(lockKey);
+      // A free checkout fulfils immediately and never passes through completePayment,
+      // so the quick-registered buyer is verified here instead.
+      await markBuyerEmailVerified(userId, outOrderId);
       return {
         orderId: outOrderId,
         free: true,
@@ -1610,6 +1950,45 @@ async function fetchPaymentLinkCheckoutContext(paymentLinkId) {
   }
 }
 
+/**
+ * Freeze what the link is selling onto the order.
+ *
+ * Read once at order-create time and never again: an admin can edit the link — or
+ * repoint it at a different course — between the buyer opening Razorpay and paying,
+ * and the buyer must get what the page they paid on promised.
+ *
+ * Returns null for money-only links, which keeps `fulfilment` NULL on the order and
+ * leaves fulfilment behaving exactly as it did before links could sell products.
+ */
+async function buildPaymentLinkFulfilment(link) {
+  const productType = link && link.product_type ? String(link.product_type).toLowerCase() : 'custom';
+  const productId = link && link.product_id != null && String(link.product_id).trim() !== ''
+    ? String(link.product_id).trim()
+    : null;
+  if (productType === 'custom' || !productId) return null;
+
+  const snapshot = {
+    product_type: productType,
+    product_id: productId,
+    batch_id: null,
+    auto_enroll: link.auto_enroll !== false && link.auto_enroll !== 0,
+  };
+
+  if (productType === 'course') {
+    const explicit = Number(link.batch_id);
+    snapshot.batch_id = Number.isFinite(explicit) && explicit > 0
+      ? explicit
+      : await fetchPurchaseBatchId(productId);
+  } else if (productType === 'membership') {
+    // grant-membership keys off the plan slug. Resolving it here means a plan lookup
+    // failing later can't degrade the grant into a bogus tier — see emitMembershipGrant.
+    const plan = await fetchPlanDetails(productId);
+    if (plan?.slug) snapshot.plan_slug = plan.slug;
+  }
+
+  return snapshot;
+}
+
 async function createPaymentLinkOrder(userId, body) {
   const paymentLinkId = String(body.paymentLinkId ?? '').trim();
   const fullName = String(body.fullName || '').trim();
@@ -1629,6 +2008,12 @@ async function createPaymentLinkOrder(userId, body) {
   const listAmount = parseAmount(link.amount);
   if (!Number.isFinite(salePrice) || salePrice < 0) throw new AppError('Invalid payment link price', 400);
 
+  const fulfilment = await buildPaymentLinkFulfilment(link);
+  // Course links carry the batch on the order itself as well, so batch reconciliation
+  // and enrollment reporting see a payment-link purchase the same way they see a
+  // direct course order.
+  const orderBatchId = fulfilment && fulfilment.product_type === 'course' ? fulfilment.batch_id : null;
+
   const discountAmount = 0;
   const afterDiscount = salePrice;
   const gstAmount = Number((afterDiscount * GST_RATE).toFixed(2));
@@ -1643,6 +2028,23 @@ async function createPaymentLinkOrder(userId, body) {
 
   try {
     if (grandTotal <= 0) {
+      // A ₹0 link grants access just like a paid one and never passes through
+      // completePayment, so it resolves its buyer here instead.
+      const freeBuyerUserId =
+        userId != null
+          ? Number(userId)
+          : await resolveBuyerUserId(
+              {
+                order_id: `payment-link:${paymentLinkId}`,
+                user_id: null,
+                buyer_email: emailLower,
+                buyer_name: fullName,
+                buyer_mobile: mobile,
+                fulfilment,
+              },
+              { allowCreate: orderNeedsBuyerAccount({ fulfilment }) }
+            );
+
       let outOrderId;
       await sequelize.transaction(async (t) => {
         let row = await Order.findOne({
@@ -1659,7 +2061,7 @@ async function createPaymentLinkOrder(userId, body) {
           await row.update(
             {
               status: 'pending',
-              user_id: userId != null ? userId : row.user_id,
+              user_id: freeBuyerUserId != null ? freeBuyerUserId : row.user_id,
               original_amount: listAmount,
               amount: grandTotal,
               affiliate: normalizeReferralForOrder(body.referralCode),
@@ -1669,6 +2071,10 @@ async function createPaymentLinkOrder(userId, body) {
               buyer_mobile: mobile,
               buyer_gst: gstNumber,
               utm: body.utm != null ? body.utm : row.utm,
+              // Refreshed on reuse — a pending order retried after the admin edited the
+              // link must deliver what the buyer is looking at now, not last week's product.
+              batch_id: orderBatchId,
+              fulfilment,
             },
             { transaction: t }
           );
@@ -1680,10 +2086,11 @@ async function createPaymentLinkOrder(userId, body) {
           row = await Order.create(
             {
               order_id: oid,
-              user_id: userId || null,
+              user_id: freeBuyerUserId || null,
               type: 'payment_link',
               entity_id: String(paymentLinkId),
-              batch_id: null,
+              batch_id: orderBatchId,
+              fulfilment,
               original_amount: listAmount,
               coupon_code: null,
               coupon_discount: 0,
@@ -1724,6 +2131,9 @@ async function createPaymentLinkOrder(userId, body) {
         await emitPaymentEmailOutbox(locked, `free:${locked.order_id}`, 'success', t);
       });
       await redis.del(lockKey);
+      // Free links fulfil here without completePayment — verify the buyer now so the
+      // success page (gated on verified email) doesn't bounce them.
+      await markBuyerEmailVerified(freeBuyerUserId, outOrderId);
       const rpConfig = await getRazorpayConfig();
       return {
         orderId: outOrderId,
@@ -1774,6 +2184,10 @@ async function createPaymentLinkOrder(userId, body) {
             buyer_mobile: mobile,
             buyer_gst: gstNumber,
             utm: body.utm != null ? body.utm : order.utm,
+            // Refreshed on reuse — a pending order retried after the admin edited the
+            // link must deliver what the buyer is looking at now, not last week's product.
+            batch_id: orderBatchId,
+            fulfilment,
           },
           { transaction: t }
         );
@@ -1786,7 +2200,8 @@ async function createPaymentLinkOrder(userId, body) {
             user_id: userId || null,
             type: 'payment_link',
             entity_id: String(paymentLinkId),
-            batch_id: null,
+            batch_id: orderBatchId,
+            fulfilment,
             original_amount: listAmount,
             coupon_code: null,
             coupon_discount: discountAmount,
@@ -2131,6 +2546,24 @@ async function fetchBatchesMap(batchIds) {
   return map;
 }
 
+/**
+ * The course/plan an order actually conferred.
+ *
+ * For course and membership orders that is just type/entity_id. A payment-link order
+ * carries the *link* id in entity_id, so its real target lives in the fulfilment
+ * snapshot — without this, a learner who bought a course through a payment link sees a
+ * blank "Purchase" tile in My Purchases instead of the course they own.
+ */
+function effectivePurchaseTarget(order) {
+  const type = String(order.type || '');
+  if (type !== 'payment_link') return { type, entityId: order.entity_id };
+
+  const snapshot = parseFulfilment(order);
+  const granted = snapshot?.product_type ? String(snapshot.product_type) : 'custom';
+  if (granted === 'custom' || !snapshot.product_id) return { type, entityId: order.entity_id };
+  return { type: granted, entityId: String(snapshot.product_id) };
+}
+
 async function listMyPurchases(userId) {
   // Return:
   //  - fully paid orders (native + migrated active purchases), AND
@@ -2147,12 +2580,15 @@ async function listMyPurchases(userId) {
     },
     order: [['created_at', 'DESC']],
   });
-  const courseEntityIds = rows
-    .filter((row) => row.get({ plain: true }).type === 'course' && row.get({ plain: true }).entity_id)
-    .map((row) => Number(row.get({ plain: true }).entity_id));
+  const plainRows = rows.map((row) => row.get({ plain: true }));
+  const targetByOrderId = new Map(plainRows.map((o) => [o.id, effectivePurchaseTarget(o)]));
+
+  const courseEntityIds = plainRows
+    .map((o) => targetByOrderId.get(o.id))
+    .filter((target) => target.type === 'course' && target.entityId)
+    .map((target) => Number(target.entityId));
   const courseMetaMap = await fetchCoursesMetaMap(courseEntityIds);
 
-  const plainRows = rows.map((row) => row.get({ plain: true }));
   const orderIds = plainRows.map((o) => o.id);
   const batchIds = [...new Set(plainRows.map((o) => o.batch_id).filter(Boolean))];
 
@@ -2174,10 +2610,11 @@ async function listMyPurchases(userId) {
   const out = [];
   for (const o of plainRows) {
     const payment = paymentByOrderId.get(o.id) || null;
+    const target = targetByOrderId.get(o.id) || { type: String(o.type || ''), entityId: o.entity_id };
     let course = null;
-    if (o.type === 'course' && o.entity_id) {
-      const meta = courseMetaMap.get(String(o.entity_id)) || null;
-      const cid = String(o.entity_id);
+    if (target.type === 'course' && target.entityId) {
+      const meta = courseMetaMap.get(String(target.entityId)) || null;
+      const cid = String(target.entityId);
       course = {
         id: cid,
         title: meta?.title || `Course ${cid}`,
@@ -2198,15 +2635,15 @@ async function listMyPurchases(userId) {
         updatedAt: meta?.updated_at || o.created_at,
       };
     } else {
-      const label = o.type === 'membership' ? 'Membership' : 'Purchase';
+      const label = target.type === 'membership' ? 'Membership' : 'Purchase';
       course = {
-        id: o.entity_id ? String(o.entity_id) : String(o.id),
+        id: target.entityId ? String(target.entityId) : String(o.id),
         title: label,
         description: '',
         thumbnail: '',
         thumbnail_url: null,
         price: Number(o.amount) || 0,
-        category: o.type || '',
+        category: target.type || '',
         level: 'beginner',
         duration: 0,
         instructorId: '',
@@ -2223,7 +2660,7 @@ async function listMyPurchases(userId) {
       o.status === 'paid' ? 'completed' : o.status === 'pending' ? 'pending' : 'failed';
 
     let enrolledBatch = null;
-    if (o.type === 'course' && o.batch_id && course) {
+    if (target.type === 'course' && o.batch_id && course) {
       const batchRow = batchMap.get(Number(o.batch_id)) || null;
       if (batchRow) {
         const phase = computeLiveBatchPhase(batchRow);
@@ -2244,7 +2681,7 @@ async function listMyPurchases(userId) {
     out.push({
       id: String(o.id),
       userId: String(o.user_id),
-      courseId: o.entity_id ? String(o.entity_id) : String(o.id),
+      courseId: target.entityId ? String(target.entityId) : String(o.id),
       course,
       // Batch this purchase was locked to (nullable — e.g. courses without batches yet).
       batchId: o.batch_id || null,
@@ -2993,18 +3430,35 @@ async function revokeAccessForOrder(order) {
   const userId = order.user_id;
   const oid = order.order_id || order.id;
 
-  if (order.type === 'course') {
+  // A payment link grants from its fulfilment snapshot, not from type/entity_id
+  // (entity_id is the link itself), so a refund has to undo the same thing. Money-only
+  // links granted nothing and there is nothing to take back.
+  //
+  // The ORDER_REFUNDED outbox event still carries the order's own type, so the worker's
+  // revoke branch no-ops for payment links — this synchronous path is the one that
+  // matters, and it runs inside the refund transaction.
+  let type = String(order.type || '');
+  let entityId = order.entity_id;
+  if (type === 'payment_link') {
+    const snapshot = parseFulfilment(order);
+    const granted = snapshot?.product_type ? String(snapshot.product_type) : 'custom';
+    if (granted === 'custom' || !snapshot.product_id) return;
+    type = granted;
+    entityId = String(snapshot.product_id);
+  }
+
+  if (type === 'course') {
     try {
-      await axios.post(`${config.courseServiceUrl}/internal/courses/${order.entity_id}/unenroll`, {
+      await axios.post(`${config.courseServiceUrl}/internal/courses/${entityId}/unenroll`, {
         user_id: userId
       }, {
         headers: { 'x-internal-api-key': config.internalApiKey },
         timeout: 10000
       });
     } catch (err) {
-      logger.warn(`[orders] failed to revoke course ${order.entity_id} access for user ${userId}: ${err.message}`);
+      logger.warn(`[orders] failed to revoke course ${entityId} access for user ${userId}: ${err.message}`);
     }
-  } else if (order.type === 'membership') {
+  } else if (type === 'membership') {
     // 1. Revoke membership in auth-service
     try {
       await axios.post(`${config.authServiceUrl}/access/revoke-membership`, {
@@ -3019,7 +3473,7 @@ async function revokeAccessForOrder(order) {
 
     // 2. Resolve linked courses and unenroll
     try {
-       const { course_ids = [], course_cat_ids = [] } = await fetchPlanLinkedCourses(order.entity_id);
+       const { course_ids = [], course_cat_ids = [] } = await fetchPlanLinkedCourses(entityId);
        const courseSet = new Set(course_ids.map(Number).filter(Boolean));
 
        if (course_cat_ids.length > 0) {
@@ -3134,6 +3588,8 @@ async function enrichAdminOrderResponse(p) {
   }
 
   let entity_name = null;
+  /** Payment-link orders only: what the purchase granted. Null for money-only links. */
+  let fulfilment_summary = null;
   const t = (p.type || '').toLowerCase();
   if (t === 'course' && p.entity_id) {
     try {
@@ -3167,6 +3623,27 @@ async function enrichAdminOrderResponse(p) {
     } catch (err) {
       logger.warn(`[orders] enrichAdminOrderResponse payment_link: ${err.message}`);
     }
+
+    // What the link actually granted, read off the order's own snapshot rather than
+    // the link — support needs to see what *this* buyer got, which is not necessarily
+    // what the link sells today.
+    const snapshot = parseFulfilment(p);
+    if (snapshot && snapshot.product_id) {
+      const productType = String(snapshot.product_type || '');
+      let productName = null;
+      if (productType === 'course') {
+        productName = await resolveCourseTitle(snapshot.product_id);
+      } else if (productType === 'membership') {
+        productName = await resolveMembershipPlanDisplayName(snapshot.product_id);
+      }
+      fulfilment_summary = {
+        product_type: productType,
+        product_id: String(snapshot.product_id),
+        product_name: productName,
+        batch_id: snapshot.batch_id != null ? Number(snapshot.batch_id) : null,
+        auto_enroll: snapshot.auto_enroll !== false,
+      };
+    }
   }
 
   // `manual:`/`free:` refs are internally generated, not something an admin typed. When
@@ -3190,6 +3667,7 @@ async function enrichAdminOrderResponse(p) {
       entity_name ||
       p.entity_name ||
       (t === 'membership' ? 'Plan' : t === 'course' ? 'Course' : t === 'payment_link' ? 'Payment link' : null),
+    fulfilment_summary,
   };
 }
 

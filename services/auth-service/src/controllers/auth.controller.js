@@ -85,7 +85,7 @@ const register = asyncHandler(async (req, res) => {
 
 /** Checkout signup: name, email, phone, password only — everything else is collected after purchase. */
 const registerQuick = asyncHandler(async (req, res) => {
-  const { email, password, confirmPassword, name, phone, referralCode } = req.body;
+  const { email, password, confirmPassword, name, phone, referralCode, skipVerificationEmail } = req.body;
   if (confirmPassword && confirmPassword !== password) {
     throw new AppError('Passwords do not match', 400);
   }
@@ -95,9 +95,19 @@ const registerQuick = asyncHandler(async (req, res) => {
     name,
     phone,
     referralCode,
+    skipVerificationEmail: skipVerificationEmail === true,
     clientIp: forwardedClientIp(req),
   });
   sendCreated(res, newAccountSession(user));
+});
+
+/** Checkout fork: does this buyer already have an account, or do they need to make one? */
+const accountExists = asyncHandler(async (req, res) => {
+  const out = await authService.accountExistsForEmail({
+    email: req.body.email,
+    clientIp: forwardedClientIp(req),
+  });
+  sendSuccess(res, out);
 });
 
 const login = asyncHandler(async (req, res) => {
@@ -221,6 +231,7 @@ const resetPassword = asyncHandler(async (req, res) => {
 module.exports = {
   register,
   registerQuick,
+  accountExists,
   login,
   loginRequestOtp,
   loginWithOtp,

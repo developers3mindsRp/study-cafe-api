@@ -42,6 +42,20 @@ function register(router) {
     sendSuccess(res, user.get({ plain: true }));
   }));
 
+  // Called by order-service when a checkout completes. A buyer who just paid (or
+  // claimed a free campaign seat) gets their receipt and access emails at this
+  // address, so the account is treated as verified — without this, quick-registered
+  // checkout buyers pay and then hit the /verify-email wall before they can see
+  // their purchase. Idempotent: an already-verified account is left untouched.
+  router.post('/internal/users/:id/mark-email-verified', requireGrantAuth, asyncHandler(async (req, res) => {
+    const user = await User.findByPk(req.params.id, { attributes: ['id', 'email_verified_at'] });
+    if (!user) throw new AppError('User not found', 404);
+    if (!user.email_verified_at) {
+      await user.update({ email_verified_at: new Date() });
+    }
+    sendSuccess(res, { verified: true });
+  }));
+
   router.get('/internal/users/:id/contact', requireGrantAuth, asyncHandler(async (req, res) => {
     const user = await User.findByPk(req.params.id, {
       attributes: ['id', 'name', 'email', 'phone'],

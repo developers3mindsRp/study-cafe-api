@@ -42,6 +42,12 @@ const listInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, rows);
 });
 
+const getBySlugInternal = asyncHandler(async (req, res) => {
+  const row = await marketingPagesService.getInternalBySlug(req.params.slug);
+  if (!row) throw new AppError('Marketing page not found', 404);
+  sendSuccess(res, row);
+});
+
 const getByIdInternal = asyncHandler(async (req, res) => {
   const row = await marketingPagesService.getByIdInternal(req.params.id);
   if (!row) throw new AppError('Marketing page not found', 404);
@@ -69,6 +75,7 @@ module.exports = {
   getPublicBySlug,
   getPublicPageSettings,
   listInternal,
+  getBySlugInternal,
   getByIdInternal,
   createInternal,
   updateInternal,
