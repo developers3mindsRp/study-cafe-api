@@ -312,6 +312,32 @@ async function fetchUserContact(userId) {
   }
 }
 
+/**
+ * A completed checkout is proof enough of the inbox — the receipt and access
+ * emails land there. Marking the buyer verified here keeps a quick-registered
+ * buyer (no-OTP checkout signup) from paying and then being bounced to the
+ * /verify-email wall before they can see their purchase or open the course.
+ *
+ * Awaited by callers so the flag is set BEFORE the checkout verify response
+ * returns (the web app refetches /auth/me right after). Never throws — a
+ * failure here must not undo a payment that already went through; the buyer
+ * can still verify by email as before.
+ */
+async function markBuyerEmailVerified(userId, orderId) {
+  if (!userId) return;
+  try {
+    await axios.post(
+      `${config.authServiceUrl}/internal/users/${userId}/mark-email-verified`,
+      {},
+      { headers: { 'x-internal-api-key': config.internalApiKey }, timeout: 5000 }
+    );
+  } catch (err) {
+    logger.warn(
+      `[orders] mark-email-verified failed for user ${userId} order=${orderId || '?'}: ${err.message}`
+    );
+  }
+}
+
 function normalizeOrderType(type) {
   if (!type || typeof type !== 'string') return '';
   return type.trim().toUpperCase();
@@ -342,6 +368,56 @@ async function fetchCourseAmount(entityId) {
   const effective = hasSale && saleNum != null && Number.isFinite(saleNum) ? saleNum : listNum;
   if (!Number.isFinite(effective) || effective < 0) throw new AppError('Course price unavailable', 400);
   return effective;
+}
+
+/**
+ * Campaign price for a course sold through a marketing landing page.
+ *
+ * The client only names the page (`marketingSlug`); the amount itself is read
+ * server-side from course-service, so a tampered request can never set its own
+ * price. Returns the page's sale price when the page is published, points at
+ * this exact course, and carries a usable number — anything else returns null
+ * and the checkout falls back to the course's own canonical price. Falling back
+ * (rather than erroring) is deliberate: a stale or misconfigured landing page
+ * should degrade to the regular price, not block the sale.
+ */
+async function resolveMarketingCampaignPrice(marketingSlug, courseId) {
+  try {
+    const { data, status } = await axios.get(
+      `${config.courseServiceUrl}/internal/marketing-pages/by-slug/${encodeURIComponent(marketingSlug)}`,
+      {
+        timeout: 8000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200 || s === 404,
+      }
+    );
+    if (status !== 200) {
+      logger.warn(`[orders] marketing page "${marketingSlug}" not found — using course price`);
+      return null;
+    }
+    const page = parseApiResponse(data);
+    if (!page || !page.is_published) {
+      logger.warn(`[orders] marketing page "${marketingSlug}" unpublished — using course price`);
+      return null;
+    }
+    if (String(page.course_id) !== String(courseId)) {
+      logger.warn(
+        `[orders] marketing page "${marketingSlug}" sells course ${page.course_id}, not ${courseId} — using course price`
+      );
+      return null;
+    }
+    const rawSale = page.meta?.sale_price;
+    if (rawSale == null || rawSale === '') return null;
+    const sale = Number(rawSale);
+    if (!Number.isFinite(sale) || sale < 0) {
+      logger.warn(`[orders] marketing page "${marketingSlug}" has invalid sale_price "${rawSale}" — using course price`);
+      return null;
+    }
+    return sale;
+  } catch (err) {
+    logger.warn(`[orders] resolveMarketingCampaignPrice("${marketingSlug}") failed: ${err.message}`);
+    return null;
+  }
 }
 
 /**
@@ -1290,7 +1366,7 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
     // and that HTTP round trip should not be holding a row lock on the order.
     const resolvedBuyerId = await resolveMissingBuyerForPaymentLink(current);
 
-    return await sequelize.transaction(async (t) => {
+    const outcome = await sequelize.transaction(async (t) => {
       const locked = await Order.findOne({
         where: { id: order.id },
         lock: t.LOCK.UPDATE,
@@ -1343,6 +1419,13 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
       await emitPaymentEmailOutbox(locked, razorpayPaymentId, 'success', t);
       return { verified: true };
     });
+
+    // Awaited so checkout's verify response returns AFTER the flag is set — the web
+    // app refetches /auth/me immediately after and must not see a stale "unverified".
+    if (outcome && outcome.verified) {
+      await markBuyerEmailVerified(resolvedBuyerId || current.user_id, current.order_id);
+    }
+    return outcome;
   } catch (err) {
     if (err.name === 'SequelizeUniqueConstraintError') {
       const fresh = await Order.findByPk(order.id);
@@ -1436,11 +1519,19 @@ function formatAccessExpiryLabel(value) {
 // IDEMPOTENCY: Reuses a single pending/failed checkout row per (user, type, entity) so
 // repeat /orders/create calls do not insert duplicate orders for the same purchase intent.
 
-async function createOrder(userId, { type, entityId, couponCode, referralCode, currency = 'INR', utm, buyer_name, buyer_email, buyer_mobile }) {
+async function createOrder(userId, { type, entityId, couponCode, referralCode, currency = 'INR', utm, buyer_name, buyer_email, buyer_mobile, marketingSlug }) {
   const typeUpper = normalizeOrderType(type);
 
   // 1. Fetch canonical price from the owning service — never trust client
-  const originalAmount = await resolveAmountForEntity(typeUpper, entityId);
+  let originalAmount = await resolveAmountForEntity(typeUpper, entityId);
+
+  // 1a. Marketing landing pages can sell the course at a campaign price. Still
+  // server-canonical — the client only names the page, the price is read from
+  // course-service and only honoured when the published page sells THIS course.
+  if (typeUpper === 'COURSE' && marketingSlug && String(marketingSlug).trim()) {
+    const campaignPrice = await resolveMarketingCampaignPrice(String(marketingSlug).trim(), entityId);
+    if (campaignPrice != null) originalAmount = campaignPrice;
+  }
 
   // 1b. Membership upgrade guard — enforce one-active-membership and upgrade-only direction
   let upgradeDeduction = 0;
@@ -1532,6 +1623,9 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
         logger.info(
           `[orders] free re-registration ignored for user ${userId} course ${entityId} — already held by order ${owned.order.order_id}`
         );
+        // Still a completed checkout from the caller's perspective — the success
+        // page is gated on a verified email, so flip the flag here too.
+        await markBuyerEmailVerified(userId, owned.order.order_id);
         return {
           orderId: owned.order.order_id,
           free: true,
@@ -1684,6 +1778,9 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
         }
       });
       await redis.del(lockKey);
+      // A free checkout fulfils immediately and never passes through completePayment,
+      // so the quick-registered buyer is verified here instead.
+      await markBuyerEmailVerified(userId, outOrderId);
       return {
         orderId: outOrderId,
         free: true,
@@ -2034,6 +2131,9 @@ async function createPaymentLinkOrder(userId, body) {
         await emitPaymentEmailOutbox(locked, `free:${locked.order_id}`, 'success', t);
       });
       await redis.del(lockKey);
+      // Free links fulfil here without completePayment — verify the buyer now so the
+      // success page (gated on verified email) doesn't bounce them.
+      await markBuyerEmailVerified(freeBuyerUserId, outOrderId);
       const rpConfig = await getRazorpayConfig();
       return {
         orderId: outOrderId,

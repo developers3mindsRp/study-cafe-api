@@ -244,6 +244,27 @@ const marketingPagesService = {
   },
 
   /**
+   * Lean row for order-service: campaign price resolution at checkout.
+   * Returns publish state too so the caller can refuse to price off an unpublished page.
+   */
+  async getInternalBySlug(slug) {
+    try {
+      const row = await MarketingPage.findOne({ where: { slug } });
+      if (!row) return null;
+      const page = row.get({ plain: true });
+      return {
+        id: page.id,
+        course_id: page.course_id,
+        slug: page.slug,
+        is_published: !!page.is_published,
+        meta: parseMeta(page.meta),
+      };
+    } catch (err) {
+      throw mapMissingTableError(err);
+    }
+  },
+
+  /**
    * Public payload for /marketing/:slug — course fields + page meta + shared page settings.
    */
   async getPublicBySlug(slug) {

@@ -85,7 +85,7 @@ const register = asyncHandler(async (req, res) => {
 
 /** Checkout signup: name, email, phone, password only — everything else is collected after purchase. */
 const registerQuick = asyncHandler(async (req, res) => {
-  const { email, password, confirmPassword, name, phone, referralCode } = req.body;
+  const { email, password, confirmPassword, name, phone, referralCode, skipVerificationEmail } = req.body;
   if (confirmPassword && confirmPassword !== password) {
     throw new AppError('Passwords do not match', 400);
   }
@@ -95,6 +95,7 @@ const registerQuick = asyncHandler(async (req, res) => {
     name,
     phone,
     referralCode,
+    skipVerificationEmail: skipVerificationEmail === true,
     clientIp: forwardedClientIp(req),
   });
   sendCreated(res, newAccountSession(user));
