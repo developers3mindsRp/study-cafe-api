@@ -21,6 +21,11 @@ const marketingMetaSchema = Joi.object({
     bonus_banner_text: Joi.string().allow('', null),
     masterclass_date: Joi.string().allow('', null),
     masterclass_time: Joi.string().allow('', null),
+    // Hero copy that used to be hardcoded on the landing page.
+    register_before_text: Joi.string().max(200).allow('', null),
+    masterclass_label: Joi.string().max(200).allow('', null),
+    // Play-icon overlay on the banner thumbnail (only relevant when no video plays inline).
+    show_play_icon: Joi.boolean(),
     cta_title: Joi.string().allow('', null),
     cta_subtitle: Joi.string().allow('', null),
     cta_price_text: Joi.string().allow('', null),
