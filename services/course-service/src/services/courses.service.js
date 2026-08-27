@@ -691,32 +691,7 @@ const coursesService = {
     });
 
     const courseIds = rows.map((r) => Number(r.id)).filter((id) => Number.isFinite(id) && id > 0);
-    const catsByCourse = new Map();
-    if (courseIds.length > 0) {
-      const links = await CourseCategory.findAll({
-        where: { course_id: { [Op.in]: courseIds } },
-        attributes: ["course_id", "course_cat_id"],
-        raw: true,
-      });
-      const catIds = [...new Set(links.map((l) => Number(l.course_cat_id)).filter((n) => n > 0))];
-      let catRows = [];
-      if (catIds.length > 0) {
-        catRows = await CourseCat.findAll({
-          where: { id: { [Op.in]: catIds } },
-          attributes: ["id", "name", "slug"],
-          raw: true,
-        });
-      }
-      const catById = new Map(catRows.map((c) => [Number(c.id), c]));
-      for (const l of links) {
-        const cid = Number(l.course_id);
-        const cat = catById.get(Number(l.course_cat_id));
-        if (!cat) continue;
-        const entry = { id: Number(cat.id), name: cat.name, slug: cat.slug ?? null };
-        if (!catsByCourse.has(cid)) catsByCourse.set(cid, []);
-        catsByCourse.get(cid).push(entry);
-      }
-    }
+    const catsByCourse = await this._categoriesByCourseId(courseIds);
 
     return rows.map((r) => {
       const d = r.get({ plain: true });
@@ -728,6 +703,130 @@ const coursesService = {
     });
   },
 
+  /** Batched category lookup for a whole list — avoids one query per course. */
+  async _categoriesByCourseId(courseIds) {
+    const catsByCourse = new Map();
+    if (courseIds.length === 0) return catsByCourse;
+
+    const links = await CourseCategory.findAll({
+      where: { course_id: { [Op.in]: courseIds } },
+      attributes: ["course_id", "course_cat_id"],
+      raw: true,
+    });
+    const catIds = [...new Set(links.map((l) => Number(l.course_cat_id)).filter((n) => n > 0))];
+    let catRows = [];
+    if (catIds.length > 0) {
+      catRows = await CourseCat.findAll({
+        where: { id: { [Op.in]: catIds } },
+        attributes: ["id", "name", "slug"],
+        raw: true,
+      });
+    }
+    const catById = new Map(catRows.map((c) => [Number(c.id), c]));
+    for (const l of links) {
+      const cid = Number(l.course_id);
+      const cat = catById.get(Number(l.course_cat_id));
+      if (!cat) continue;
+      const entry = { id: Number(cat.id), name: cat.name, slug: cat.slug ?? null };
+      if (!catsByCourse.has(cid)) catsByCourse.set(cid, []);
+      catsByCourse.get(cid).push(entry);
+    }
+    return catsByCourse;
+  },
+
+  /** Batched form of getCourseAuthors() — one query pair for the whole list. */
+  async _authorsByCourseId(courseIds) {
+    const byCourse = new Map();
+    if (courseIds.length === 0) return byCourse;
+
+    const links = await CourseAuthor.findAll({
+      where: { course_id: { [Op.in]: courseIds } },
+      order: [
+        ["sort_order", "ASC"],
+        ["id", "ASC"],
+      ],
+      raw: true,
+    });
+    if (links.length === 0) return byCourse;
+
+    const userIds = [...new Set(links.map((l) => l.user_id).filter(Boolean))];
+    let users = [];
+    if (userIds.length > 0) {
+      users = await Course.sequelize.query(
+        `SELECT id, name, designation, profession, bio, profile_pic_url
+         FROM users
+         WHERE id IN (:userIds) AND ${sqlDeletedAtIsNull()}`,
+        {
+          replacements: { userIds },
+          type: QueryTypes.SELECT,
+        },
+      );
+    }
+    const userMap = new Map(users.map((u) => [Number(u.id), u]));
+
+    for (const link of links) {
+      const user = userMap.get(Number(link.user_id)) || {};
+      const cid = Number(link.course_id);
+      if (!byCourse.has(cid)) byCourse.set(cid, []);
+      byCourse.get(cid).push({
+        user_id: link.user_id,
+        sort_order: link.sort_order,
+        name: user.name || null,
+        role: user.designation || null,
+        bio: user.bio || user.profession || null,
+        image_url: user.profile_pic_url || null,
+      });
+    }
+    return byCourse;
+  },
+
+  /**
+   * Admin CSV export — every course column, including the heavy
+   * curriculum / description / SEO fields that listAll() trims away.
+   * Deliberately separate from listAll(): these rows are far too large
+   * to send on every admin table page load.
+   */
+  async listAllForExport({ trashed } = {}) {
+    const trashMode = parseTrashedMode({ trashed });
+    const rows = await Course.findAll({
+      ...trashedSequelizeOptions(trashMode),
+      where: withTrashedWhere({}, trashMode),
+      order: [
+        ["is_published", "DESC"],
+        ["id", "DESC"],
+      ],
+    });
+
+    const courseIds = rows.map((r) => Number(r.id)).filter((id) => Number.isFinite(id) && id > 0);
+    const [catsByCourse, authorsByCourse] = await Promise.all([
+      this._categoriesByCourseId(courseIds),
+      this._authorsByCourseId(courseIds),
+    ]);
+
+    return rows.map((r) => {
+      const d = r.get({ plain: true });
+      d.language = normalizeLanguage(d.language);
+
+      const cats = catsByCourse.get(Number(d.id)) || [];
+      d.categories = cats;
+      d.course_cat_ids = cats.map((c) => Number(c.id));
+
+      const authors = authorsByCourse.get(Number(d.id)) || [];
+      const primaryAuthor = authors[0] || null;
+      d.authors = authors;
+      d.author_user_id = primaryAuthor?.user_id ?? null;
+      d.author_name = primaryAuthor?.name ?? null;
+      d.author_role = primaryAuthor?.role ?? null;
+      d.author_bio = primaryAuthor?.bio ?? null;
+      d.author_image = primaryAuthor?.image_url ?? null;
+
+      // Keep curriculum on the row (listAll() drops it) and expose the same
+      // derived fields the detail endpoint returns.
+      d.duration = formatDurationLabel(totalCurriculumDurationMinutes(d.curriculum));
+      d.is_lifetime = d.validity === "lifetime";
+      return d;
+    });
+  },
   async listCourseCats() {
     const rows = await CourseCat.findAll({
       order: [["name", "ASC"]],

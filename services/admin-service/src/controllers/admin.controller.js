@@ -374,6 +374,15 @@ const getCourses = asyncHandler(async (req, res) => {
   sendSuccess(res, Array.isArray(data) ? data : data || []);
 });
 
+/** Full course rows for the admin CSV export — heavier than getCourses(). */
+const getCoursesForExport = asyncHandler(async (req, res) => {
+  const { data } = await courseClient.get('/internal/courses/export', {
+    params: req.query,
+    timeout: 60000,
+  });
+  sendSuccess(res, Array.isArray(data) ? data : data || []);
+});
+
 const deleteCourse = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
   await courseClient.delete(`/internal/courses/${req.params.id}`);
@@ -1907,6 +1916,7 @@ module.exports = {
   getBatches,
   addMaterial,
   getCourses,
+  getCoursesForExport,
   deleteCourse,
   restoreCourse,
   deleteCoursePermanently,
