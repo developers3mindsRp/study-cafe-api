@@ -141,6 +141,11 @@ const listAllInternal = asyncHandler(async (req, res) => {
   sendSuccess(res, rows);
 });
 
+const listAllForExportInternal = asyncHandler(async (req, res) => {
+  const rows = await coursesService.listAllForExport({ trashed: req.query.trashed });
+  sendSuccess(res, rows);
+});
+
 const deleteCourseInternal = asyncHandler(async (req, res) => {
   const ok = await coursesService.deleteCourse(req.params.id);
   if (!ok) throw new AppError('Course not found', 404);
@@ -389,6 +394,7 @@ module.exports = {
   selectPurchaseBatch,
   addMaterial,
   listAllInternal,
+  listAllForExportInternal,
   deleteCourseInternal,
   restoreCourseInternal,
   deleteCoursePermanentlyInternal,

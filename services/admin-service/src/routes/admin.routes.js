@@ -19,6 +19,7 @@ function register(router) {
   router.delete('/admin/payment-gateways/:id', requireAdmin, controller.deletePaymentGateway);
 
   router.get('/admin/courses', requireAdmin, controller.getCourses);
+  router.get('/admin/courses/export', requireAdmin, controller.getCoursesForExport);
   router.delete('/admin/courses/:id/permanent', requireAdmin, controller.deleteCoursePermanently);
   router.delete('/admin/courses/:id', requireAdmin, controller.deleteCourse);
   router.post('/admin/courses/:id/restore', requireAdmin, controller.restoreCourse);
