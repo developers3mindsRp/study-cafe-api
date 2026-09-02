@@ -1157,6 +1157,46 @@ async function emitPaymentEmailOutbox(locked, razorpayPaymentId, status, t, extr
 }
 
 /**
+ * Notifies the Pabbly automation (email sequences, CRM, etc.) on a successful course
+ * purchase. Course orders only — a direct "buy this course" checkout, not a membership
+ * activation or an admin-granted allotment (isManual). Emitted through the outbox like
+ * every other side effect here so a Pabbly hiccup retries instead of getting lost, and
+ * never blocks the payment transaction with an external HTTP call.
+ */
+async function emitCoursePurchaseWebhookOutbox(locked, razorpayPaymentId, t) {
+  if (locked.type !== 'course') return;
+
+  const courseTitle = await resolveCourseTitle(locked.entity_id);
+  const userContact = locked.user_id ? await fetchUserContact(locked.user_id) : null;
+  const customerEmail = locked.buyer_email || userContact?.email || null;
+  const customerName = locked.buyer_name || userContact?.name || null;
+  const customerPhone = locked.buyer_mobile || userContact?.phone || null;
+
+  await OutboxEvent.create(
+    {
+      aggregate_type: 'order',
+      aggregate_id: locked.order_id,
+      event_type: 'COURSE_PURCHASE_WEBHOOK',
+      payload: {
+        event: 'course_purchase_success',
+        orderId: locked.order_id,
+        customerName,
+        customerEmail,
+        customerPhone,
+        courseId: String(locked.entity_id),
+        courseName: courseTitle || 'Course',
+        amount: parseFloat(locked.amount) || 0,
+        currency: locked.currency || 'INR',
+        paymentId: razorpayPaymentId || null,
+        paymentStatus: 'SUCCESS',
+        purchaseDate: new Date().toISOString(),
+      },
+    },
+    { transaction: t }
+  );
+}
+
+/**
  * Sent instead of emitPaymentEmailOutbox for orders an admin created/marked-paid
  * internally (no real payment behind them) — recipient should not see payment/amount details.
  */
@@ -1417,6 +1457,7 @@ async function completePayment(order, razorpayPaymentId, { signature = null, sou
 
       await emitPurchaseOutbox(locked, t);
       await emitPaymentEmailOutbox(locked, razorpayPaymentId, 'success', t);
+      await emitCoursePurchaseWebhookOutbox(locked, razorpayPaymentId, t);
       return { verified: true };
     });
 
@@ -1773,6 +1814,7 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
         });
         await emitPurchaseOutbox(locked, t);
         await emitPaymentEmailOutbox(locked, `free:${locked.order_id}`, 'success', t);
+        await emitCoursePurchaseWebhookOutbox(locked, `free:${locked.order_id}`, t);
         if (couponResult && !reused) {
           await recordCouponUsage(couponResult.coupon.id, userId, locked.order_id, t);
         }
@@ -2129,6 +2171,7 @@ async function createPaymentLinkOrder(userId, body) {
         });
         await emitPurchaseOutbox(locked, t);
         await emitPaymentEmailOutbox(locked, `free:${locked.order_id}`, 'success', t);
+        await emitCoursePurchaseWebhookOutbox(locked, `free:${locked.order_id}`, t);
       });
       await redis.del(lockKey);
       // Free links fulfil here without completePayment — verify the buyer now so the

@@ -143,6 +143,12 @@ async function processEvent(record) {
         },
         { headers: { 'X-Internal-API-Key': config.internalApiKey }, timeout: 15000 }
       );
+    } else if (event_type === 'COURSE_PURCHASE_WEBHOOK') {
+      if (!config.pabblyWebhookUrl) {
+        logger.warn(`[pabbly-webhook] PABBLY_WEBHOOK_URL not configured, skipping order=${data.orderId}`);
+      } else {
+        await axios.post(config.pabblyWebhookUrl, data, { timeout: 15000 });
+      }
     } else if (event_type === 'ORDER_REFUNDED') {
       if (data.type === 'course') {
         await Promise.all([
