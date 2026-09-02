@@ -14,12 +14,14 @@ const { createApp } = require('./app');
 const { connect, sequelize } = require('./models');
 const { logger } = require('../../../shared');
 const { ensureAffiliateExpirySchema } = require('./bootstrap/ensureAffiliateExpirySchema');
+const { ensureCoursePostPurchaseColumns } = require('./bootstrap/ensureCoursePostPurchaseColumns');
 
 const app = createApp();
 
 connect()
   .then(async () => {
     await ensureAffiliateExpirySchema(sequelize);
+    await ensureCoursePostPurchaseColumns(sequelize);
     app.listen(config.port, () =>
       logger.info(`${config.serviceName} listening on port ${config.port}`)
     );
