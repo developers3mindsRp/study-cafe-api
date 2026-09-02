@@ -55,6 +55,14 @@ module.exports = (sequelize) => {
        *  Each item: { type: 'text'|'cards', title: string, content?: string, items?: {icon?,title,content}[] }
        */
       detail_sections: { type: DataTypes.TEXT('long'), allowNull: true },
+      /** JSON array of join links shown on the post-purchase thank-you page.
+       *  Each item: { type: 'whatsapp'|'zoom'|'telegram'|'link', label: string, url: string }
+       */
+      post_purchase_links: { type: DataTypes.TEXT('long'), allowNull: true },
+      /** Where the thank-you page sends the buyer once the countdown ends (null = default page). */
+      post_purchase_redirect_url: { type: DataTypes.STRING(1000), allowNull: true },
+      /** Countdown before post_purchase_redirect_url fires, in seconds (null = default). */
+      post_purchase_redirect_delay: { type: DataTypes.INTEGER, allowNull: true },
     },
     {
       tableName: 'courses',

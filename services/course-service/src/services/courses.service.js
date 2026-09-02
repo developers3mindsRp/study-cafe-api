@@ -29,6 +29,25 @@ const { resolvePreviewToken } = require("./previewToken.service");
 
 const COURSE_SLUG_MAX_LEN = 200;
 
+/** Only http(s) links may be stored as a post-purchase redirect — the value ends up in a browser navigation. */
+const POST_PURCHASE_URL_RE = new RegExp("^https?://", "i");
+/** Upper bound for the thank-you page countdown so a typo cannot strand the buyer. */
+const POST_PURCHASE_DELAY_MAX_SECONDS = 600;
+
+function normalizePostPurchaseRedirectUrl(raw) {
+  if (raw == null) return null;
+  const url = String(raw).trim();
+  if (!url || !POST_PURCHASE_URL_RE.test(url)) return null;
+  return url.slice(0, 1000);
+}
+
+function normalizePostPurchaseDelay(raw) {
+  if (raw == null || raw === "") return null;
+  const seconds = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return Math.min(seconds, POST_PURCHASE_DELAY_MAX_SECONDS);
+}
+
 /** Normalize slug for storage / uniqueness checks (ASCII-ish segment). */
 function normalizeCourseSlugSegment(raw) {
   if (raw == null) return "";
@@ -1277,6 +1296,9 @@ const coursesService = {
       affiliate_commission: Number.isFinite(affiliatePct) ? affiliatePct : 0,
       validity: data.validity === 'lifetime' ? 'lifetime' : '1year',
       detail_sections: data.detail_sections || null,
+      post_purchase_links: data.post_purchase_links || null,
+      post_purchase_redirect_url: normalizePostPurchaseRedirectUrl(data.post_purchase_redirect_url),
+      post_purchase_redirect_delay: normalizePostPurchaseDelay(data.post_purchase_redirect_delay),
     });
     const plain = row.get({ plain: true });
     await this.upsertPrimaryAuthorProfile(plain.id, data);
@@ -1340,11 +1362,22 @@ const coursesService = {
       "affiliate_commission",
       "validity",
       "detail_sections",
+      "post_purchase_links",
+      "post_purchase_redirect_url",
+      "post_purchase_redirect_delay",
     ];
     const updatePayload = {};
     for (const field of updatableFields) {
       if (data[field] === undefined) continue;
-      if (field === "slug") {
+      if (field === "post_purchase_redirect_url") {
+        updatePayload.post_purchase_redirect_url = normalizePostPurchaseRedirectUrl(
+          data.post_purchase_redirect_url,
+        );
+      } else if (field === "post_purchase_redirect_delay") {
+        updatePayload.post_purchase_redirect_delay = normalizePostPurchaseDelay(
+          data.post_purchase_redirect_delay,
+        );
+      } else if (field === "slug") {
         const raw =
           data.slug === null || data.slug === undefined || String(data.slug).trim() === ""
             ? null

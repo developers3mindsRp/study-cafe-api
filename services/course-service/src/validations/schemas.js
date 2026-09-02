@@ -154,6 +154,9 @@ const createCourse = {
         affiliate_commission: Joi.number().min(0).max(100),
         validity: Joi.string().valid('1year', 'lifetime').default('1year'),
         detail_sections: Joi.string().allow('', null),
+        post_purchase_links: Joi.string().allow('', null),
+        post_purchase_redirect_url: Joi.string().max(1000).allow('', null),
+        post_purchase_redirect_delay: Joi.number().integer().min(0).max(600).allow(null),
     }),
 };
 
@@ -209,6 +212,9 @@ const updateCourse = {
         affiliate_commission: Joi.number().min(0).max(100),
         validity: Joi.string().valid('1year', 'lifetime'),
         detail_sections: Joi.string().allow('', null),
+        post_purchase_links: Joi.string().allow('', null),
+        post_purchase_redirect_url: Joi.string().max(1000).allow('', null),
+        post_purchase_redirect_delay: Joi.number().integer().min(0).max(600).allow(null),
     }),
 };
 
