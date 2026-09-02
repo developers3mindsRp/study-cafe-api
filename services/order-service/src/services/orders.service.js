@@ -3720,6 +3720,79 @@ async function getOrderByOrderId(orderId) {
   return enrichAdminOrderResponse(order.get({ plain: true }));
 }
 
+const POST_PURCHASE_URL_RE = new RegExp('^https?://', 'i');
+const POST_PURCHASE_LINK_TYPES = ['whatsapp', 'zoom', 'telegram', 'link'];
+const POST_PURCHASE_MAX_LINKS = 10;
+const POST_PURCHASE_DEFAULT_DELAY_SECONDS = 10;
+
+/** Only http(s) survives — these values become `href`/navigation targets on the thank-you page. */
+function safeExternalUrl(raw) {
+  if (raw == null) return null;
+  const url = String(raw).trim();
+  return POST_PURCHASE_URL_RE.test(url) ? url : null;
+}
+
+/**
+ * Several links of one type are alternates, not a list to show at once — a WhatsApp group
+ * caps out, so a course lists a few and buyers get spread across them. One per type is
+ * surfaced, drawn at random for each receipt; the order of types follows the admin's.
+ */
+function pickOneLinkPerType(links) {
+  const byType = new Map();
+  for (const link of links) {
+    const bucket = byType.get(link.type);
+    if (bucket) bucket.push(link);
+    else byType.set(link.type, [link]);
+  }
+  return [...byType.values()].map(
+    (bucket) => bucket[Math.floor(Math.random() * bucket.length)],
+  );
+}
+
+/**
+ * Turns the course's stored post-purchase fields into the shape the thank-you page renders.
+ * Returns null when the course has nothing configured, so the page keeps its default behaviour.
+ */
+function buildPostPurchaseConfig(course) {
+  if (!course) return null;
+
+  let parsed = course.post_purchase_links;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch (err) {
+      logger.warn('[orders] invalid post_purchase_links JSON on course', {
+        courseId: course.id,
+        error: err.message,
+      });
+      parsed = null;
+    }
+  }
+
+  const configured = (Array.isArray(parsed) ? parsed : [])
+    .map((item) => {
+      const url = safeExternalUrl(item?.url);
+      if (!url) return null;
+      const type = POST_PURCHASE_LINK_TYPES.includes(item?.type) ? item.type : 'link';
+      const label = String(item?.label || '').trim();
+      return { type, label: label || 'Click Here to Join', url };
+    })
+    .filter(Boolean)
+    .slice(0, POST_PURCHASE_MAX_LINKS);
+  const links = pickOneLinkPerType(configured);
+
+  const redirectUrl = safeExternalUrl(course.post_purchase_redirect_url);
+  if (!links.length && !redirectUrl) return null;
+
+  const rawDelay = Number.parseInt(String(course.post_purchase_redirect_delay ?? ''), 10);
+  return {
+    links,
+    redirectUrl,
+    redirectDelaySeconds:
+      Number.isFinite(rawDelay) && rawDelay >= 0 ? rawDelay : POST_PURCHASE_DEFAULT_DELAY_SECONDS,
+  };
+}
+
 async function getInvoice(userId, orderId) {
   const order = await Order.findOne({ where: { order_id: orderId, user_id: userId } });
   if (!order) return null;
@@ -3731,14 +3804,19 @@ async function getInvoice(userId, orderId) {
 
   let itemName = p.type === 'membership' ? 'Membership Plan' : 'Course';
   let itemCategory = '';
+  let postPurchase = null;
   try {
     if (p.type === 'course' && p.entity_id) {
-      const { data } = await axios.get(`${config.courseServiceUrl}/courses/${p.entity_id}`, {
-        timeout: 5000, validateStatus: (s) => s === 200,
+      // Internal (not public) endpoint: a buyer's receipt must resolve even for hidden/unpublished courses.
+      const { data } = await axios.get(`${config.courseServiceUrl}/internal/courses/${p.entity_id}`, {
+        timeout: 5000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200,
       });
-      const course = data.data !== undefined ? data.data : data;
+      const course = parseApiResponse(data);
       itemName = course?.title || itemName;
       itemCategory = course?.category || '';
+      postPurchase = buildPostPurchaseConfig(course);
     } else if (p.type === 'membership' && p.entity_id) {
       const plan = await fetchPlanDetails(p.entity_id);
       itemName = plan?.name || itemName;
@@ -3756,6 +3834,8 @@ async function getInvoice(userId, orderId) {
     entityId: p.entity_id,
     itemName,
     itemCategory,
+    /** Join links / redirect for the thank-you page — only once the order is actually paid. */
+    postPurchase: p.status === 'paid' ? postPurchase : null,
     originalAmount: p.original_amount,
     couponCode: p.coupon_code,
     couponDiscount: p.coupon_discount,
