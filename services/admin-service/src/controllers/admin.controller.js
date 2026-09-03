@@ -1,4 +1,5 @@
 const FormData = require('form-data');
+const axios = require('axios');
 const config = require('../config');
 const courseClient = require('../clients/courseClient');
 const orderClient = require('../clients/orderClient');
@@ -9,7 +10,7 @@ const userImportService = require('../services/userImport.service');
 const paymentConfigService = require('../services/paymentConfig.service');
 const paymentLinkService = require('../services/paymentLink.service');
 const paymentGatewayService = require('../services/paymentGateway.service');
-const { sequelize, Coupon } = require('../models');
+const { sequelize, Coupon, PabblyWebhook } = require('../models');
 const { Op } = require('sequelize');
 
 /**
@@ -1460,6 +1461,128 @@ const deleteCoupon = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
+const PABBLY_WEBHOOK_DEFAULT_PRIORITY = 10;
+const PABBLY_WEBHOOK_CATCH_ALL_PRIORITY = 100000;
+
+function validatePabblyWebhookPayload(body) {
+  const name = String(body.name || '').trim();
+  if (!name) throw new AppError('Name is required', 400);
+
+  const webhook_url = String(body.webhook_url || '').trim();
+  if (!/^https:\/\//i.test(webhook_url)) {
+    throw new AppError('A valid https:// webhook URL is required', 400);
+  }
+
+  let category_ids = body.category_ids;
+  if (category_ids == null) category_ids = [];
+  if (!Array.isArray(category_ids)) throw new AppError('category_ids must be an array', 400);
+  category_ids = category_ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
+
+  // Priority isn't admin-facing — surfacing "first match wins, lower runs first" was
+  // confusing more than it helped. Instead we derive it deterministically: rules that
+  // name specific categories always run before a catch-all (empty category_ids), so a
+  // course-specific automation never gets shadowed by a broad "matches everything" rule.
+  const priority = category_ids.length === 0 ? PABBLY_WEBHOOK_CATCH_ALL_PRIORITY : PABBLY_WEBHOOK_DEFAULT_PRIORITY;
+
+  const is_active = body.is_active != null ? !!body.is_active : true;
+
+  return { name, webhook_url, category_ids, priority, is_active };
+}
+
+const getPabblyWebhooks = asyncHandler(async (req, res) => {
+  const rows = await PabblyWebhook.findAll({ order: [['priority', 'ASC'], ['id', 'ASC']] });
+  sendSuccess(res, rows.map((row) => row.get({ plain: true })));
+});
+
+const getPabblyWebhook = asyncHandler(async (req, res) => {
+  const row = await PabblyWebhook.findByPk(req.params.id);
+  if (!row) throw new AppError('Pabbly webhook not found', 404);
+  sendSuccess(res, row.get({ plain: true }));
+});
+
+const postPabblyWebhook = asyncHandler(async (req, res) => {
+  const payload = validatePabblyWebhookPayload(req.body);
+  const row = await PabblyWebhook.create(payload);
+  sendCreated(res, row.get({ plain: true }));
+});
+
+const putPabblyWebhook = asyncHandler(async (req, res) => {
+  const row = await PabblyWebhook.findByPk(req.params.id);
+  if (!row) throw new AppError('Pabbly webhook not found', 404);
+  const merged = { ...row.get({ plain: true }), ...req.body };
+  const payload = validatePabblyWebhookPayload(merged);
+  await row.update(payload);
+  await row.reload();
+  sendSuccess(res, row.get({ plain: true }));
+});
+
+const deletePabblyWebhook = asyncHandler(async (req, res) => {
+  const row = await PabblyWebhook.findByPk(req.params.id);
+  if (!row) throw new AppError('Pabbly webhook not found', 404);
+  await row.destroy();
+  sendNoContent(res);
+});
+
+/**
+ * Fires a sample course_purchase_success payload — identical in shape to what
+ * order-service actually sends on a real purchase — at a given webhook_url, so an
+ * admin can confirm a URL is correct (workflow active, reachable, parses fields as
+ * expected) before relying on it. Works for an unsaved URL still being typed in the
+ * create/edit form, not just a saved rule, so `webhook_url` is taken from the body
+ * rather than looked up by id.
+ */
+const testPabblyWebhook = asyncHandler(async (req, res) => {
+  const webhook_url = String(req.body.webhook_url || '').trim();
+  if (!/^https:\/\//i.test(webhook_url)) {
+    throw new AppError('A valid https:// webhook URL is required', 400);
+  }
+
+  const samplePayload = {
+    event: 'course_purchase_success',
+    orderId: 'TEST-' + Date.now(),
+    customerName: 'Test User',
+    customerEmail: 'test@example.com',
+    customerPhone: '919876543210',
+    courseId: 'TEST-COURSE',
+    courseName: 'Test Course',
+    courseCategory: 'Test Category',
+    amount: 999,
+    currency: 'INR',
+    paymentId: 'TEST-PAYMENT-' + Date.now(),
+    paymentStatus: 'SUCCESS',
+    purchaseDate: new Date().toISOString(),
+  };
+
+  try {
+    const response = await axios.post(webhook_url, samplePayload, {
+      timeout: 15000,
+      validateStatus: () => true, // report whatever Pabbly returns, never throw on non-2xx
+    });
+    sendSuccess(res, {
+      success: response.status >= 200 && response.status < 300,
+      status: response.status,
+      response: response.data,
+      payloadSent: samplePayload,
+    });
+  } catch (err) {
+    sendSuccess(res, {
+      success: false,
+      status: null,
+      response: err.message,
+      payloadSent: samplePayload,
+    });
+  }
+});
+
+/** Consumed by order-service to resolve which webhook to fire on a course purchase. */
+const getActivePabblyWebhooksInternal = asyncHandler(async (req, res) => {
+  const rows = await PabblyWebhook.findAll({
+    where: { is_active: true },
+    order: [['priority', 'ASC'], ['id', 'ASC']],
+  });
+  sendSuccess(res, rows.map((row) => row.get({ plain: true })));
+});
+
 const checkCouponCodeExists = asyncHandler(async (req, res) => {
   const { code, excludeId } = req.query;
   if (!code || !String(code).trim()) {
@@ -1951,6 +2074,13 @@ module.exports = {
   putCoupon,
   deleteCoupon,
   checkCouponCodeExists,
+  getPabblyWebhooks,
+  getPabblyWebhook,
+  postPabblyWebhook,
+  putPabblyWebhook,
+  deletePabblyWebhook,
+  getActivePabblyWebhooksInternal,
+  testPabblyWebhook,
   platform,
   uploadImage,
   uploadFile,

@@ -26,7 +26,6 @@ module.exports = {
   outbox: {
     pollMs: requiredInt('OUTBOX_POLL_MS'),
   },
-  pabblyWebhookUrl: readOptional('PABBLY_WEBHOOK_URL'),
 };
 
 process.env.SERVICE_NAME = module.exports.serviceName;

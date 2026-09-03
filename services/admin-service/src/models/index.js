@@ -31,6 +31,7 @@ const PaymentConfig = require('./PaymentConfig')(sequelize);
 const Coupon = require('./PromoCode')(sequelize);
 const PaymentLink = require('./PaymentLink')(sequelize);
 const PaymentGateway = require('./PaymentGateway')(sequelize);
+const PabblyWebhook = require('./PabblyWebhook')(sequelize);
 
 async function connect() {
   await sequelize.authenticate();
@@ -88,6 +89,25 @@ CREATE TABLE IF NOT EXISTS payment_links (
   } catch (err) {
     // 1061 = duplicate key name.
     if (err?.parent?.errno !== 1061 && err?.original?.errno !== 1061) throw err;
+  }
+
+  try {
+    await sequelize.query(`
+CREATE TABLE IF NOT EXISTS pabbly_webhooks (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  webhook_url VARCHAR(1024) NOT NULL,
+  category_ids JSON NOT NULL,
+  priority INT NOT NULL DEFAULT 100,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_pabbly_webhooks_active_priority (is_active, priority)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  } catch (err) {
+    logger.error('[admin-service] pabbly_webhooks bootstrap failed', { error: err.message });
+    throw err;
   }
 
   try {
@@ -181,5 +201,6 @@ module.exports = {
   Coupon,
   PaymentLink,
   PaymentGateway,
+  PabblyWebhook,
   connect,
 };

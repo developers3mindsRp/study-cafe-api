@@ -1084,6 +1084,75 @@ async function resolveCourseTitle(courseId) {
   }
 }
 
+/** Title + category label for the course purchase webhook. Categories come back as
+ * [{id, name, slug}, ...] from course-service; joined so a multi-category course
+ * still yields one readable string instead of an array in the outgoing payload. */
+async function resolveCourseDetails(courseId) {
+  try {
+    const { data } = await axios.get(`${config.courseServiceUrl}/internal/courses/${courseId}`, {
+      timeout: 5000,
+      headers: { 'x-internal-api-key': config.internalApiKey },
+      validateStatus: (s) => s === 200,
+    });
+    const payload = parseApiResponse(data);
+    const categories = Array.isArray(payload?.categories) ? payload.categories : [];
+    const category = categories.map((c) => c?.name).filter(Boolean).join(', ') || null;
+    const categoryIds = Array.isArray(payload?.course_cat_ids)
+      ? payload.course_cat_ids.map(Number).filter((n) => Number.isFinite(n))
+      : categories.map((c) => Number(c?.id)).filter((n) => Number.isFinite(n));
+    return { title: payload?.title || payload?.name || null, category, categoryIds };
+  } catch (err) {
+    logger.warn(`[orders] course details fetch failed for course ${courseId}: ${err.message}`);
+    return { title: null, category: null, categoryIds: [] };
+  }
+}
+
+// ─── Pabbly webhook rules ──────────────────────────────────────────────────────
+// Admin-managed, category-based automation triggers (source of truth: admin-service).
+// Cached briefly in-memory so every course purchase doesn't round-trip to
+// admin-service — a rule change takes up to PABBLY_RULES_CACHE_MS to take effect.
+const PABBLY_RULES_CACHE_MS = 60 * 1000;
+let pabblyRulesCache = { rules: null, fetchedAt: 0 };
+
+async function fetchActivePabblyWebhookRules() {
+  const now = Date.now();
+  if (pabblyRulesCache.rules && now - pabblyRulesCache.fetchedAt < PABBLY_RULES_CACHE_MS) {
+    return pabblyRulesCache.rules;
+  }
+  try {
+    const { data } = await axios.get(`${config.adminServiceUrl}/internal/pabbly-webhooks/active`, {
+      timeout: 5000,
+      headers: { 'x-internal-api-key': config.internalApiKey },
+      validateStatus: (s) => s === 200,
+    });
+    const rules = parseApiResponse(data);
+    pabblyRulesCache = { rules: Array.isArray(rules) ? rules : [], fetchedAt: now };
+  } catch (err) {
+    logger.warn(`[orders] failed to fetch Pabbly webhook rules: ${err.message}`);
+    // Keep serving the last known-good rules (if any) rather than firing nothing
+    // on a transient admin-service blip.
+    if (!pabblyRulesCache.rules) pabblyRulesCache = { rules: [], fetchedAt: now };
+  }
+  return pabblyRulesCache.rules;
+}
+
+/**
+ * First rule (already priority-sorted) whose category_ids intersects the course's
+ * categories, or whose category_ids is empty (a catch-all). Admin-configured rules
+ * are the sole source of truth — if none are set up, or none match this course's
+ * categories, we deliberately fire nothing rather than guessing a destination.
+ */
+async function resolvePabblyWebhookUrl(courseCategoryIds) {
+  const rules = await fetchActivePabblyWebhookRules();
+  const courseCatSet = new Set((courseCategoryIds || []).map(Number));
+  for (const rule of rules) {
+    const ruleCatIds = Array.isArray(rule.category_ids) ? rule.category_ids.map(Number) : [];
+    if (ruleCatIds.length === 0) return rule.webhook_url; // catch-all
+    if (ruleCatIds.some((id) => courseCatSet.has(id))) return rule.webhook_url;
+  }
+  return null; // rules exist, but none matched this course — deliberately don't fire
+}
+
 async function resolveItemName(order) {
   const t = String(order.type || '').toLowerCase();
   const eid = order.entity_id;
@@ -1166,7 +1235,13 @@ async function emitPaymentEmailOutbox(locked, razorpayPaymentId, status, t, extr
 async function emitCoursePurchaseWebhookOutbox(locked, razorpayPaymentId, t) {
   if (locked.type !== 'course') return;
 
-  const courseTitle = await resolveCourseTitle(locked.entity_id);
+  const { title: courseTitle, category: courseCategory, categoryIds } = await resolveCourseDetails(locked.entity_id);
+  const webhookUrl = await resolvePabblyWebhookUrl(categoryIds);
+  if (!webhookUrl) {
+    logger.info(`[orders] no Pabbly webhook rule matched course=${locked.entity_id} order=${locked.order_id} — skipping`);
+    return;
+  }
+
   const userContact = locked.user_id ? await fetchUserContact(locked.user_id) : null;
   const customerEmail = locked.buyer_email || userContact?.email || null;
   const customerName = locked.buyer_name || userContact?.name || null;
@@ -1178,6 +1253,7 @@ async function emitCoursePurchaseWebhookOutbox(locked, razorpayPaymentId, t) {
       aggregate_id: locked.order_id,
       event_type: 'COURSE_PURCHASE_WEBHOOK',
       payload: {
+        webhookUrl,
         event: 'course_purchase_success',
         orderId: locked.order_id,
         customerName,
@@ -1185,6 +1261,7 @@ async function emitCoursePurchaseWebhookOutbox(locked, razorpayPaymentId, t) {
         customerPhone,
         courseId: String(locked.entity_id),
         courseName: courseTitle || 'Course',
+        courseCategory,
         amount: parseFloat(locked.amount) || 0,
         currency: locked.currency || 'INR',
         paymentId: razorpayPaymentId || null,

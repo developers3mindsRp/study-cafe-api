@@ -50,6 +50,15 @@ function register(router) {
   router.post('/admin/coupons', requireAdmin, controller.postCoupon);
   router.put('/admin/coupons/:id', requireAdmin, controller.putCoupon);
   router.delete('/admin/coupons/:id', requireAdmin, controller.deleteCoupon);
+
+  // Pabbly webhook rules (course-category-based automation triggers)
+  router.get('/internal/pabbly-webhooks/active', internalAuth, controller.getActivePabblyWebhooksInternal);
+  router.post('/admin/pabbly-webhooks/test', requireAdmin, controller.testPabblyWebhook);
+  router.get('/admin/pabbly-webhooks', requireAdmin, controller.getPabblyWebhooks);
+  router.get('/admin/pabbly-webhooks/:id', requireAdmin, controller.getPabblyWebhook);
+  router.post('/admin/pabbly-webhooks', requireAdmin, controller.postPabblyWebhook);
+  router.put('/admin/pabbly-webhooks/:id', requireAdmin, controller.putPabblyWebhook);
+  router.delete('/admin/pabbly-webhooks/:id', requireAdmin, controller.deletePabblyWebhook);
   router.get('/admin/payment-links', requireAdmin, controller.listPaymentLinksAdmin);
   router.get('/admin/payment-links/:id', requireAdmin, controller.getPaymentLinkAdmin);
   router.post('/admin/payment-links', requireAdmin, controller.postPaymentLink);
