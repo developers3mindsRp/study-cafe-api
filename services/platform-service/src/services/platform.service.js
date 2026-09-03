@@ -1469,33 +1469,180 @@ async function getArticlesPublic(options = {}) {
 }
 
 /**
+ * Court for a case-law row, resolved the same way `buildArticleCitationFromRow` does it:
+ * the `citation` JSON blob wins, the migrated `court_name` column is the fallback.
+ *
+ * Both sources are needed. Of 6,534 published case laws, 5,509 carry the court ONLY in the
+ * column and 657 ONLY in the JSON — filtering on either source alone silently drops the other
+ * group (a plain `court_name = ?` loses ~660 rows, e.g. ITAT Delhi returns 707 instead of 865).
+ * The two sources never disagree where both are present, so COALESCE is lossless.
+ *
+ * `citation` is TEXT, not JSON, and some rows hold non-JSON text — JSON_EXTRACT raises
+ * ER_INVALID_JSON_TEXT on those and would abort the whole query, hence the JSON_VALID guard.
+ * A valid-but-scalar citation yields NULL from the path lookup, which is what we want.
+ *
+ * The JSON_TYPE = 'STRING' test is what keeps `{"court": null}` out: JSON_UNQUOTE renders a JSON
+ * null as the literal four-character string 'null', which otherwise reaches the dropdown as a
+ * court named "null" (13 rows) and prints "null" on the card.
+ *
+ * Used for the WHERE, the search and the SELECT so the filter and the rendered card always agree.
+ */
+const CASE_LAW_COURT_SQL = `COALESCE(
+  NULLIF(TRIM(CASE
+    WHEN JSON_VALID(a.citation) AND JSON_TYPE(JSON_EXTRACT(a.citation, '$.court')) = 'STRING'
+    THEN JSON_UNQUOTE(JSON_EXTRACT(a.citation, '$.court'))
+  END), ''),
+  NULLIF(TRIM(a.court_name), '')
+)`;
+
+/** First non-empty of the two sources, trimmed; null when neither has a value. */
+function pickCaseLawValue(primary, fallback) {
+  for (const candidate of [primary, fallback]) {
+    if (candidate == null) continue;
+    const trimmed = String(candidate).trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
+/** Rows that belong to the case-law index, shared by the list and the filter-options query. */
+const CASE_LAW_BASE_CONDITIONS = [
+  "a.status = 'publish'",
+  sqlDeletedAtIsNull('a'),
+  'a.citation IS NOT NULL',
+  "TRIM(a.citation) <> ''",
+];
+
+/**
+ * `type_of_tax` is free text entered in the admin form, so the same tax lands under several
+ * spellings ("GST", "GST - Central Tax", "GST - Central Tax (Rate)", "Central Tax"). Collapse
+ * those into one bucket; everything else becomes its own slug so newly added values show up in
+ * the dropdown without a code change.
+ */
+function caseLawTaxTypeGroup(rawValue) {
+  const value = String(rawValue == null ? '' : rawValue).trim();
+  if (!value) return null;
+  const lower = value.toLowerCase();
+  if (lower === 'gst' || lower.startsWith('gst ') || lower.startsWith('gst-') || lower.includes('central tax')) {
+    return { slug: 'gst', label: 'GST' };
+  }
+  const slug = lower.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug ? { slug, label: value } : null;
+}
+
+/** Distinct non-empty `type_of_tax` values across the case-law set. */
+async function fetchCaseLawTaxTypeValues() {
+  const rows = await sequelize.query(
+    `SELECT a.type_of_tax AS value, COUNT(*) AS count
+       FROM articles a
+      WHERE ${CASE_LAW_BASE_CONDITIONS.join(' AND ')}
+        AND a.type_of_tax IS NOT NULL
+        AND TRIM(a.type_of_tax) <> ''
+      GROUP BY a.type_of_tax`,
+    { type: QueryTypes.SELECT },
+  );
+  return rows.map((r) => ({ value: String(r.value).trim(), count: Number(r.count) || 0 }));
+}
+
+/**
+ * Every raw `type_of_tax` value that belongs to the given group slug. Returned so the caller can
+ * build an `IN (...)` over the real column values rather than trying to slugify inside SQL.
+ */
+async function resolveCaseLawTaxTypeValues(slug) {
+  const wanted = String(slug || '').trim().toLowerCase();
+  if (!wanted) return [];
+  const rows = await fetchCaseLawTaxTypeValues();
+  return rows
+    .filter((r) => caseLawTaxTypeGroup(r.value)?.slug === wanted)
+    .map((r) => r.value);
+}
+
+/**
+ * Dropdown options for the public case-law filter bar, derived from the rows themselves (not the
+ * `courts` taxonomy) so every option is guaranteed to return at least one result — the data holds
+ * 107 distinct courts against 106 taxonomy rows, and a taxonomy-driven list would offer a court
+ * that matches nothing while hiding one that does.
+ */
+async function getCaseLawFilterOptionsPublic() {
+  const whereSql = CASE_LAW_BASE_CONDITIONS.join(' AND ');
+
+  const [courtRows, taxRows] = await Promise.all([
+    sequelize.query(
+      `SELECT ${CASE_LAW_COURT_SQL} AS name, COUNT(*) AS count
+         FROM articles a
+        WHERE ${whereSql}
+          AND ${CASE_LAW_COURT_SQL} IS NOT NULL
+        GROUP BY name
+        ORDER BY count DESC, name ASC`,
+      { type: QueryTypes.SELECT },
+    ),
+    fetchCaseLawTaxTypeValues(),
+  ]);
+
+  const courts = courtRows.map((r) => ({
+    value: String(r.name),
+    label: String(r.name),
+    count: Number(r.count) || 0,
+  }));
+
+  const taxBySlug = new Map();
+  for (const row of taxRows) {
+    const group = caseLawTaxTypeGroup(row.value);
+    if (!group) continue;
+    const existing = taxBySlug.get(group.slug);
+    if (existing) existing.count += row.count;
+    else taxBySlug.set(group.slug, { value: group.slug, label: group.label, count: row.count });
+  }
+  const taxTypes = [...taxBySlug.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+
+  return { courts, taxTypes };
+}
+
+/**
  * Public list of "case law" articles: only rows that have BOTH an appeal number
  * and a judgement date (non-null, non-empty). Returns a slim projection tailored
  * for the case-law index. Does not affect the generic articles list.
  */
 async function getCaseLawsPublic(options = {}) {
-  const { page = 1, limit = 20, search, viewer = null } = options;
+  const { page = 1, limit = 20, search, court, taxType, sort, viewer = null } = options;
 
   const safePage = Math.max(1, Number(page) || 1);
   const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
   const offset = (safePage - 1) * safeLimit;
 
-  const conditions = [
-    "a.status = 'publish'",
-    sqlDeletedAtIsNull('a'),
-    "a.citation IS NOT NULL",
-    "TRIM(a.citation) <> ''",
-  ];
+  const conditions = [...CASE_LAW_BASE_CONDITIONS];
   const replacements = { limit: safeLimit, offset };
 
   if (search && String(search).trim()) {
     conditions.push(
-      '(a.title LIKE :search OR a.case_name LIKE :search OR a.appeal_number LIKE :search OR a.citation LIKE :search OR a.court_name LIKE :search)'
+      `(a.title LIKE :search OR a.case_name LIKE :search OR a.appeal_number LIKE :search OR a.citation LIKE :search OR ${CASE_LAW_COURT_SQL} LIKE :search)`
     );
     replacements.search = `%${String(search).trim()}%`;
   }
 
+  const courtFilter = String(court == null ? '' : court).trim();
+  if (courtFilter) {
+    conditions.push(`${CASE_LAW_COURT_SQL} = :court`);
+    replacements.court = courtFilter;
+  }
+
+  const taxFilter = String(taxType == null ? '' : taxType).trim();
+  if (taxFilter) {
+    const taxValues = await resolveCaseLawTaxTypeValues(taxFilter);
+    if (taxValues.length) {
+      conditions.push('a.type_of_tax IN (:taxValues)');
+      replacements.taxValues = taxValues;
+    } else {
+      // Unknown slug: return an empty page rather than silently ignoring the filter, which would
+      // show the full list while the dropdown claims to be narrowing it.
+      conditions.push('1 = 0');
+    }
+  }
+
   const whereSql = conditions.join(' AND ');
+  // Only `id` is safe to order by: `judgement_date` is a VARCHAR holding mixed formats
+  // ("13.12.2019", "28/10/2020"), so it sorts lexicographically, not chronologically.
+  const orderSql = String(sort || '').trim().toLowerCase() === 'oldest' ? 'a.id ASC' : 'a.id DESC';
 
   const [countRow] = await sequelize.query(
     `SELECT COUNT(*) AS total FROM articles a WHERE ${whereSql}`,
@@ -1508,10 +1655,11 @@ async function getCaseLawsPublic(options = {}) {
     ? await sequelize.query(
       `SELECT a.id, a.wp_post_id, a.title, a.slug, a.thumbnail_url, a.thumbnail_alt, a.case_name, a.citation,
               a.appeal_number, a.judgement_date, a.assessment_year, a.court_name,
+              ${CASE_LAW_COURT_SQL} AS resolved_court,
               a.rel_download_url, a.upload_url, a.blog_access_tier
        FROM articles a
        WHERE ${whereSql}
-       ORDER BY a.id DESC
+       ORDER BY ${orderSql}
        LIMIT :limit OFFSET :offset`,
       { replacements, type: QueryTypes.SELECT },
     )
@@ -1537,12 +1685,19 @@ async function getCaseLawsPublic(options = {}) {
       cover_image_alt: p.thumbnail_alt,
       blog_access_tier,
       access,
-      case_name: citationData?.case_name ?? null,
-      citation: citationData?.case_citation ?? null,
-      appeal_number: citationData?.appeal_number ?? null,
-      judgement_date: citationData?.judgement_date ?? null,
-      assessment_year: citationData?.assessment_year ?? null,
-      court_name: citationData?.court ?? null,
+      // JSON blob first, migrated column second — same precedence as `buildArticleCitationFromRow`.
+      // Reading the JSON alone blanked these on every row migrated from WP into the columns
+      // (5,509 of 6,534 case laws carry the court only in the column), and left the card showing
+      // an empty court for rows the court filter had just matched.
+      case_name: pickCaseLawValue(citationData?.case_name, p.case_name),
+      citation: pickCaseLawValue(citationData?.case_citation, null),
+
+      appeal_number: pickCaseLawValue(citationData?.appeal_number, p.appeal_number),
+      judgement_date: pickCaseLawValue(citationData?.judgement_date, p.judgement_date),
+      assessment_year: pickCaseLawValue(citationData?.assessment_year, p.assessment_year),
+      court_name: pickCaseLawValue(citationData?.court, p.resolved_court ?? p.court_name),
+      // The web card reads `court`; keep `court_name` for existing consumers.
+      court: pickCaseLawValue(citationData?.court, p.resolved_court ?? p.court_name),
       rel_download_url: p.rel_download_url ?? null,
       download_url: p.rel_download_url || p.upload_url || null,
       citation_ibj:citationData,
@@ -2342,7 +2497,9 @@ async function findPublishedArticleRowByPublicPathKey(raw) {
   // Try the slug as given, plus the percent-encoded variants, since legacy WP slugs
   // for non-Latin titles are stored percent-encoded (usually lowercase) while the
   // router hands us the decoded form. This stays an indexed equality lookup — no
-  // full-table scan.
+  // full-table scan. That depends on `idx_articles_slug` existing: without it this
+  // scans every published row and reads each `content` LONGTEXT (3.1s at 29k rows).
+  // Run `npm run ensure-articles-lookup-indexes` on any database missing it.
   const slugCandidates = buildSlugLookupCandidates(slugOnly);
   return Article.findOne({
     where: publishedActiveArticleWhere({ slug: { [Op.in]: slugCandidates } }),
@@ -4388,6 +4545,7 @@ module.exports = {
   articles: {
     getArticlesPublic,
     getCaseLawsPublic,
+    getCaseLawFilterOptionsPublic,
     getBlogSpotlightFeed,
     getArticleBySlugPublic,
     getUpNextArticlesBySlugPublic,
