@@ -38,6 +38,13 @@ const marketingMetaSchema = Joi.object({
     use_global_faq: Joi.boolean(),
     use_course_faq: Joi.boolean(),
     checkout_url: Joi.string().max(1000).allow('', null),
+    // Thank-you page destination for buyers who paid through THIS landing page. Empty
+    // falls back to whatever the course's own post-purchase tab says; a blank delay
+    // means the default countdown.
+    post_purchase_redirect_url: Joi.string().max(1000).allow('', null),
+    post_purchase_redirect_delay: Joi.alternatives()
+        .try(Joi.number().integer().min(0).max(600), Joi.string().max(10))
+        .allow('', null),
     stats: Joi.object({
         people_coached: Joi.string().allow('', null),
         preferred_by: Joi.string().allow('', null),
