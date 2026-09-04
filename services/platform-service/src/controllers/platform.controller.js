@@ -843,12 +843,18 @@ const getSeoMetadataBySlugPublic = asyncHandler(async (req, res) => {
 });
 
 /** Query ?path=/blogs/foo — supports multi-segment paths unlike /slug/:slug */
+/**
+ * Public lookup — Next.js edge middleware calls this for every request.
+ *
+ * "No SEO row for this path" is the normal answer for most pages, not an
+ * error, so it returns 200 with `data: null`. Answering 404 made every page
+ * view log two nginx errors and buried real broken URLs in the access log.
+ */
 const getSeoMetadataByPathPublic = asyncHandler(async (req, res) => {
   const raw = typeof req.query?.path === 'string' ? req.query.path : '';
   const pathNorm = raw === '' ? '/' : raw.startsWith('/') ? raw : `/${raw}`;
   const data = await platformService.seo.getSeoMetadataBySlugPublic(pathNorm);
-  if (!data) throw new AppError('SEO Metadata not found', 404);
-  sendSuccess(res, data);
+  sendSuccess(res, data || null);
 });
 
 const createSeoMetadata = asyncHandler(async (req, res) => {
@@ -917,13 +923,18 @@ const deleteRedirect = asyncHandler(async (req, res) => {
   sendNoContent(res);
 });
 
-/** Public lookup — Next.js edge middleware calls this for every request to resolve old → new paths. */
+/**
+ * Public lookup — Next.js edge middleware calls this for every request to
+ * resolve old → new paths.
+ *
+ * "No redirect for this path" is the normal answer, not an error, so it
+ * returns 200 with `data: null`. See `getSeoMetadataByPathPublic`.
+ */
 const getRedirectByPathPublic = asyncHandler(async (req, res) => {
   const raw = typeof req.query?.path === 'string' ? req.query.path : '';
   const pathNorm = raw === '' ? '/' : raw.startsWith('/') ? raw : `/${raw}`;
   const data = await platformService.redirects.resolveRedirectByPath(pathNorm);
-  if (!data) throw new AppError('Redirect not found', 404);
-  sendSuccess(res, data);
+  sendSuccess(res, data || null);
 });
 
 module.exports = {
