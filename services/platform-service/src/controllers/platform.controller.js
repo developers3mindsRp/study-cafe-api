@@ -343,7 +343,7 @@ const getArticles = asyncHandler(async (req, res) => {
   const search = req.query.search ? String(req.query.search).trim() : undefined;
   const category = req.query.category ? String(req.query.category).trim() : undefined;
   const accessTier = req.query.access_tier ? String(req.query.access_tier).trim() : undefined;
-  // Opt-out only: anything other than an explicit false/0 keeps the (costly) total count,
+  // Opt-out only: anything other than an explicit false/0 keeps the (costly) total count ,
   // so existing paginated callers are unaffected.
   const rawWithTotal = req.query.with_total;
   const withTotal = !(rawWithTotal === 'false' || rawWithTotal === '0');
