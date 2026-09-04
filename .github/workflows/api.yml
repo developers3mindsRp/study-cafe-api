@@ -34,7 +34,7 @@ jobs:
 
             git pull origin main
 
-            npm install
+            npm install --no-audit --no-fund
             npm run install:all
 
             # One PM2 app per microservice (see ecosystem.config.cjs). First deploy: pm2 start; later: pm2 reload.

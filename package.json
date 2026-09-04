@@ -27,7 +27,7 @@
     "dev:platform": "cd services/platform-service && cross-env PORT=4005 node --watch src/server.js",
     "dev:platform-worker": "cd services/platform-service && cross-env node --watch src/workers/article-publish-worker.js",
     "dev:downloads": "cd services/downloads-service && cross-env PORT=4006 node --watch src/server.js",
-    "install:all": "npm install --prefix services/api-gateway && npm install --prefix services/auth-service && npm install --prefix services/course-service && npm install --prefix services/order-service && npm install --prefix services/admin-service && npm install --prefix services/platform-service && npm install --prefix services/downloads-service",
+    "install:all": "npm install --no-audit --no-fund --prefix services/api-gateway && npm install --no-audit --no-fund --prefix services/auth-service && npm install --no-audit --no-fund --prefix services/course-service && npm install --no-audit --no-fund --prefix services/order-service && npm install --no-audit --no-fund --prefix services/admin-service && npm install --no-audit --no-fund --prefix services/platform-service && npm install --no-audit --no-fund --prefix services/downloads-service",
     "dev:up": "npm run dev:wait && npm run dev:fix-db && npm run dev:services",
     "dev:fix-db": "node scripts/apply-mysql-sql-file.js --no-database scripts/fix-mysql-localhost-users.sql",
     "dev:free-ports": "echo \"Frees 3000 and 4001-4005 (stops any process bound to them).\" && npm run dev:kill-ports",
