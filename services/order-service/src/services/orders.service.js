@@ -2950,6 +2950,22 @@ function applyCreatedAtRangeToWhere(where, dateFrom, dateTo) {
   if (end) where.created_at[Op.lte] = end;
 }
 
+/**
+ * The payment reference an admin should see for an order.
+ *
+ * `manual:`/`free:` refs are internally generated capture placeholders, not something
+ * an admin typed. When the payment row carries one of those, prefer the order's own
+ * reference — that's where a shared bulk-allotment settlement id is recorded. Orders
+ * with a real captured ref are unaffected.
+ */
+function resolveAdminPaymentId(order, payment) {
+  const capturedRef = payment ? payment.razorpay_payment_id : null;
+  const capturedRefIsSynthetic =
+    !!capturedRef && (capturedRef.startsWith('manual:') || capturedRef.startsWith('free:'));
+  if (capturedRef && !capturedRefIsSynthetic) return capturedRef;
+  return (order && order.rp_payment_id) || capturedRef || null;
+}
+
 async function listAllOrders({
   limit = 100,
   offset = 0,
@@ -3229,7 +3245,7 @@ async function listAllOrders({
 
     return {
       ...o,
-      payment_id: payment ? payment.razorpay_payment_id : null,
+      payment_id: resolveAdminPaymentId(o, payment),
       // Priority: buyer info on order > linked user info
       buyer_name: o.buyer_name || (user ? user.name : null),
       buyer_email: o.buyer_email || (user ? user.email : null),
@@ -3766,16 +3782,7 @@ async function enrichAdminOrderResponse(p) {
     }
   }
 
-  // `manual:`/`free:` refs are internally generated, not something an admin typed. When
-  // the payment row carries one of those, prefer the order's own reference — that's
-  // where a shared bulk-allotment settlement id is recorded. Orders with a real captured
-  // ref are unaffected.
-  const capturedRef = payment ? payment.razorpay_payment_id : null;
-  const capturedRefIsSynthetic =
-    !!capturedRef && (capturedRef.startsWith('manual:') || capturedRef.startsWith('free:'));
-  const paymentId = capturedRef && !capturedRefIsSynthetic
-    ? capturedRef
-    : p.rp_payment_id || capturedRef || null;
+  const paymentId = resolveAdminPaymentId(p, payment);
 
   return {
     ...p,
