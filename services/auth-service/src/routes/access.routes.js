@@ -66,7 +66,11 @@ function register(router) {
 
   router.get('/internal/users/:id/courses', requireGrantAuth, asyncHandler(async (req, res) => {
     const accountService = require('../services/account.service');
-    const data = await accountService.myCourses(req.params.id);
+    // Admin callers need the deallotted grants too (flagged `isRevoked`): a course the
+    // admin removed must be reported as removed, not silently absent like a grant that
+    // was never written. Opt in via ?includeRevoked=1 so existing callers are unchanged.
+    const includeRevoked = req.query.includeRevoked === '1' || req.query.includeRevoked === 'true';
+    const data = await accountService.myCourses(req.params.id, { includeRevoked });
     sendSuccess(res, data);
   }));
 

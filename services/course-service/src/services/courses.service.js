@@ -1870,9 +1870,10 @@ const coursesService = {
       order: [['enrolled_at', 'DESC']],
     });
 
-    // 3. Get generic user_courses (Auth service parity)
+    // 3. Get generic user_courses (Auth service parity). Deallotted grants are excluded:
+    // the row is kept as the record of the removal, not as a live enrollment.
     const userCourseRows = await UserCourse.findAll({
-      where: { user_id: userId },
+      where: { user_id: userId, revoked_at: null },
     });
 
     const resultsMap = new Map();
@@ -2500,35 +2501,144 @@ const coursesService = {
    * Remove a user from all enrollments related to a specific course.
    * Called upon order refund to revoke access.
    */
-  async unenrollUser(userId, courseId) {
-    const { BatchEnrollment, Batch, Enrollment, UserCourse } = require('../models');
-    const { Op } = require('sequelize');
+  /**
+   * Remove a user from a course.
+   *
+   * @param {number} userId
+   * @param {number} courseId
+   * @param {object}  [opts]
+   * @param {boolean} [opts.recordRevocation=false]
+   *   Keep the `user_courses` row and stamp `revoked_at` instead of deleting it, and
+   *   write one if it is missing, so the removal leaves a durable record.
+   *
+   *   ONLY the admin deallotment path sets this. The refund paths — the synchronous
+   *   revoke inside a refund, the ORDER_REFUNDED outbox event, and membership refunds,
+   *   which unenroll from every course the plan covered — deliberately keep the original
+   *   delete behaviour:
+   *     - The outbox refund calls `/access/revoke-course` (a hard delete) in parallel with
+   *       this, so stamping here would race a delete and land either way at random.
+   *     - A membership refund would otherwise write a revocation row for every course in
+   *       the plan, including ones the learner never held individually, and would hide a
+   *       separate direct purchase of the same course from My Courses.
+   *   Refund access behaviour is therefore byte-identical to today.
+   */
+  async unenrollUser(userId, courseId, { recordRevocation = false } = {}) {
+    const { sequelize, BatchEnrollment, Batch, Enrollment, UserCourse } = require('../models');
+    const { Op, QueryTypes } = require('sequelize');
 
-    // 1. Remove from all batches of this course
-    const batches = await Batch.findAll({
-      where: { course_id: courseId },
-      attributes: ['id'],
-      raw: true,
-    });
-    const batchIds = batches.map((b) => b.id);
+    const uid = Number(userId);
+    const cid = Number(courseId);
 
-    if (batchIds.length > 0) {
-      await BatchEnrollment.destroy({
-        where: {
-          user_id: userId,
-          batch_id: { [Op.in]: batchIds },
-        },
-      });
+    /**
+     * Grants for users migrated from WordPress can be keyed under either the internal id
+     * or the legacy `wp_user_id` — auth-service reads both (see membershipLookupIds in
+     * account.service.js), so removing only the internal id can leave a row that still
+     * reads as live access. `users` lives in the same database as the course tables, so
+     * this resolves without a service hop.
+     *
+     * Scoped to the admin path for the same reason as recordRevocation: widening the
+     * match would change which rows a refund removes, and refunds are meant to behave
+     * exactly as they do today.
+     */
+    const lookupIds = new Set([uid]);
+    if (recordRevocation) {
+      try {
+        const [row] = await sequelize.query(
+          'SELECT wp_user_id FROM users WHERE id = ? LIMIT 1',
+          { replacements: [uid], type: QueryTypes.SELECT },
+        );
+        const wpId = Number(row?.wp_user_id);
+        if (Number.isFinite(wpId) && wpId > 0) lookupIds.add(wpId);
+      } catch (err) {
+        logger.warn(`[courses] unenrollUser could not resolve wp_user_id for ${uid}: ${err.message}`);
+      }
     }
+    const userIds = [...lookupIds];
 
-    // 2. Remove primary enrollment record
-    await Enrollment.destroy({
-      where: { user_id: userId, course_id: courseId }
-    });
+    // All three deletes are one unit of work: a partial failure that dropped the access
+    // grant but left the batch row (or vice versa) is exactly the half-removed state the
+    // admin panel cannot show or repair.
+    return sequelize.transaction(async (t) => {
+      // 1. Remove from all batches of this course
+      const batches = await Batch.findAll({
+        where: { course_id: cid },
+        attributes: ['id'],
+        raw: true,
+        transaction: t,
+      });
+      const batchIds = batches.map((b) => b.id);
 
-    // 3. Remove UserCourse record (generic access link)
-    await UserCourse.destroy({
-      where: { user_id: userId, course_id: courseId }
+      let batchEnrollments = 0;
+      if (batchIds.length > 0) {
+        batchEnrollments = await BatchEnrollment.destroy({
+          where: {
+            user_id: { [Op.in]: userIds },
+            batch_id: { [Op.in]: batchIds },
+          },
+          transaction: t,
+        });
+      }
+
+      // 2. Remove primary enrollment record
+      const enrollments = await Enrollment.destroy({
+        where: { user_id: { [Op.in]: userIds }, course_id: cid },
+        transaction: t,
+      });
+
+      // 3. Remove the access grant auth-service reads.
+
+      // Refund paths: the original hard delete, unchanged. See recordRevocation above.
+      if (!recordRevocation) {
+        const userCourses = await UserCourse.destroy({
+          where: { user_id: { [Op.in]: userIds }, course_id: cid },
+          transaction: t,
+        });
+        return { batchEnrollments, enrollments, userCourses, tombstoned: 0 };
+      }
+
+      // Admin deallotment: stamped, not deleted. The grant is written asynchronously by
+      // order-service's outbox worker, so "no row" is a normal state for a just-paid
+      // order — deleting here would make an admin removal indistinguishable from a grant
+      // still in flight, and every read path downstream would have to guess. `revoked_at`
+      // is the positive evidence those paths filter on.
+      const revokedAt = new Date();
+      const [userCourses] = await UserCourse.update(
+        { revoked_at: revokedAt },
+        {
+          where: { user_id: { [Op.in]: userIds }, course_id: cid, revoked_at: null },
+          transaction: t,
+        },
+      );
+
+      /**
+       * Nothing to stamp: this pair has no grant row at all.
+       *
+       * That is common rather than exotic — the grant may never have been written (a few
+       * hundred paid orders are in that state), or the course itself may since have been
+       * deleted while its order survives (a few thousand orders point at a course that no
+       * longer exists). Leaving it here would make the removal a silent no-op: the order
+       * still surfaces the course, the admin deselects it again, and nothing ever changes.
+       *
+       * So record the revocation on its own. The row grants nothing — every live read
+       * filters on `revoked_at IS NULL` — it exists purely so the removal is remembered,
+       * and re-allotting clears it like any other revoked grant.
+       */
+      let tombstoned = 0;
+      if (userCourses === 0) {
+        const existing = await UserCourse.count({
+          where: { user_id: { [Op.in]: userIds }, course_id: cid },
+          transaction: t,
+        });
+        if (existing === 0) {
+          await UserCourse.create(
+            { user_id: uid, course_id: cid, order_id: null, revoked_at: revokedAt },
+            { transaction: t },
+          );
+          tombstoned = 1;
+        }
+      }
+
+      return { batchEnrollments, enrollments, userCourses, tombstoned };
     });
   },
 };

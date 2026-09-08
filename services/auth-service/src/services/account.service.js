@@ -180,7 +180,9 @@ async function dashboardStats(userId) {
   const lookupIds = membershipLookupIds(userId, userRow);
 
   const rows = await UserCourse.findAll({
-    where: { user_id: { [Op.in]: lookupIds } },
+    // A deallotted course must not be counted on the learner's dashboard — the grant row
+    // survives only as the record of the removal.
+    where: { user_id: { [Op.in]: lookupIds }, revoked_at: null },
     attributes: ['course_id', 'expires_at'],
   });
   const now = new Date();
@@ -277,7 +279,15 @@ function courseMatchesSearch(term, { title, slug, category }) {
  * My enrolled courses (from user_courses) with course title/thumbnail from course-service.
  * Optional `search` filters by course title, slug, or category (case-insensitive).
  */
-async function myCourses(userId, { search } = {}) {
+/**
+ * @param {object} [opts]
+ * @param {string} [opts.search]
+ * @param {boolean} [opts.includeRevoked]  keep admin-deallotted grants in the result,
+ *   flagged as `isRevoked`. Off for learner-facing calls (a removed course must not show
+ *   in My Courses); on for the internal admin call, which needs to tell a deallotment
+ *   apart from a grant that was never written.
+ */
+async function myCourses(userId, { search, includeRevoked = false } = {}) {
   // Resolve wp_user_id so migrated grants stored under the legacy id are included.
   const { Op } = require('sequelize');
   const userRow = await User.findByPk(userId, { attributes: ['id', 'wp_user_id'] });
@@ -285,7 +295,9 @@ async function myCourses(userId, { search } = {}) {
 
   // Return ALL granted courses (active AND expired). The caller/UI separates them
   // by `accessStatus`; expired courses are no longer silently dropped.
-  const rows = await UserCourse.findAll({ where: { user_id: { [Op.in]: lookupIds } } });
+  const where = { user_id: { [Op.in]: lookupIds } };
+  if (!includeRevoked) where.revoked_at = null;
+  const rows = await UserCourse.findAll({ where });
   const now = new Date();
   const courseIds = rows.map((row) => Number(row.get({ plain: true }).course_id)).filter((n) => n > 0);
   const [summary, metaMap] = await Promise.all([
@@ -314,6 +326,8 @@ async function myCourses(userId, { search } = {}) {
       userId: String(r.user_id),
       courseId: String(r.course_id),
       isAdminGranted: r.order_id == null,
+      /** true only when an admin deallotted this course — never for a grant that is merely absent. */
+      isRevoked: !!r.revoked_at,
       course: {
         id: String(r.course_id),
         title,
