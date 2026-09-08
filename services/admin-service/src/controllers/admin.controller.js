@@ -532,7 +532,9 @@ const getUserEnrollments = asyncHandler(async (req, res) => {
   try {
     const [purchasesRes, userCoursesRes] = await Promise.allSettled([
       orderClient.get(`/internal/users/${userId}/purchases`),
-      authClient.get(`/internal/users/${userId}/courses`),
+      // includeRevoked: deallotted grants come back flagged rather than missing, which is
+      // what separates "an admin removed this" from "the grant was never written".
+      authClient.get(`/internal/users/${userId}/courses`, { params: { includeRevoked: 1 } }),
     ]);
     if (purchasesRes.status === 'fulfilled') {
       const d = purchasesRes.value.data;
@@ -573,6 +575,22 @@ const getUserEnrollments = asyncHandler(async (req, res) => {
   // Track which courseIds are covered by paid orders so admin-granted rows aren't double-counted.
   const purchasedCourseIds = new Set();
 
+  /**
+   * Courses an admin explicitly deallotted (user_courses.revoked_at is stamped).
+   *
+   * Deliberately NOT "every course without a grant row". The grant is written
+   * asynchronously by order-service's outbox worker, so a paid order legitimately has no
+   * row for a while — and a couple of hundred older paid orders have none at all.
+   * Inferring removal from an absent row would report all of those as deallotted and
+   * hide courses nobody touched, so only positive evidence counts here.
+   */
+  const revokedCourseIds = new Set(
+    userCourses
+      .filter((uc) => uc.isRevoked)
+      .map((uc) => String(uc.courseId))
+      .filter((cid) => cid && cid !== 'undefined'),
+  );
+
   for (const p of purchases) {
     if (!p.course || p.courseId == null) continue;
     if (!isUserCourseOrderPurchase(p)) continue;
@@ -581,6 +599,7 @@ const getUserEnrollments = asyncHandler(async (req, res) => {
     purchasedCourseIds.add(cid);
 
     const e = enrollmentByCourseId.get(cid);
+    const isRevoked = revokedCourseIds.has(cid);
     results.push({
       enrollment_id: e?.enrollment_id ?? null,
       course_id: Number(cid),
@@ -592,17 +611,28 @@ const getUserEnrollments = asyncHandler(async (req, res) => {
       purchase_status: p.status ?? null,
       // Mirror the exact accessStatus logic from frontend (listMyPurchases):
       // wp_post_status is authoritative for legacy orders; user_courses.expires_at for native.
-      access_status: p.accessStatus ?? 'active',
+      //
+      // One admin-only correction: listMyPurchases derives access from the grant's expiry
+      // and knows nothing about revocation, so a deallotted course would still report
+      // 'active'. A revoked grant means no access, so show it as expired rather than
+      // telling the admin the course they just removed is live.
+      access_status: isRevoked ? 'expired' : (p.accessStatus ?? 'active'),
       access_expires_at: p.accessExpiresAt ?? null,
       wp_post_status: p.wpPostStatus ?? null,
       from_purchase: true,
       is_admin_granted: false,
+      // false ONLY for an explicit deallotment, so the edit form stops re-offering it as
+      // a current allotment. A course whose grant simply hasn't been written stays true.
+      has_access_grant: !isRevoked,
     });
   }
 
   // Add admin-granted courses (order_id IS NULL in user_courses) not already in paid orders.
   for (const uc of userCourses) {
     if (!uc.isAdminGranted) continue;
+    // A revoked admin grant is a removed allotment with no order behind it — there is
+    // nothing left to show, so it drops out of the list entirely.
+    if (uc.isRevoked) continue;
     const cid = String(uc.courseId);
     if (purchasedCourseIds.has(cid)) continue;
 
@@ -621,6 +651,8 @@ const getUserEnrollments = asyncHandler(async (req, res) => {
       wp_post_status: null,
       from_purchase: false,
       is_admin_granted: true,
+      // These rows come from user_courses, so the grant exists by construction.
+      has_access_grant: true,
     });
   }
 
@@ -1255,6 +1287,42 @@ const removeBatchEnrollment = asyncHandler(async (req, res) => {
   const adminId = getAdminId(req);
   const { data } = await courseClient.delete(`/internal/batch-enrollments/${req.params.id}`);
   await adminLogsService.logAction(adminId, 'REMOVE_BATCH_ENROLLMENT', 'batch_enrollment', req.params.id, {}, req.ip);
+  sendSuccess(res, data);
+});
+
+/**
+ * Deallot a course from a user — the inverse of setUserCourseBatch.
+ *
+ * Clears every enrollment table for the pair (batch_enrollments, enrollments,
+ * user_courses) via course-service's transactional unenrollUser, so access actually
+ * stops rather than the user merely dropping out of a batch while keeping the grant.
+ *
+ * The order and payment rows are deliberately left untouched: they are the revenue
+ * record and are never deleted to undo an allotment. The course therefore stays in the
+ * user's purchase history and disappears only from their current allotments — which is
+ * what getUserEnrollments reports via `has_access_grant`.
+ */
+const removeUserCourse = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const userId = Number(req.params.id);
+  const courseId = Number(req.params.courseId);
+  if (!Number.isFinite(userId) || userId <= 0) throw new AppError('Invalid user id', 400);
+  if (!Number.isFinite(courseId) || courseId <= 0) throw new AppError('Invalid course id', 400);
+
+  const { data } = await courseClient.post(`/internal/courses/${courseId}/unenroll`, {
+    user_id: userId,
+    // Record the removal (user_courses.revoked_at) rather than deleting the row. Only the
+    // admin path does this; refunds keep the original delete. See unenrollUser.
+    record_revocation: true,
+  });
+  await adminLogsService.logAction(
+    adminId,
+    'REMOVE_USER_COURSE',
+    'user_course',
+    `${userId}-${courseId}`,
+    { userId, courseId, removed: data?.removed ?? null },
+    req.ip,
+  );
   sendSuccess(res, data);
 });
 
@@ -2031,6 +2099,7 @@ module.exports = {
   bulkGrantMembershipByEmails,
   importUsersFromCsv,
   removeBatchEnrollment,
+  removeUserCourse,
   getUserEnrollments,
   getUserMemberships,
   grantUserMembership,

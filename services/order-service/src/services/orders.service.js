@@ -2816,13 +2816,31 @@ async function listMyPurchases(userId) {
   // frozen snapshot from migration time that is never updated — so we let a live
   // active grant override a stale legacy 'draft' (expired) card (see below).
   const expiryMap = new Map();
+  /**
+   * Courses an admin has deallotted, surfaced per row as `revoked`.
+   *
+   * Reported, never filtered out here. This list is also the learner's payment history
+   * and the source of their invoices, and deallotting a course does not unmake the
+   * payment — that is exactly why the order and payment rows are kept. Callers that show
+   * course *access* (My Courses, the "continue learning" CTA) skip revoked rows
+   * themselves; callers that show *money* keep every one.
+   *
+   * Only a stamped `revoked_at` counts — a course with no row at all is NOT revoked, it
+   * is a grant that has not been written yet (the outbox worker grants asynchronously, so
+   * every just-paid order passes through that state).
+   */
+  const revokedCourseIds = new Set();
   if (courseEntityIds.length > 0) {
     const placeholders = courseEntityIds.map(() => '?').join(',');
     const expiryRows = await sequelize.query(
-      `SELECT course_id, expires_at FROM user_courses WHERE user_id = ? AND course_id IN (${placeholders})`,
+      `SELECT course_id, expires_at, revoked_at FROM user_courses WHERE user_id = ? AND course_id IN (${placeholders})`,
       { replacements: [userId, ...courseEntityIds], type: QueryTypes.SELECT }
     );
     for (const row of expiryRows) {
+      if (row.revoked_at) {
+        revokedCourseIds.add(Number(row.course_id));
+        continue;
+      }
       expiryMap.set(Number(row.course_id), row.expires_at ?? null);
     }
   }
@@ -2831,13 +2849,23 @@ async function listMyPurchases(userId) {
   for (const item of out) {
     if (!item.course || !courseEntityIds.includes(Number(item.courseId))) continue;
 
+    // An admin deallotted this course. The order stands (payment history, invoice), but
+    // the learner has no access, so access-facing views drop the row on this flag.
+    item.revoked = revokedCourseIds.has(Number(item.courseId));
+
     // Live access from user_courses: a row with expires_at = null (lifetime) or a
     // future date means the learner currently has access to this course.
     const hasGrant = expiryMap.has(Number(item.courseId));
     const grantExpiresAt = hasGrant ? expiryMap.get(Number(item.courseId)) : null;
     const grantActive = hasGrant && (!grantExpiresAt || new Date(grantExpiresAt) > now);
 
-    if (item.wpPostStatus === 'publish') {
+    if (item.revoked) {
+      // Deallotted: no access, whatever the grant window or the legacy flag says. Checked
+      // before wpPostStatus, which is a snapshot frozen at migration time and would
+      // otherwise report a removed course as active.
+      item.accessStatus = 'expired';
+      item.accessExpiresAt = null;
+    } else if (item.wpPostStatus === 'publish') {
       // Legacy active order — authoritative.
       item.accessStatus = 'active';
       item.accessExpiresAt = null;

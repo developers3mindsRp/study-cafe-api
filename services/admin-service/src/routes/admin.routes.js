@@ -87,6 +87,9 @@ function register(router) {
   router.delete('/admin/batch-enrollments/:id', requireAdmin, controller.removeBatchEnrollment);
   router.get('/admin/users/distinct-states', requireAdmin, controller.getUserDistinctStates);
   router.get('/admin/users/:id/enrollments', requireAdmin, controller.getUserEnrollments);
+  // Deallot a course from a user — clears batch_enrollments, enrollments and user_courses.
+  // The order/payment record is intentionally kept (see removeUserCourse).
+  router.delete('/admin/users/:id/courses/:courseId', requireAdmin, controller.removeUserCourse);
   router.get('/admin/users/:id/memberships', requireAdmin, controller.getUserMemberships);
   router.post('/admin/users/:id/membership', requireAdmin, controller.grantUserMembership);
   router.delete('/admin/users/:id/membership', requireAdmin, controller.removeUserMembership);

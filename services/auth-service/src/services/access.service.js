@@ -81,10 +81,14 @@ async function checkAccess(token, courseId) {
   const userId = decoded.userId;
 
   // Fast path: direct purchase enrollment that is still valid (lifetime or unexpired).
+  // A row an admin has revoked grants nothing — it is kept only as the record of the
+  // deallotment — but it must still fall through to the membership check below, exactly
+  // like an expired grant does.
   const row = await UserCourse.findOne({
     where: { user_id: userId, course_id: courseId },
   });
-  if (row && (!row.expires_at || new Date(row.expires_at) > new Date())) {
+  const revoked = !!row?.revoked_at;
+  if (row && !revoked && (!row.expires_at || new Date(row.expires_at) > new Date())) {
     return { allowed: true };
   }
 
@@ -139,7 +143,9 @@ async function grantCourse({ userId, courseId, orderId, expiresAt }) {
     } else {
       nextExpiry = new Date(expiresAt) > new Date(existing) ? expiresAt : existing;
     }
-    await row.update({ order_id: orderId || row.order_id, expires_at: nextExpiry });
+    // Granting always clears a previous admin deallotment: re-allotting or repurchasing
+    // a revoked course must restore access, not leave a stamped row that keeps hiding it.
+    await row.update({ order_id: orderId || row.order_id, expires_at: nextExpiry, revoked_at: null });
   }
   return { granted: true };
 }

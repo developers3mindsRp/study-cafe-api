@@ -338,8 +338,8 @@ const unenrollUser = asyncHandler(async (req, res) => {
   const { user_id } = req.body;
   const course_id = req.params.id;
   if (!user_id || !course_id) throw new AppError('user_id and course_id are required', 400);
-  await coursesService.unenrollUser(user_id, course_id);
-  sendSuccess(res, { unenrolled: true });
+  const removed = await coursesService.unenrollUser(user_id, course_id);
+  sendSuccess(res, { unenrolled: true, removed });
 });
 
 const createPreviewToken = asyncHandler(async (req, res) => {
