@@ -729,21 +729,6 @@ function buildExpiredCourseAccessWhere() {
   };
 }
 
-function debugSerializeWhere(value) {
-  if (value == null) return value;
-  if (Array.isArray(value)) return value.map(debugSerializeWhere);
-  if (typeof value === 'object') {
-    const out = {};
-    for (const k of Object.keys(value)) out[k] = debugSerializeWhere(value[k]);
-    for (const sym of Object.getOwnPropertySymbols(value)) {
-      const label = sym.description ? `[${sym.description}]` : String(sym);
-      out[label] = debugSerializeWhere(value[sym]);
-    }
-    return out;
-  }
-  return value;
-}
-
 function mergeCourseAccessFilter(baseWhere, courseAccess) {
   const mode = courseAccess && String(courseAccess).toLowerCase().trim();
   if (mode !== 'active' && mode !== 'expired') return baseWhere;
@@ -2600,13 +2585,11 @@ async function getEnrollmentSources(courseId, userIds) {
 }
 
 async function listOrders(userId) {
-  console.log('USER ID:', userId);
   const rows = await Order.findAll({
     where: { user_id: userId },
     order: [['created_at', 'DESC']],
     attributes: ['order_id', 'type', 'entity_id', 'amount', 'currency', 'status', 'created_at'],
   });
-  console.log('ORDERS:', rows);
   return rows.map((r) => r.get({ plain: true }));
 }
 
@@ -3012,15 +2995,16 @@ async function listAllOrders({
       logger.warn(`[orders] user search-ids failed: ${err.message}`);
     }
 
-    console.log("SEARCH TERM:", term);
-    console.log("USER IDS:", userIdsFromSearch);
-    console.log("PAYMENT ORDER IDS:", orderIdsFromPayments);
-
     const orClauses = [
       { order_id: { [Op.like]: `%${term}%` } },
       { buyer_email: { [Op.like]: `%${term}%` } },
       { buyer_name: { [Op.like]: `%${term}%` } },
       { buyer_mobile: { [Op.like]: `%${term}%` } },
+      // Bulk allotment records its settlement reference on the order, not on the
+      // payments row (see sharedPaymentRef in createManualOrder), so the payment-ID
+      // lookup above never sees it. Without this clause an admin searching the
+      // payment ID they typed into the allotment form gets no results.
+      { rp_payment_id: { [Op.like]: `%${term}%` } },
     ];
     if (orderIdsFromPayments.length) {
       orClauses.push({ id: { [Op.in]: orderIdsFromPayments } });
@@ -3043,9 +3027,6 @@ async function listAllOrders({
       });
     }
     where[Op.or] = orClauses;
-
-    console.log("OR CLAUSES", JSON.stringify(debugSerializeWhere(orClauses), null, 2));
-    console.log("WHERE AFTER SEARCH", JSON.stringify(debugSerializeWhere(where), null, 2));
   }
 
   if (status) {
@@ -3083,23 +3064,6 @@ async function listAllOrders({
   const findLimit = Math.min(Number(limit) || 100, 500);
   const findOffset = Number(offset) || 0;
 
-  console.log("WHERE BEFORE QUERY", JSON.stringify(debugSerializeWhere(whereClause), null, 2));
-
-  console.log(
-    "[order] WHERE CLAUSE:",
-    JSON.stringify(debugSerializeWhere(whereClause), null, 2)
-  );
-
-  console.log(
-    "[order] FIND OPTIONS:",
-    JSON.stringify({
-      where: debugSerializeWhere(whereClause),
-      limit: findLimit,
-      offset: findOffset,
-      order,
-    }, null, 2)
-  );
-
   const { rows, count } = await Order.findAndCountAll({
     where: whereClause,
     ...trashedSequelizeOptions(trashMode),
@@ -3120,23 +3084,18 @@ async function listAllOrders({
       'refund_amount',
       'refund_remarks',
       'utm',
-      'gateway'
+      'gateway',
+      // Required by resolveAdminPaymentId below. Bulk-allotment orders keep the real
+      // settlement reference here while their payments row holds a synthetic
+      // `manual:<orderId>` ref; without this column selected the resolver has nothing
+      // to fall back to and the list renders that placeholder as the payment ID.
+      'rp_payment_id',
     ],
     limit: findLimit,
     offset: findOffset,
   });
 
   const orders = rows.map((r) => r.get({ plain: true }));
-
-  console.log(
-    orders.map((r) => ({
-      id: r.id,
-      order_id: r.order_id,
-      user_id: r.user_id,
-      buyer_email: r.buyer_email,
-      buyer_name: r.buyer_name,
-    }))
-  );
 
   // 1. Fetch latest payments for these orders
   const orderIds = orders.map((o) => o.id);
@@ -3911,7 +3870,15 @@ async function getInvoice(userId, orderId) {
   }
 
   const isFree = p.gateway === 'free' || Number(p.amount) === 0;
-  const hasRealPayment = payment && !String(payment.razorpay_payment_id || '').startsWith('manual:');
+  // The reference to print on the buyer's receipt. Same rule as the admin views
+  // (resolveAdminPaymentId): a `manual:` capture ref is an internal placeholder, and for
+  // a bulk allotment the real settlement reference lives on the order instead — so fall
+  // back to it rather than showing the buyer no transaction ID at all.
+  const receiptPaymentId = resolveAdminPaymentId(p, payment);
+  const hasRealPayment =
+    !!receiptPaymentId &&
+    !String(receiptPaymentId).startsWith('manual:') &&
+    !String(receiptPaymentId).startsWith('free:');
   return {
     orderId: p.order_id,
     type: p.type,
@@ -3927,7 +3894,7 @@ async function getInvoice(userId, orderId) {
     currency: p.currency,
     status: p.status,
     paidAt: p.created_at,
-    paymentId: payment && !isFree && hasRealPayment ? payment.razorpay_payment_id : null,
+    paymentId: !isFree && hasRealPayment ? receiptPaymentId : null,
     paymentMethod: formatPaymentMethodLabel(p.gateway, {
       amount: p.amount,
       hasRazorpayPayment: hasRealPayment,
