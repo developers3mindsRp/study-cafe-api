@@ -335,10 +335,13 @@ const listAllBatches = asyncHandler(async (req, res) => {
 });
 
 const unenrollUser = asyncHandler(async (req, res) => {
-  const { user_id } = req.body;
+  const { user_id, record_revocation } = req.body;
   const course_id = req.params.id;
   if (!user_id || !course_id) throw new AppError('user_id and course_id are required', 400);
-  const removed = await coursesService.unenrollUser(user_id, course_id);
+  // Opt-in, so the refund callers that omit it keep the original delete behaviour.
+  const removed = await coursesService.unenrollUser(user_id, course_id, {
+    recordRevocation: record_revocation === true,
+  });
   sendSuccess(res, { unenrolled: true, removed });
 });
 
