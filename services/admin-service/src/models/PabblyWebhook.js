@@ -8,14 +8,14 @@ module.exports = (sequelize) => {
       name: { type: DataTypes.STRING(255), allowNull: false },
       webhook_url: { type: DataTypes.STRING(1024), allowNull: false },
       // Course category ids this rule matches. An empty array is a catch-all —
-      // it matches every course purchase that no more specific rule already claimed.
+      // it matches every course purchase.
       category_ids: {
         type: DataTypes.JSON,
         allowNull: false,
         defaultValue: [],
       },
-      // Lower runs first. First matching rule wins — a purchase never fires more
-      // than one Pabbly webhook.
+      // Lower runs first. Every matching rule fires (one webhook per matched rule,
+      // de-duplicated by URL) — priority only orders the posts, it no longer gates them.
       priority: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 100 },
       is_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     },

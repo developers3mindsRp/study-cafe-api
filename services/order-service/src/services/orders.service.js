@@ -1122,20 +1122,27 @@ async function fetchActivePabblyWebhookRules() {
 }
 
 /**
- * First rule (already priority-sorted) whose category_ids intersects the course's
- * categories, or whose category_ids is empty (a catch-all). Admin-configured rules
- * are the sole source of truth — if none are set up, or none match this course's
- * categories, we deliberately fire nothing rather than guessing a destination.
+ * Every active rule that applies to this course — those whose category_ids intersect
+ * the course's categories, plus every catch-all (empty category_ids). Each rule maps to
+ * its own Pabbly workflow, so an "all courses" rule and a course-specific rule both
+ * fire on the same purchase; it used to be first-match-wins, which meant a specific
+ * rule silently starved the all-courses workflow. De-duplicated by URL so two rules
+ * pointing at one workflow never double-post. Admin-configured rules are the sole
+ * source of truth — if none are set up, or none match, we deliberately fire nothing.
  */
-async function resolvePabblyWebhookUrl(courseCategoryIds) {
+async function resolvePabblyWebhookTargets(courseCategoryIds) {
   const rules = await fetchActivePabblyWebhookRules();
   const courseCatSet = new Set((courseCategoryIds || []).map(Number));
+  const seenUrls = new Set();
+  const targets = [];
   for (const rule of rules) {
     const ruleCatIds = Array.isArray(rule.category_ids) ? rule.category_ids.map(Number) : [];
-    if (ruleCatIds.length === 0) return rule.webhook_url; // catch-all
-    if (ruleCatIds.some((id) => courseCatSet.has(id))) return rule.webhook_url;
+    const matches = ruleCatIds.length === 0 || ruleCatIds.some((id) => courseCatSet.has(id));
+    if (!matches || !rule.webhook_url || seenUrls.has(rule.webhook_url)) continue;
+    seenUrls.add(rule.webhook_url);
+    targets.push({ ruleId: rule.id, ruleName: rule.name, webhookUrl: rule.webhook_url });
   }
-  return null; // rules exist, but none matched this course — deliberately don't fire
+  return targets;
 }
 
 async function resolveItemName(order) {
@@ -1215,47 +1222,60 @@ async function emitPaymentEmailOutbox(locked, razorpayPaymentId, status, t, extr
  * purchase. Course orders only — a direct "buy this course" checkout, not a membership
  * activation or an admin-granted allotment (isManual). Emitted through the outbox like
  * every other side effect here so a Pabbly hiccup retries instead of getting lost, and
- * never blocks the payment transaction with an external HTTP call.
+ * never blocks the payment transaction with an external HTTP call. One outbox event per
+ * matched rule, so a failure at one Pabbly workflow retries on its own without
+ * re-posting to the others.
  */
 async function emitCoursePurchaseWebhookOutbox(locked, razorpayPaymentId, t) {
   if (locked.type !== 'course') return;
 
   const { title: courseTitle, category: courseCategory, categoryIds } = await resolveCourseDetails(locked.entity_id);
-  const webhookUrl = await resolvePabblyWebhookUrl(categoryIds);
-  if (!webhookUrl) {
-    logger.info(`[orders] no Pabbly webhook rule matched course=${locked.entity_id} order=${locked.order_id} — skipping`);
+  const targets = await resolvePabblyWebhookTargets(categoryIds);
+  if (targets.length === 0) {
+    logger.info(
+      `[orders] no Pabbly webhook rule matched course=${locked.entity_id} cats=[${categoryIds.join(',')}] order=${locked.order_id} — skipping`
+    );
     return;
   }
+  logger.info(
+    `[orders] Pabbly rules matched course=${locked.entity_id} cats=[${categoryIds.join(',')}] order=${locked.order_id}: ${targets
+      .map((x) => `#${x.ruleId} ${x.ruleName}`)
+      .join(', ')}`
+  );
 
   const userContact = locked.user_id ? await fetchUserContact(locked.user_id) : null;
   const customerEmail = locked.buyer_email || userContact?.email || null;
   const customerName = locked.buyer_name || userContact?.name || null;
   const customerPhone = locked.buyer_mobile || userContact?.phone || null;
 
-  await OutboxEvent.create(
-    {
-      aggregate_type: 'order',
-      aggregate_id: locked.order_id,
-      event_type: 'COURSE_PURCHASE_WEBHOOK',
-      payload: {
-        webhookUrl,
-        event: 'course_purchase_success',
-        orderId: locked.order_id,
-        customerName,
-        customerEmail,
-        customerPhone,
-        courseId: String(locked.entity_id),
-        courseName: courseTitle || 'Course',
-        courseCategory,
-        amount: parseFloat(locked.amount) || 0,
-        currency: locked.currency || 'INR',
-        paymentId: razorpayPaymentId || null,
-        paymentStatus: 'SUCCESS',
-        purchaseDate: new Date().toISOString(),
+  const purchaseDate = new Date().toISOString();
+  for (const target of targets) {
+    await OutboxEvent.create(
+      {
+        aggregate_type: 'order',
+        aggregate_id: locked.order_id,
+        event_type: 'COURSE_PURCHASE_WEBHOOK',
+        payload: {
+          webhookUrl: target.webhookUrl,
+          ruleId: target.ruleId,
+          event: 'course_purchase_success',
+          orderId: locked.order_id,
+          customerName,
+          customerEmail,
+          customerPhone,
+          courseId: String(locked.entity_id),
+          courseName: courseTitle || 'Course',
+          courseCategory,
+          amount: parseFloat(locked.amount) || 0,
+          currency: locked.currency || 'INR',
+          paymentId: razorpayPaymentId || null,
+          paymentStatus: 'SUCCESS',
+          purchaseDate,
+        },
       },
-    },
-    { transaction: t }
-  );
+      { transaction: t }
+    );
+  }
 }
 
 /**

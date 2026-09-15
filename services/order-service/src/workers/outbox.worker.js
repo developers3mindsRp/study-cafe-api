@@ -148,7 +148,8 @@ async function processEvent(record) {
       // category-matched rule — never re-resolved here, so a retry always hits the
       // same destination the original match picked. emitCoursePurchaseWebhookOutbox
       // never creates this event without a matched rule, so webhookUrl is always set.
-      const { webhookUrl, ...body } = data;
+      // ruleId is bookkeeping for the DB row only — Pabbly doesn't need it.
+      const { webhookUrl, ruleId, ...body } = data;
       await axios.post(webhookUrl, body, { timeout: 15000 });
     } else if (event_type === 'ORDER_REFUNDED') {
       if (data.type === 'course') {
