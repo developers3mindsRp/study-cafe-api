@@ -1532,7 +1532,24 @@ const deleteCoupon = asyncHandler(async (req, res) => {
 const PABBLY_WEBHOOK_DEFAULT_PRIORITY = 10;
 const PABBLY_WEBHOOK_CATCH_ALL_PRIORITY = 100000;
 
-function validatePabblyWebhookPayload(body) {
+/**
+ * Every course category id that currently exists, or null when course-service could not
+ * be reached. Only used to normalise an "everything ticked" selection, so a failure here
+ * degrades to storing the explicit list rather than failing the admin's save.
+ */
+async function fetchAllCourseCatIds() {
+  try {
+    const { data } = await courseClient.get('/internal/course-cats');
+    const rows = Array.isArray(data) ? data : [];
+    const ids = rows.map((c) => Number(c?.id)).filter((n) => Number.isFinite(n) && n > 0);
+    return ids.length > 0 ? ids : null;
+  } catch (err) {
+    logger.warn(`[admin] could not load course cats to normalise Pabbly rule: ${err.message}`);
+    return null;
+  }
+}
+
+async function validatePabblyWebhookPayload(body) {
   const name = String(body.name || '').trim();
   if (!name) throw new AppError('Name is required', 400);
 
@@ -1544,7 +1561,22 @@ function validatePabblyWebhookPayload(body) {
   let category_ids = body.category_ids;
   if (category_ids == null) category_ids = [];
   if (!Array.isArray(category_ids)) throw new AppError('category_ids must be an array', 400);
-  category_ids = category_ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
+  category_ids = [
+    ...new Set(category_ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)),
+  ];
+
+  // Ticking every category means "fire for every course" to an admin, but stored as an
+  // explicit list it does not behave that way: order-service matches by intersecting the
+  // course's own category ids, so a course with no category linked matches nothing, and a
+  // category created after this rule was saved is absent from the list. Collapse it to the
+  // empty catch-all, which is the form that actually matches every course.
+  if (category_ids.length > 0) {
+    const allCatIds = await fetchAllCourseCatIds();
+    if (allCatIds) {
+      const selected = new Set(category_ids);
+      if (allCatIds.every((id) => selected.has(id))) category_ids = [];
+    }
+  }
 
   // Priority isn't admin-facing — surfacing "first match wins, lower runs first" was
   // confusing more than it helped. Instead we derive it deterministically: rules that
@@ -1569,7 +1601,7 @@ const getPabblyWebhook = asyncHandler(async (req, res) => {
 });
 
 const postPabblyWebhook = asyncHandler(async (req, res) => {
-  const payload = validatePabblyWebhookPayload(req.body);
+  const payload = await validatePabblyWebhookPayload(req.body);
   const row = await PabblyWebhook.create(payload);
   sendCreated(res, row.get({ plain: true }));
 });
@@ -1578,7 +1610,7 @@ const putPabblyWebhook = asyncHandler(async (req, res) => {
   const row = await PabblyWebhook.findByPk(req.params.id);
   if (!row) throw new AppError('Pabbly webhook not found', 404);
   const merged = { ...row.get({ plain: true }), ...req.body };
-  const payload = validatePabblyWebhookPayload(merged);
+  const payload = await validatePabblyWebhookPayload(merged);
   await row.update(payload);
   await row.reload();
   sendSuccess(res, row.get({ plain: true }));
