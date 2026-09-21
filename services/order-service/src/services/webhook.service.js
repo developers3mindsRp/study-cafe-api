@@ -4,7 +4,7 @@ const config = require('../config');
 const { completePayment, emitPaymentEmailOutbox, captureRazorpayPayment } = require('./orders.service');
 const { logger } = require('../../../../shared');
 
-const { getRazorpayConfig } = require('./payment.service');
+const { getRazorpayConfig, getRazorpayInstance } = require('./payment.service');
 
 async function verifySignature(rawBody, signature) {
   let secret = config.razorpay.webhookSecret;
@@ -163,8 +163,37 @@ async function handleOrderPaid(body) {
     return 'skipped';
   }
 
-  const payments = orderEntity.payments?.items;
-  const rpPaymentId = payments?.[0]?.id || `order_paid_${orderEntity.id}`;
+  // The real pay_... is already in this payload at payload.payment.entity — which is
+  // exactly what extractPaymentEntity reads, and why webhook_events recorded the correct
+  // id all along. The original code only checked payload.order.entity.payments.items, a
+  // field Razorpay does not send on order.paid, so it always fell through to a made-up
+  // placeholder. Reading the right field matters because once this handler marks the
+  // order paid, the payment.authorized and payment.captured events that follow both hit
+  // a guard above and never get a chance to record the real reference.
+  let rpPaymentId = extractPaymentEntity(body)?.id || orderEntity.payments?.items?.[0]?.id;
+
+  // Safety net: only reached if the payload carries no payment entity at all.
+  if (!rpPaymentId) {
+    try {
+      const rp = await getRazorpayInstance();
+      const fetched = await rp.orders.fetchPayments(orderEntity.id);
+      const items = fetched?.items || [];
+      rpPaymentId =
+        items.find((i) => i.status === 'captured')?.id ||
+        items.find((i) => i.status === 'authorized')?.id ||
+        items[0]?.id ||
+        null;
+    } catch (err) {
+      logger.warn(`[WEBHOOK] order.paid — fetchPayments failed for ${orderEntity.id}: ${err.message}`);
+    }
+  }
+
+  // Last resort only. Granting access matters more than a tidy reference, so we still
+  // complete the order; resolveAdminPaymentId hides this ref and the backfill repairs it.
+  if (!rpPaymentId) {
+    logger.warn(`[WEBHOOK] order.paid — no real payment ref for ${orderEntity.id}, using placeholder`);
+    rpPaymentId = `order_paid_${orderEntity.id}`;
+  }
   const result = await completePayment(order, rpPaymentId, { source: 'webhook' });
   logger.info(`[WEBHOOK] order.paid — completePayment result for ${order.order_id}: ${JSON.stringify(result)}`);
   return result.alreadyPaid ? 'skipped' : 'processed';

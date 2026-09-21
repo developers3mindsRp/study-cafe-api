@@ -2961,20 +2961,37 @@ function applyCreatedAtRangeToWhere(where, dateFrom, dateTo) {
   if (end) where.created_at[Op.lte] = end;
 }
 
+/** Capture placeholders we generate ourselves — never real Razorpay references. */
+const SYNTHETIC_PAYMENT_REF_PREFIXES = ['manual:', 'free:', 'order_paid_'];
+
+function isSyntheticPaymentRef(ref) {
+  return !!ref && SYNTHETIC_PAYMENT_REF_PREFIXES.some((prefix) => ref.startsWith(prefix));
+}
+
 /**
  * The payment reference an admin should see for an order.
  *
- * `manual:`/`free:` refs are internally generated capture placeholders, not something
- * an admin typed. When the payment row carries one of those, prefer the order's own
- * reference — that's where a shared bulk-allotment settlement id is recorded. Orders
- * with a real captured ref are unaffected.
+ * These prefixes are internally generated capture placeholders, not something an admin
+ * typed. `order_paid_<rp_order_id>` is written when the order.paid webhook beats
+ * payment.captured (see handleOrderPaid) — in that case the real `pay_...` is usually
+ * still present on an EARLIER `authorized` row for the same order, which is why this
+ * scans every payment row instead of only the newest.
+ *
+ * Priority: a real Razorpay ref on any payment row (captured first) > the order's own
+ * `rp_payment_id` (shared bulk-allotment settlement ref, and where the webhook-ref
+ * backfill writes) > the placeholder, so manual/free orders still show their ref.
+ *
+ * @param {object} order
+ * @param {object|object[]} payments  every payment row for the order, newest first
  */
-function resolveAdminPaymentId(order, payment) {
-  const capturedRef = payment ? payment.razorpay_payment_id : null;
-  const capturedRefIsSynthetic =
-    !!capturedRef && (capturedRef.startsWith('manual:') || capturedRef.startsWith('free:'));
-  if (capturedRef && !capturedRefIsSynthetic) return capturedRef;
-  return (order && order.rp_payment_id) || capturedRef || null;
+function resolveAdminPaymentId(order, payments) {
+  const rows = Array.isArray(payments) ? payments : payments ? [payments] : [];
+  const real = rows.filter((p) => p && !isSyntheticPaymentRef(p.razorpay_payment_id));
+  if (real.length) {
+    const captured = real.find((p) => p.status === 'captured');
+    return (captured || real[0]).razorpay_payment_id;
+  }
+  return (order && order.rp_payment_id) || (rows[0] ? rows[0].razorpay_payment_id : null) || null;
 }
 
 async function listAllOrders({
@@ -3132,9 +3149,12 @@ async function listAllOrders({
     order: [['id', 'DESC']],
     raw: true,
   });
+  // Every row, newest first — resolveAdminPaymentId needs to see past a synthetic
+  // newest row to the real `pay_...` on an earlier `authorized` row.
   const paymentMap = {};
   for (const p of payments) {
-    if (!paymentMap[p.order_id]) paymentMap[p.order_id] = p;
+    if (!paymentMap[p.order_id]) paymentMap[p.order_id] = [];
+    paymentMap[p.order_id].push(p);
   }
 
   // 2. Fetch User info from auth-service for linked users
@@ -3687,9 +3707,12 @@ async function refundOrder(id, { amount, remarks }) {
 async function enrichAdminOrderResponse(p) {
   if (!p || p.id == null) return p;
 
-  const payment = await Payment.findOne({
+  // findAll, not findOne: resolveAdminPaymentId scans every row so a synthetic newest
+  // ref does not hide the real `pay_...` on an earlier row.
+  const payment = await Payment.findAll({
     where: { order_id: p.id },
     order: [['id', 'DESC']],
+    raw: true,
   });
 
   let user = null;
@@ -3867,9 +3890,12 @@ function buildPostPurchaseConfig(course) {
 async function getInvoice(userId, orderId) {
   const order = await Order.findOne({ where: { order_id: orderId, user_id: userId } });
   if (!order) return null;
-  const payment = await Payment.findOne({
+  // findAll, not findOne: resolveAdminPaymentId scans every row so a synthetic newest
+  // ref does not hide the real `pay_...` on an earlier row.
+  const payment = await Payment.findAll({
     where: { order_id: order.id },
     order: [['id', 'DESC']],
+    raw: true,
   });
   const p = order.get({ plain: true });
 
@@ -3899,14 +3925,11 @@ async function getInvoice(userId, orderId) {
 
   const isFree = p.gateway === 'free' || Number(p.amount) === 0;
   // The reference to print on the buyer's receipt. Same rule as the admin views
-  // (resolveAdminPaymentId): a `manual:` capture ref is an internal placeholder, and for
-  // a bulk allotment the real settlement reference lives on the order instead — so fall
-  // back to it rather than showing the buyer no transaction ID at all.
+  // (resolveAdminPaymentId): a `manual:`/`free:`/`order_paid_` ref is an internal
+  // placeholder, and the real reference lives on an earlier payment row or on the order
+  // instead — so fall back to it rather than printing a placeholder as a transaction ID.
   const receiptPaymentId = resolveAdminPaymentId(p, payment);
-  const hasRealPayment =
-    !!receiptPaymentId &&
-    !String(receiptPaymentId).startsWith('manual:') &&
-    !String(receiptPaymentId).startsWith('free:');
+  const hasRealPayment = !!receiptPaymentId && !isSyntheticPaymentRef(String(receiptPaymentId));
   return {
     orderId: p.order_id,
     type: p.type,
