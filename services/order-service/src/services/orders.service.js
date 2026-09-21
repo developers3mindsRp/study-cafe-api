@@ -2987,9 +2987,15 @@ function isSyntheticPaymentRef(ref) {
 function resolveAdminPaymentId(order, payments) {
   const rows = Array.isArray(payments) ? payments : payments ? [payments] : [];
   const real = rows.filter((p) => p && !isSyntheticPaymentRef(p.razorpay_payment_id));
-  if (real.length) {
-    const captured = real.find((p) => p.status === 'captured');
-    return (captured || real[0]).razorpay_payment_id;
+  // A `failed` row is a real Razorpay id but NOT the payment that settled this order:
+  // a buyer who retries after a decline leaves the abandoned attempt behind, and the
+  // successful one may exist only as a placeholder. Showing the failed id would pass off
+  // an abandoned attempt as the settlement — strictly worse than showing the placeholder,
+  // because it looks legitimate. Fall through instead and let the backfill supply it.
+  const settled = real.filter((p) => p.status !== 'failed');
+  if (settled.length) {
+    const captured = settled.find((p) => p.status === 'captured');
+    return (captured || settled[0]).razorpay_payment_id;
   }
   return (order && order.rp_payment_id) || (rows[0] ? rows[0].razorpay_payment_id : null) || null;
 }
