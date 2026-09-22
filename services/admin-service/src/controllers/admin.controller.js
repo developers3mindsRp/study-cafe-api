@@ -1395,6 +1395,66 @@ const deleteMarketingPage = asyncHandler(async (req, res) => {
   sendSuccess(res, { deleted: true });
 });
 
+/**
+ * Certificate download links.
+ *
+ * Thin proxies — the tables, the per-link cap and the serial allocation all live in
+ * course-service, because the claim write has to bump the cap, draw from certificate_counter and
+ * insert both ledger rows inside one transaction. Enforcing the cap from here would mean a
+ * read-then-write across a network boundary, which is exactly the race the conditional UPDATE in
+ * course-service exists to prevent.
+ *
+ * List endpoints are paginated, so their { success, data, meta } envelope is passed straight
+ * through: courseClient only unwraps responses WITHOUT a `meta` key.
+ */
+const getCertificateLinks = asyncHandler(async (req, res) => {
+  const { data } = await courseClient.get('/internal/certificate-links', { params: req.query });
+  res.json(data);
+});
+
+const getCertificateLink = asyncHandler(async (req, res) => {
+  const { data } = await courseClient.get(`/internal/certificate-links/${req.params.id}`);
+  sendSuccess(res, data);
+});
+
+const postCertificateLink = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await courseClient.post('/internal/certificate-links', {
+    ...req.body,
+    created_by: adminId,
+  });
+  await adminLogsService.logAction(
+    adminId,
+    'CREATE_CERTIFICATE_LINK',
+    'certificate_link',
+    String(data.id),
+    { course_id: data.course_id, title: data.title },
+    req.ip,
+  );
+  sendCreated(res, data);
+});
+
+const putCertificateLink = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  const { data } = await courseClient.put(`/internal/certificate-links/${req.params.id}`, req.body);
+  await adminLogsService.logAction(adminId, 'UPDATE_CERTIFICATE_LINK', 'certificate_link', req.params.id, {}, req.ip);
+  sendSuccess(res, data);
+});
+
+const deleteCertificateLink = asyncHandler(async (req, res) => {
+  const adminId = getAdminId(req);
+  await courseClient.delete(`/internal/certificate-links/${req.params.id}`);
+  await adminLogsService.logAction(adminId, 'DELETE_CERTIFICATE_LINK', 'certificate_link', req.params.id, {}, req.ip);
+  sendSuccess(res, { deleted: true });
+});
+
+const getCertificateLinkClaims = asyncHandler(async (req, res) => {
+  const { data } = await courseClient.get(`/internal/certificate-links/${req.params.id}/claims`, {
+    params: req.query,
+  });
+  res.json(data);
+});
+
 const getOrders = asyncHandler(async (req, res) => {
   const { data } = await orderClient.get('/internal/orders', { params: req.query });
 
@@ -2158,6 +2218,12 @@ module.exports = {
   postMarketingPage,
   putMarketingPage,
   deleteMarketingPage,
+  getCertificateLinks,
+  getCertificateLink,
+  postCertificateLink,
+  putCertificateLink,
+  deleteCertificateLink,
+  getCertificateLinkClaims,
   getOrders,
   getOrderByOrderId,
   createOrder,

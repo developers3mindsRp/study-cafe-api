@@ -17,10 +17,17 @@ function siteHostnameForFooter(url) {
 }
 
 /**
+ * Serves two audiences from one template:
+ *   - a learner who finished a course (no claimUrl — they go to their account)
+ *   - someone who claimed a certificate through a public certificate link (claimUrl present — they
+ *     re-open that link, where re-entering the same email returns the same serial)
+ *
  * @param {object} opts
  * @param {string} opts.name
  * @param {string} opts.courseTitle
  * @param {string} opts.completionDate (YYYY-MM-DD)
+ * @param {string} [opts.certificateNumber] e.g. "SC-5012"
+ * @param {string} [opts.claimUrl] public claim page, set only for link-issued certificates
  * @param {string} [opts.siteUrl]
  */
 function buildCourseCompletionCertificateEmailHtml(opts) {
@@ -28,6 +35,18 @@ function buildCourseCompletionCertificateEmailHtml(opts) {
   const safeCourse = escapeHtml(opts.courseTitle || 'Course');
   const safeCompletionDate = escapeHtml(opts.completionDate || '');
   const safeUrl = escapeHtml(opts.siteUrl || '');
+  const safeSerial = escapeHtml(opts.certificateNumber || '');
+  const safeClaimUrl = escapeHtml(opts.claimUrl || '');
+  const ctaHref = safeClaimUrl || `${safeUrl}/account`;
+  const ctaLabel = safeClaimUrl ? 'Download my certificate' : 'Go to my account';
+  const howToGetIt = safeClaimUrl
+    ? 'Your certificate is attached, and you can download it again any time from the link below.'
+    : 'Your certificate is ready. Open the course page, click <strong>Certificate</strong>, and print / save as PDF.';
+  const serialLine = safeSerial
+    ? `<p style="margin:12px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
+                  Certificate Serial No.: <strong>${safeSerial}</strong>
+                </p>`
+    : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -69,16 +88,17 @@ function buildCourseCompletionCertificateEmailHtml(opts) {
               <div style="background-color:#f9fafc;border:1px solid #e5e7eb;border-radius:8px;padding:20px 24px;margin:0 0 24px;">
                 <h3 style="margin:0 0 12px;color:#1e3a5f;font-size:16px;text-transform:uppercase;letter-spacing:0.05em;">Certificate</h3>
                 <p style="margin:0;color:#374151;font-size:14px;line-height:1.7;">
-                  Your certificate is ready. Open the course page, click <strong>Certificate</strong>, and print / save as PDF.
+                  ${howToGetIt}
                 </p>
                 <p style="margin:12px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
                   Completed on: <strong>${safeCompletionDate}</strong>
                 </p>
+                ${serialLine}
               </div>
 
               <div style="text-align:center;margin-top:8px;">
-                <a href="${safeUrl}/account" style="display:inline-block;background-color:#1e3a5f;color:#ffffff;text-decoration:none;padding:12px 32px;border-radius:6px;font-size:15px;font-weight:600;">
-                  Go to my account
+                <a href="${ctaHref}" style="display:inline-block;background-color:#1e3a5f;color:#ffffff;text-decoration:none;padding:12px 32px;border-radius:6px;font-size:15px;font-weight:600;">
+                  ${ctaLabel}
                 </a>
               </div>
             </td>
@@ -106,7 +126,18 @@ function buildCourseCompletionCertificateEmailPlainText(opts) {
   const courseTitle = opts.courseTitle || 'Course';
   const completionDate = opts.completionDate || '';
   const siteUrl = opts.siteUrl || '';
-  return `Course completed - Study Cafe\n\nHi ${name},\n\nCongratulations! You completed "${courseTitle}".\nYour certificate is ready. Open the course page and click Certificate to print / save as PDF.\n\nCompleted on: ${completionDate}\nGo to my account: ${siteUrl}/account\n`;
+  const claimUrl = opts.claimUrl || '';
+  const serial = opts.certificateNumber || '';
+
+  const howToGetIt = claimUrl
+    ? 'Your certificate is attached, and you can download it again any time from the link below.'
+    : 'Your certificate is ready. Open the course page and click Certificate to print / save as PDF.';
+  const serialLine = serial ? `Certificate Serial No.: ${serial}\n` : '';
+  const cta = claimUrl
+    ? `Download my certificate: ${claimUrl}\n`
+    : `Go to my account: ${siteUrl}/account\n`;
+
+  return `Course completed - Study Cafe\n\nHi ${name},\n\nCongratulations! You completed "${courseTitle}".\n${howToGetIt}\n\nCompleted on: ${completionDate}\n${serialLine}${cta}`;
 }
 
 module.exports = {

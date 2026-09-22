@@ -123,6 +123,19 @@ function register(app) {
     changeOrigin: true,
     pathRewrite: { '^/api/certificates': '/certificates' },
   });
+  /**
+   * Public certificate download links (no JWT).
+   *
+   * xfwd: true is REQUIRED, not cosmetic. course-service throttles anonymous claims per client
+   * IP; without the forwarded header it sees this gateway's address on every request and the
+   * per-IP bucket becomes a platform-wide lockout after the first few claims.
+   */
+  const publicCertificateLinkProxy = createProxyMiddleware({
+    target: config.courseServiceUrl,
+    changeOrigin: true,
+    pathRewrite: { '^/api/certificate-links': '/certificate-links' },
+    xfwd: true,
+  });
   /** Learner course reviews (POST /reviews, GET /reviews/me/course/:courseId) */
   const courseReviewsUserProxy = createProxyMiddleware({
     target: config.courseServiceUrl,
@@ -165,6 +178,13 @@ function register(app) {
   app.get('/api/courses/:id', optionalJWT, injectOptionalUserId, courseProxy);
   app.get('/api/courses/:id/sessions', validateJWT, requireCourseAccess, courseProxy);
     app.get('/api/courses/:id/materials', validateJWT, requireCourseAccess, courseProxy);
+  /**
+   * Public certificate claim links. Explicit method+path on purpose — a prefix mount
+   * (app.use('/api/certificate-links', ...)) would make the whole namespace world-readable, so
+   * any route added under it in course-service later would silently become public.
+   */
+  app.get('/api/certificate-links/:token', publicCertificateLinkProxy);
+  app.post('/api/certificate-links/:token/claim', publicCertificateLinkProxy);
   /** Certificate metadata for client-rendered certificates (courseTitle, studentName, completionDate). */
   app.get('/api/certificates/course/:courseId', validateJWT, injectUserId, certificateProxy);
   app.use('/api/progress', validateJWT, injectUserId, progressProxy);

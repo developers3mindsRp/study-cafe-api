@@ -5,6 +5,7 @@ const affiliateRoutes = require('./affiliate.routes');
 const progressRoutes = require('./progress.routes');
 const courseReviewsRoutes = require('./courseReviews.routes');
 const marketingPagesRoutes = require('./marketingPages.routes');
+const certificateLinksRoutes = require('./certificateLinks.routes');
 
 const router = express.Router();
 
@@ -14,5 +15,6 @@ coursesRoutes.register(router);
 affiliateRoutes.register(router);
 progressRoutes.register(router);
 courseReviewsRoutes.register(router);
+certificateLinksRoutes.register(router);
 
 module.exports = router;
