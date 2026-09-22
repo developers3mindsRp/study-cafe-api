@@ -49,6 +49,8 @@ const CourseReview = require('./CourseReview')(sequelize);
 const MarketingPage = require('./MarketingPage')(sequelize);
 const CurriculumMedia = require('./CurriculumMedia')(sequelize);
 const CourseCertificate = require('./CourseCertificate')(sequelize);
+const CertificateLink = require('./CertificateLink')(sequelize);
+const CertificateLinkClaim = require('./CertificateLinkClaim')(sequelize);
 
 const models = {
   Course, 
@@ -71,6 +73,8 @@ const models = {
   MarketingPage,
   CurriculumMedia,
   CourseCertificate,
+  CertificateLink,
+  CertificateLinkClaim,
 };
 
 // Register associations
@@ -86,6 +90,7 @@ Batch.hasMany(BatchEnrollment, { foreignKey: 'batch_id', as: 'enrollments' });
 const { ensureCoursePageSettingsTable } = require('../db/ensureCoursePageSettingsTable');
 const { ensureMarketingPagesTable } = require('../db/ensureMarketingPagesTable');
 const { ensureCourseCertificatesTable } = require('../db/ensureCourseCertificatesTable');
+const { ensureCertificateLinksTables } = require('../db/ensureCertificateLinksTables');
 
 async function connect() {
   try {
@@ -93,6 +98,7 @@ async function connect() {
     await ensureCoursePageSettingsTable(sequelize);
     await ensureMarketingPagesTable(sequelize);
     await ensureCourseCertificatesTable(sequelize);
+    await ensureCertificateLinksTables(sequelize);
   } catch (err) {
     logger.error('[course-service] Sequelize auth/bootstrap failed', { error: err.message });
     throw err;

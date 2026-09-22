@@ -394,12 +394,121 @@ const certificateCourseIdParam = {
     }),
 };
 
+// ── Public certificate download links ──────────────────────────────
+
+/**
+ * Deliberately loose: anything that is not a real token should fall through to a 404 from the
+ * service, not a 400 from here, so probing a link tells an attacker nothing about the format.
+ */
+const certificateLinkTokenParam = {
+    params: Joi.object({
+        token: Joi.string().trim().max(64).required(),
+    }),
+};
+
+/**
+ * POST /certificate-links/:token/claim
+ *
+ * `company_website` (honeypot) and `rendered_at` (time trap) MUST stay declared here. The shared
+ * validate() runs with stripUnknown: true, so an undeclared field is silently removed and the trap
+ * would never fire.
+ */
+const claimCertificateLink = {
+    params: Joi.object({
+        token: Joi.string().trim().max(64).required(),
+    }),
+    body: Joi.object({
+        name: Joi.string().trim().min(2).max(190).required(),
+        email: Joi.string().trim().email({ minDomainSegments: 2, tlds: false }).max(190).required(),
+        phone: Joi.string().trim().min(6).max(32).required(),
+        company_website: Joi.string().allow('', null),
+        rendered_at: Joi.number().integer().min(0),
+        utm_source: Joi.string().max(190).allow('', null),
+        utm_medium: Joi.string().max(190).allow('', null),
+        utm_campaign: Joi.string().max(190).allow('', null),
+    }),
+};
+
+/** YYYY-MM-DD, kept as a string so a date-only value never shifts across the +05:30 offset. */
+const certificateDateOnly = Joi.string()
+    .trim()
+    .length(10)
+    .custom((value, helpers) => {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+        if (!m) return helpers.error('any.invalid');
+        const d = new Date(`${value}T00:00:00Z`);
+        return Number.isNaN(d.getTime()) ? helpers.error('any.invalid') : value;
+    }, 'YYYY-MM-DD date')
+    .messages({ 'any.invalid': 'certificate_date must be a YYYY-MM-DD date' });
+
+const createCertificateLink = {
+    body: Joi.object({
+        course_id: Joi.number().integer().positive().required(),
+        title: Joi.string().trim().min(2).max(255).required(),
+        description: Joi.string().max(5000).allow('', null),
+        status: Joi.string().valid('draft', 'active', 'disabled').default('draft'),
+        // Required on every link — the client asked for expiry to be mandatory.
+        expires_at: Joi.date().iso().required(),
+        certificate_date: certificateDateOnly.allow(null, ''),
+        max_claims: Joi.number().integer().min(1).allow(null),
+        send_email: Joi.boolean(),
+        /** Set by admin-service from the signed-in admin, not by the browser. */
+        created_by: Joi.number().integer().positive().allow(null),
+    }),
+};
+
+const updateCertificateLink = {
+    params: Joi.object({
+        id: Joi.number().integer().positive().required(),
+    }),
+    body: Joi.object({
+        course_id: Joi.number().integer().positive(),
+        title: Joi.string().trim().min(2).max(255),
+        description: Joi.string().max(5000).allow('', null),
+        status: Joi.string().valid('draft', 'active', 'disabled'),
+        expires_at: Joi.date().iso(),
+        certificate_date: certificateDateOnly.allow(null, ''),
+        max_claims: Joi.number().integer().min(1).allow(null),
+        send_email: Joi.boolean(),
+    }).min(1),
+};
+
+const listCertificateLinksQuery = {
+    query: Joi.object({
+        page: Joi.number().integer().min(1),
+        limit: Joi.number().integer().min(1).max(100),
+        search: Joi.string().trim().max(200).allow(''),
+        status: Joi.string().valid('draft', 'active', 'disabled'),
+        course_id: Joi.number().integer().positive(),
+        sortBy: Joi.string().valid('created_at', 'updated_at', 'title', 'expires_at', 'claims_count'),
+        sortOrder: Joi.string().valid('ASC', 'DESC', 'asc', 'desc'),
+    }),
+};
+
+/** Limit goes to 500 so the admin CSV export can page in larger batches. */
+const listCertificateLinkClaimsQuery = {
+    params: Joi.object({
+        id: Joi.number().integer().positive().required(),
+    }),
+    query: Joi.object({
+        page: Joi.number().integer().min(1),
+        limit: Joi.number().integer().min(1).max(500),
+        search: Joi.string().trim().max(200).allow(''),
+    }),
+};
+
 module.exports = {
     idParam,
     slugParam,
     createMarketingPage,
     updateMarketingPage,
     certificateCourseIdParam,
+    certificateLinkTokenParam,
+    claimCertificateLink,
+    createCertificateLink,
+    updateCertificateLink,
+    listCertificateLinksQuery,
+    listCertificateLinkClaimsQuery,
     courseIdParamCourseReviews,
     submitCourseReviewBody,
     listCourseReviewsQuery,

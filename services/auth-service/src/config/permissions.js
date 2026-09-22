@@ -17,6 +17,7 @@ const ALL_PERMISSIONS = [
   'orders:list', 'orders:view',
   'coupons:list', 'coupons:view', 'coupons:create', 'coupons:edit', 'coupons:delete',
   'payment_links:list', 'payment_links:view', 'payment_links:create', 'payment_links:edit', 'payment_links:delete',
+  'certificate_links:list', 'certificate_links:view', 'certificate_links:create', 'certificate_links:edit', 'certificate_links:delete',
   'live_sessions:list', 'live_sessions:view',
   'contact_inquiries:list', 'contact_inquiries:view',
   'affiliate:list', 'affiliate:view',
@@ -131,6 +132,14 @@ const MODULE_HIERARCHY = {
     ['payment_links:edit'],
     ['payment_links:create'],
     ['payment_links:delete'],
+  ],
+  // Deliberately not granted to editor/viewer: these links mint official certificate serials
+  // for anyone holding the URL, and the claims list is personal lead data.
+  certificate_links: [
+    ['certificate_links:list', 'certificate_links:view'],
+    ['certificate_links:edit'],
+    ['certificate_links:create'],
+    ['certificate_links:delete'],
   ],
   live_sessions: [
     ['live_sessions:list', 'live_sessions:view'],

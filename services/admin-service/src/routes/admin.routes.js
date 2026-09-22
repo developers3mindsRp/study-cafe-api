@@ -106,6 +106,13 @@ function register(router) {
   router.put('/admin/marketing-pages/:id', requireAdmin, controller.putMarketingPage);
   router.delete('/admin/marketing-pages/:id', requireAdmin, controller.deleteMarketingPage);
 
+  router.get('/admin/certificate-links', requireAdmin, controller.getCertificateLinks);
+  router.get('/admin/certificate-links/:id/claims', requireAdmin, controller.getCertificateLinkClaims);
+  router.get('/admin/certificate-links/:id', requireAdmin, controller.getCertificateLink);
+  router.post('/admin/certificate-links', requireAdmin, controller.postCertificateLink);
+  router.put('/admin/certificate-links/:id', requireAdmin, controller.putCertificateLink);
+  router.delete('/admin/certificate-links/:id', requireAdmin, controller.deleteCertificateLink);
+
   const p = controller.platform;
   router.get('/admin/platform/home', requireAdmin, p.getHome);
   router.put('/admin/platform/home', requireAdmin, p.putHome);

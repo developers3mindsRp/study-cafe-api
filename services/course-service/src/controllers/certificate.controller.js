@@ -2,8 +2,12 @@ const certificateService = require('../services/certificate.service');
 const axios = require('axios');
 const config = require('../config');
 const { asyncHandler, sendSuccess, AppError, logger } = require('../../../../shared');
-const PDFDocument = require('pdfkit');
+const { buildCertificatePdfBuffer } = require('../services/certificatePdf.service');
 
+/**
+ * Throws 401. This is the LEARNER path only — never reuse it on a public endpoint: the web app's
+ * axios interceptor turns a 401 into a hard redirect to /login.
+ */
 function userIdFromReq(req) {
   const h = req.headers['x-user-id'];
   const n = h != null ? Number(h) : NaN;
@@ -54,70 +58,6 @@ const getCertificatePayload = asyncHandler(async (req, res) => {
 
   sendSuccess(res, payload);
 });
-
-function buildCertificatePdfBuffer({ studentName, courseTitle, completionDate }) {
-  return new Promise((resolve, reject) => {
-    try {
-      const doc = new PDFDocument({ size: 'A4', margin: 50 });
-      const chunks = [];
-      doc.on('data', (c) => chunks.push(c));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-      doc.on('error', reject);
-
-      // Simple, readable certificate layout (server-side PDF attachment).
-      doc
-        .fontSize(24)
-        .fillColor('#1e3a5f')
-        .text('Study Cafe', { align: 'center' })
-        .moveDown(0.5);
-
-      doc
-        .fontSize(18)
-        .fillColor('#111827')
-        .text('Certificate of Completion', { align: 'center' })
-        .moveDown(1.5);
-
-      doc
-        .fontSize(12)
-        .fillColor('#374151')
-        .text('This is to certify that', { align: 'center' })
-        .moveDown(0.5);
-
-      doc
-        .fontSize(22)
-        .fillColor('#111827')
-        .text(studentName || 'Learner', { align: 'center' })
-        .moveDown(0.8);
-
-      doc
-        .fontSize(12)
-        .fillColor('#374151')
-        .text('has successfully completed the course', { align: 'center' })
-        .moveDown(0.5);
-
-      doc
-        .fontSize(16)
-        .fillColor('#111827')
-        .text(courseTitle || 'Course', { align: 'center' })
-        .moveDown(1.2);
-
-      doc
-        .fontSize(12)
-        .fillColor('#374151')
-        .text(`Completion date: ${completionDate || '—'}`, { align: 'center' })
-        .moveDown(2);
-
-      doc
-        .fontSize(10)
-        .fillColor('#6b7280')
-        .text('This certificate was generated automatically.', { align: 'center' });
-
-      doc.end();
-    } catch (err) {
-      reject(err);
-    }
-  });
-}
 
 /**
  * Internal endpoint used by auth-service to fetch a PDF to attach in email.

@@ -437,7 +437,7 @@ async function sendMembershipUpgradeEmail(opts) {
  * @param {string} [opts.completionDate]
  */
 async function sendCourseCompletionCertificateEmail(opts) {
-  const { to, courseTitle, userId, courseId } = opts;
+  const { to, courseTitle, userId, courseId, publicCertificateId } = opts;
   const subject = `Your certificate is ready — ${courseTitle || 'Study Cafe'}`;
 
   const templateOpts = { ...opts, siteUrl: config.publicSiteUrl };
@@ -457,8 +457,40 @@ async function sendCourseCompletionCertificateEmail(opts) {
 
   try {
     let attachments = undefined;
+
+    // Link-issued (public) certificate: the learner PDF endpoint cannot serve these — it requires
+    // completed course progress, and an anonymous claimant has none. Callers on the public claim
+    // path send publicCertificateId INSTEAD of userId/courseId.
+    if (publicCertificateId) {
+      try {
+        const pdfRes = await axios.get(
+          `${String(config.courseServiceUrl || '').replace(/\/+$/, '')}/internal/public-certificates/${Number(publicCertificateId)}/pdf`,
+          {
+            responseType: 'arraybuffer',
+            timeout: 15000,
+            headers: { 'x-internal-api-key': config.internalApiKey },
+            validateStatus: (s) => s === 200,
+          }
+        );
+        const safeTitle = String(courseTitle || 'course').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+        attachments = [
+          {
+            filename: `certificate-${safeTitle || 'course'}.pdf`,
+            content: Buffer.from(pdfRes.data),
+            contentType: 'application/pdf',
+          },
+        ];
+      } catch (err) {
+        logger.warn('[email] Public certificate PDF fetch failed — sending email without attachment', {
+          to,
+          publicCertificateId,
+          err: err?.message || String(err),
+        });
+      }
+    }
+
     // If course-service details are provided, fetch PDF and attach it.
-    if (userId && courseId) {
+    if (!attachments && userId && courseId) {
       try {
         const pdfRes = await axios.get(
           `${String(config.courseServiceUrl || '').replace(/\/+$/, '')}/internal/certificates/course/${Number(courseId)}/pdf`,
