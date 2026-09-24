@@ -5,10 +5,10 @@
  * Must be the LAST middleware registered with app.use().
  *
  * All error responses follow the envelope:
- *   { success: false, error: "message", details?: [...] }
+ *   { success: false, error: "message", code?: "REASON", details?: [...] }
  *
  * Handles:
- *   - AppError          → returns statusCode + message
+ *   - AppError          → returns statusCode + message (+ code when the error carries one)
  *   - Joi Validation    → 400 with field-level details
  *   - SequelizeUnique   → 409 Conflict
  *   - SequelizeValid    → 400 Bad Request
@@ -31,6 +31,7 @@ function errorHandler(err, req, res, _next) {
     // 1. AppError — expected operational error
     if (err.isOperational) {
         const body = { success: false, error: err.message };
+        if (err.code) body.code = err.code;
         if (err.details) body.details = err.details;
         return res.status(err.statusCode).json(body);
     }

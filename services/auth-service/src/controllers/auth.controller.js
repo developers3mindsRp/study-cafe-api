@@ -83,15 +83,19 @@ const register = asyncHandler(async (req, res) => {
   sendCreated(res, newAccountSession(user));
 });
 
-/** Checkout signup: name, email, phone, password only — everything else is collected after purchase. */
+/**
+ * Checkout signup: name, email, phone, password only — everything else is collected after purchase.
+ * `createAccount: false` (marketing checkout) skips the password; the schema forbids one then.
+ */
 const registerQuick = asyncHandler(async (req, res) => {
-  const { email, password, confirmPassword, name, phone, referralCode, skipVerificationEmail } = req.body;
+  const { email, password, createAccount, confirmPassword, name, phone, referralCode, skipVerificationEmail } = req.body;
   if (confirmPassword && confirmPassword !== password) {
     throw new AppError('Passwords do not match', 400);
   }
   const user = await authService.registerQuick({
     email,
     password,
+    createAccount: createAccount !== false,
     name,
     phone,
     referralCode,
@@ -182,6 +186,7 @@ const me = asyncHandler(async (req, res) => {
     country: user.country || null,
     gst: user.gst || null,
     email_verified: !!user.email_verified,
+    has_password: !!user.has_password,
     bank_account_holder_name: user.bank_account_holder_name || null,
     bank_account_number: user.bank_account_number || null,
     bank_ifsc: user.bank_ifsc || null,

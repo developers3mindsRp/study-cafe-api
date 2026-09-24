@@ -31,7 +31,15 @@ const register = {
 const registerQuick = {
     body: Joi.object({
         email: Joi.string().email().required(),
-        password: Joi.string().min(6).max(128).required(),
+        // Marketing checkout lets the buyer skip the account: `createAccount: false`
+        // stores them with no password, and they sign in later with an emailed code.
+        // Every other caller leaves it out, so the password stays required for them.
+        createAccount: Joi.boolean().default(true),
+        password: Joi.when('createAccount', {
+            is: true,
+            then: Joi.string().min(6).max(128).required(),
+            otherwise: Joi.forbidden(),
+        }),
         confirmPassword: Joi.string().max(128).allow('', null),
         name: Joi.string().trim().min(1).max(255).required(),
         phone: e164Phone.required(),
