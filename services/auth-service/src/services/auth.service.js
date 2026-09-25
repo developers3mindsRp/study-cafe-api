@@ -20,6 +20,12 @@ const phpass = require('../utils/phpass');
 const emailService = require('./email.service');
 
 /**
+ * Error `code` for an account with no password — a marketing-checkout buyer who
+ * skipped creating an account. Clients switch to the emailed sign-in code on it.
+ */
+const PASSWORD_NOT_SET = 'PASSWORD_NOT_SET';
+
+/**
  * Verify a password against any supported hash format:
  *   - bcrypt ($2a$, $2b$, $2y$)  — new registrations from this app
  *   - wp-bcrypt ($wp$2y$)         — WordPress 6.8+ migrated users (bcrypt with $wp$ prefix)
@@ -339,8 +345,13 @@ async function signupResultForUser(userId) {
  * Only unverified, self-registered accounts qualify, and only when the password
  * matches — which proves exactly as much as signing in would. Everything else
  * falls through to the usual 409.
+ *
+ * A retry without a password (buyer skipped the account) has nothing to prove
+ * ownership with, so it never resumes: it gets the 409 and signs in with an
+ * emailed code instead.
  */
 async function resumeUnverifiedSignup(existing, { password, name, phoneNorm, phoneOwnerId, sendVerifyOtp = true }) {
+  if (!password) return null;
   const plain = existing.get({ plain: true });
   if (plain.is_active !== true) return null;
   if (plain.wp_user_id != null) return null; // migrated WP accounts sign in normally
@@ -371,6 +382,10 @@ async function resumeUnverifiedSignup(existing, { password, name, phoneNorm, pho
  *   registerQuick() — checkout signup on /signup
  * Fields the quick path does not ask for arrive undefined and are stored as null;
  * they are collected later through PATCH /user/profile.
+ *
+ * `password` is null only for a marketing-checkout buyer who skipped the account:
+ * the row is stored with no password (verifyAndMaybeUpgradePassword can never
+ * match it) and they sign in with an emailed code until they set one.
  */
 async function createUserAccount({
   email,
@@ -416,13 +431,22 @@ async function createUserAccount({
       sendVerifyOtp,
     });
     if (resumed) return resumed;
+    if (!existingByEmail.password_hash) {
+      // Checkout buyer who skipped the account — "try signing in" would send them to a
+      // password box they never filled in.
+      throw new AppError(
+        'This email is already registered. Sign in with a one-time code sent to your email.',
+        409,
+        PASSWORD_NOT_SET
+      );
+    }
     throw new AppError('This email is already registered. Try signing in or use a different email.', 409);
   }
   if (existingByPhone) {
     throw new AppError('This phone number is already registered. Sign in or use a different number.', 409);
   }
 
-  const password_hash = await bcrypt.hash(password, 10);
+  const password_hash = password ? await bcrypt.hash(password, 10) : null;
   const newReferralCode = generateReferralCode();
   const user = await User.scope('withPassword').create({
     email: emailNorm,
@@ -448,9 +472,13 @@ async function createUserAccount({
 
   if (sendVerifyOtp) await dispatchSignupOtp({ userId: user.id, email: emailNorm });
 
-  emailService.sendWelcomeEmail({ to: emailNorm, name: name ? String(name).trim() : null }).catch((err) => {
-    logger.warn('[register] Welcome email failed (non-blocking)', { email: emailNorm, err: err?.message });
-  });
+  // The welcome email says "your account has been created" — wrong for a buyer who
+  // just chose not to create one.
+  if (password_hash) {
+    emailService.sendWelcomeEmail({ to: emailNorm, name: name ? String(name).trim() : null }).catch((err) => {
+      logger.warn('[register] Welcome email failed (non-blocking)', { email: emailNorm, err: err?.message });
+    });
+  }
 
   return signupResultForUser(user.id);
 }
@@ -489,10 +517,11 @@ async function rateLimitQuickRegister({ emailNorm, clientIp }) {
   }
 }
 
-async function registerQuick({ email, password, name, phone, referralCode, skipVerificationEmail = false, clientIp }) {
+/** `createAccount: false` — marketing checkout buyer who skipped the account; stored without a password. */
+async function registerQuick({ email, password, createAccount = true, name, phone, referralCode, skipVerificationEmail = false, clientIp }) {
   await rateLimitQuickRegister({ emailNorm: String(email).trim().toLowerCase(), clientIp });
   return createUserAccount(
-    { email, password, name, phone, referralCode },
+    { email, password: createAccount ? password : null, name, phone, referralCode },
     { sendVerifyOtp: !skipVerificationEmail }
   );
 }
@@ -514,20 +543,23 @@ async function rateLimitAccountLookup(clientIp) {
  * Does this email already have an account? Drives the checkout form's fork between
  * "sign in to continue" and "pick a password".
  *
- * Deliberately returns nothing but a boolean. It is an enumeration surface, but no
+ * Deliberately returns nothing but two booleans. It is an enumeration surface, but no
  * more than the sign-in code request already is (that 404s on unknown emails), and
  * asking a buyer to guess whether they have an account is a reliable way to lose the
  * sale. Rate limited per IP.
+ *
+ * `hasPassword` is false for a buyer who skipped the account at checkout, so the form
+ * can go straight to an emailed code instead of a password box they never set.
  */
 async function accountExistsForEmail({ email, clientIp }) {
   await rateLimitAccountLookup(clientIp);
   const emailNorm = String(email || '').trim().toLowerCase();
-  if (!emailNorm) return { exists: false };
-  const user = await User.findOne({
+  if (!emailNorm) return { exists: false, hasPassword: false };
+  const user = await User.scope('withPassword').findOne({
     where: { email: emailNorm, is_active: true },
-    attributes: ['id'],
+    attributes: ['id', 'password_hash'],
   });
-  return { exists: !!user };
+  return { exists: !!user, hasPassword: !!user?.password_hash };
 }
 
 async function findActiveUserByLoginIdentifier(identifier) {
@@ -561,6 +593,16 @@ async function findActiveUserByLoginIdentifier(identifier) {
 async function loginWithPassword({ email, password }) {
   const user = await findActiveUserByLoginIdentifier(email);
   if (!user) return null;
+  if (!user.password_hash) {
+    // No password can match — say why instead of "Invalid credentials", so the client
+    // can offer the emailed code. Existence is no secret here: /auth/account-exists and
+    // the sign-in code request already reveal it.
+    throw new AppError(
+      'No password is set for this account yet. Sign in with a one-time code sent to your email.',
+      401,
+      PASSWORD_NOT_SET
+    );
+  }
   const passwordValid = await verifyAndMaybeUpgradePassword(password, user);
   if (!passwordValid) return null;
   await ensureMigratedUserEmailVerified(user);
@@ -657,13 +699,15 @@ async function resendVerificationEmail(accessToken) {
 
 async function validateToken(token) {
   const decoded = verifyAccess(token);
-  const user = await User.findByPk(decoded.userId, {
+  // withPassword only so has_password can be derived below; the hash never leaves this function.
+  const user = await User.scope('withPassword').findByPk(decoded.userId, {
     where: { is_active: true },
     include: [roleIncludeForSession()],
     attributes: [
       'id', 'email', 'name', 'bio', 'phone', 'profession', 'company', 'designation', 'city', 'state', 'country',
       'gst', 'permission_overrides', 'referral_code', 'profile_pic_url', 'email_verified_at',
       'bank_account_holder_name', 'bank_account_number', 'bank_ifsc', 'bank_name', 'bank_branch', 'bank_details_updated_at',
+      'password_hash',
     ],
   });
   if (!user) return null;
@@ -696,6 +740,8 @@ async function validateToken(token) {
     country: r.country || null,
     gst: r.gst || null,
     email_verified,
+    // false: signs in with emailed codes only (skipped the account at checkout).
+    has_password: !!r.password_hash,
     bank_account_holder_name: r.bank_account_holder_name || null,
     bank_account_number: r.bank_account_number || null,
     bank_ifsc: r.bank_ifsc || null,
@@ -708,6 +754,15 @@ async function validateToken(token) {
 async function changePassword(userId, { currentPassword, newPassword }) {
   const user = await User.scope('withPassword').findByPk(userId);
   if (!user) throw new AppError('User not found', 404);
+  if (!user.password_hash) {
+    // Nothing to check the "current password" against. The first password is set
+    // through the emailed reset link, which proves the buyer owns the address.
+    throw new AppError(
+      'This account has no password yet. Use "Set a password" to get a link by email.',
+      400,
+      PASSWORD_NOT_SET
+    );
+  }
   const passwordValid = await verifyAndMaybeUpgradePassword(currentPassword, user);
   if (!passwordValid) throw new AppError('Current password is incorrect', 400);
   const password_hash = await bcrypt.hash(newPassword, 10);
