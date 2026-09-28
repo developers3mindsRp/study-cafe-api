@@ -1,7 +1,12 @@
 const crypto = require('crypto');
 const { sequelize, Order, Payment, WebhookEvent } = require('../models');
 const config = require('../config');
-const { completePayment, emitPaymentEmailOutbox, captureRazorpayPayment } = require('./orders.service');
+const {
+  completePayment,
+  emitPaymentEmailOutbox,
+  captureRazorpayPayment,
+  findOrderByRazorpayOrderId,
+} = require('./orders.service');
 const { logger } = require('../../../../shared');
 
 const { getRazorpayConfig, getRazorpayInstance } = require('./payment.service');
@@ -46,13 +51,23 @@ async function findOrderByRazorpayId(razorpayOrderId) {
   return Order.findOne({ where: { razorpay_order_id: razorpayOrderId } });
 }
 
+/**
+ * Success events only: also resolves a superseded Razorpay order (buyer paid, then
+ * retried checkout) — see findOrderByRazorpayOrderId. Failure/refund/dispute events
+ * keep the exact match, so a declined attempt on an abandoned Razorpay order can
+ * never mark the live order failed.
+ */
+function findOrderForSuccessEvent(razorpayOrderId) {
+  return findOrderByRazorpayOrderId(razorpayOrderId);
+}
+
 async function handlePaymentAuthorized(body) {
   const payment = extractPaymentEntity(body);
   if (!payment) return 'no_payment_entity';
 
   logger.info(`[WEBHOOK] payment.authorized — rp_order: ${payment.order_id}, rp_payment: ${payment.id}, amount: ${payment.amount}`);
 
-  const order = await findOrderByRazorpayId(payment.order_id);
+  const order = await findOrderForSuccessEvent(payment.order_id);
   if (!order) {
     logger.warn(`[WEBHOOK] payment.authorized — order not found for rp_order: ${payment.order_id}`);
     return 'order_not_found';
@@ -90,7 +105,7 @@ async function handlePaymentCaptured(body) {
 
   logger.info(`[WEBHOOK] payment.captured — rp_order: ${payment.order_id}, rp_payment: ${payment.id}, amount: ${payment.amount}`);
 
-  const order = await findOrderByRazorpayId(payment.order_id);
+  const order = await findOrderForSuccessEvent(payment.order_id);
   if (!order) {
     logger.warn(`[WEBHOOK] payment.captured — order not found for rp_order: ${payment.order_id}`);
     return 'order_not_found';
@@ -153,7 +168,7 @@ async function handleOrderPaid(body) {
 
   logger.info(`[WEBHOOK] order.paid — rp_order: ${orderEntity.id}, amount: ${orderEntity.amount}`);
 
-  const order = await findOrderByRazorpayId(orderEntity.id);
+  const order = await findOrderForSuccessEvent(orderEntity.id);
   if (!order) {
     logger.warn(`[WEBHOOK] order.paid — order not found for rp_order: ${orderEntity.id}`);
     return 'order_not_found';

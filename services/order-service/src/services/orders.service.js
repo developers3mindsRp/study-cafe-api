@@ -31,6 +31,9 @@ function generateOrderId() {
   return 'ORD_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
 }
 
+/** What generateOrderId produces — and nothing else (migrated orders are `ORD_<n>`). */
+const GENERATED_ORDER_ID_RE = /^ORD_\d{13}_[0-9a-f]{8}$/;
+
 /**
  * Retry a DB operation on transient InnoDB lock errors (deadlock / lock-wait
  * timeout). These always roll the whole transaction back, so re-running the
@@ -1338,6 +1341,20 @@ async function captureRazorpayPayment(razorpayPaymentId, amountRupees, currency 
       logger.info(`[orders] Razorpay payment ${razorpayPaymentId} already captured — treating as success`);
       return;
     }
+    // Razorpay's auto-capture often wins the race, and then our capture is refused with
+    // wording we can't rely on ("order is already paid", "another payment operation is
+    // in progress"). Throwing on those stranded every such order as pending — the
+    // money is collected, which is all this step exists to ensure — so ask Razorpay
+    // for the payment's actual state before treating the refusal as a failure.
+    try {
+      const current = await razorpay.payments.fetch(razorpayPaymentId);
+      if (current && current.status === 'captured') {
+        logger.info(`[orders] Razorpay payment ${razorpayPaymentId} is captured (capture call said: ${desc}) — treating as success`);
+        return;
+      }
+    } catch (fetchErr) {
+      logger.warn(`[orders] Razorpay payment fetch failed for ${razorpayPaymentId}: ${fetchErr?.error?.description || fetchErr.message}`);
+    }
     logger.error(`[orders] Razorpay capture failed for ${razorpayPaymentId}: ${desc || 'unknown error'}`);
     throw new AppError(`Failed to capture payment: ${desc || 'gateway error'}`, 502);
   }
@@ -1464,6 +1481,50 @@ function orderNeedsBuyerAccount(order) {
 async function resolveMissingBuyerForPaymentLink(order) {
   if (order.user_id || String(order.type) !== 'payment_link') return null;
   return resolveBuyerUserId(order, { allowCreate: orderNeedsBuyerAccount(order) });
+}
+
+// ─── Razorpay order → our order ───────────────────────────────────────────────
+
+/**
+ * The order a Razorpay order id belongs to — including one that is no longer the
+ * order's CURRENT razorpay_order_id.
+ *
+ * createOrder reuses a pending order and mints a fresh Razorpay order on every call,
+ * overwriting razorpay_order_id. A buyer who approves a UPI payment, closes the modal
+ * before it confirms and taps Pay again leaves the money on the first Razorpay order
+ * while our row now points at the second — so an exact-match lookup finds nothing,
+ * payment.captured / order.paid are dropped as order_not_found, verify fails with an
+ * id mismatch, and a captured payment sits on a "pending" order with no access.
+ *
+ * Every Razorpay order we create carries our order_id as its `receipt`, so fall back
+ * to fetching it and matching on that.
+ */
+async function findOrderByRazorpayOrderId(razorpayOrderId) {
+  if (!razorpayOrderId) return null;
+  const direct = await Order.findOne({ where: { razorpay_order_id: razorpayOrderId } });
+  if (direct) return direct;
+
+  let rpOrder = null;
+  try {
+    const razorpay = await getRazorpayInstance();
+    if (razorpay) rpOrder = await razorpay.orders.fetch(razorpayOrderId);
+  } catch (err) {
+    logger.warn(`[orders] Razorpay order fetch failed for ${razorpayOrderId}: ${err?.error?.description || err.message}`);
+    return null;
+  }
+  // Only the exact format generateOrderId produces. The Razorpay account is shared with
+  // another system whose receipts are arbitrary, and migrated orders use `ORD_<n>` —
+  // neither may ever be matched (and fulfilled) through this fallback.
+  const ourOrderId = rpOrder?.receipt ? String(rpOrder.receipt) : '';
+  if (!GENERATED_ORDER_ID_RE.test(ourOrderId)) return null;
+
+  const order = await Order.findOne({ where: { order_id: ourOrderId } });
+  if (order) {
+    logger.warn(
+      `[orders] ${razorpayOrderId} is a superseded Razorpay order of ${order.order_id} (current: ${order.razorpay_order_id || 'none'}) — matched via receipt`
+    );
+  }
+  return order;
 }
 
 // ─── completePayment ──────────────────────────────────────────────────────────
@@ -2401,8 +2462,13 @@ async function verifyPaymentLinkOrder({ orderId, razorpay_order_id, razorpay_pay
   if (!order) throw new AppError('Order not found', 404);
 
   if (order.razorpay_order_id && order.razorpay_order_id !== razorpay_order_id) {
-    logger.warn('[verifyPaymentLinkOrder] razorpay_order_id mismatch');
-    throw new AppError('Order ID mismatch', 400);
+    // Signed, so the Razorpay order is genuine — accept it only if it was minted for
+    // THIS order and later superseded by a retry (see findOrderByRazorpayOrderId).
+    const owner = await findOrderByRazorpayOrderId(razorpay_order_id);
+    if (!owner || owner.id !== order.id) {
+      logger.warn('[verifyPaymentLinkOrder] razorpay_order_id mismatch');
+      throw new AppError('Order ID mismatch', 400);
+    }
   }
 
   if (order.status === 'paid') {
@@ -2435,9 +2501,14 @@ async function verifyOrder(userId, { orderId, razorpay_order_id, razorpay_paymen
 
   // 3. Cross-check: the Razorpay order ID signed must match what we stored
   //    This prevents "submit payment of order A to fulfil order B" attacks
+  //    A superseded Razorpay order of this same order (buyer retried after paying) is
+  //    still this order's payment — findOrderByRazorpayOrderId matches it by receipt.
   if (order.razorpay_order_id && order.razorpay_order_id !== razorpay_order_id) {
-    logger.warn(`[verifyOrder] razorpay_order_id mismatch — stored: ${order.razorpay_order_id}, received: ${razorpay_order_id}`);
-    throw new AppError('Order ID mismatch', 400);
+    const owner = await findOrderByRazorpayOrderId(razorpay_order_id);
+    if (!owner || owner.id !== order.id) {
+      logger.warn(`[verifyOrder] razorpay_order_id mismatch — stored: ${order.razorpay_order_id}, received: ${razorpay_order_id}`);
+      throw new AppError('Order ID mismatch', 400);
+    }
   }
 
   // 4. Guard: don't re-process a completed order
@@ -4726,6 +4797,7 @@ module.exports = {
   verifyOrder,
   completePayment,
   captureRazorpayPayment,
+  findOrderByRazorpayOrderId,
   emitPaymentEmailOutbox,
   emitCourseAccessEmailOutbox,
   createPaymentLinkOrder,
