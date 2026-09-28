@@ -81,8 +81,27 @@ const paymentLinkVerifyOrder = {
   }),
 };
 
+const marketingGuestCreateOrder = {
+  body: Joi.object({
+    courseId: Joi.alternatives().try(Joi.number().integer().positive(), Joi.string().min(1)).required(),
+    marketingSlug: Joi.string().trim().min(1).max(200).required(),
+    fullName: Joi.string().trim().min(1).max(250).required(),
+    email: Joi.string().trim().email().max(255).required(),
+    mobile: Joi.string().trim().min(8).max(24).required(),
+    referralCode: Joi.string().max(32).allow('', null),
+    utm: Joi.object({
+      source: Joi.string().max(100).allow('', null),
+      medium: Joi.string().max(100).allow('', null),
+      campaign: Joi.string().max(100).allow('', null),
+      content: Joi.string().max(100).allow('', null),
+      term: Joi.string().max(100).allow('', null),
+    }).allow(null),
+  }),
+};
+
 module.exports = {
   createOrder,
+  marketingGuestCreateOrder,
   verifyOrder,
   getCoupon,
   applyCoupon,
