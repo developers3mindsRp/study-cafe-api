@@ -1703,7 +1703,10 @@ function formatAccessExpiryLabel(value) {
 // IDEMPOTENCY: Reuses a single pending/failed checkout row per (user, type, entity) so
 // repeat /orders/create calls do not insert duplicate orders for the same purchase intent.
 
-async function createOrder(userId, { type, entityId, couponCode, referralCode, currency = 'INR', utm, buyer_name, buyer_email, buyer_mobile, marketingSlug }) {
+//
+// `markEmailVerified: false` — the caller has not proved it owns the buyer's inbox
+// (marketing guest checkout), so a free order must not flip the verified flag.
+async function createOrder(userId, { type, entityId, couponCode, referralCode, currency = 'INR', utm, buyer_name, buyer_email, buyer_mobile, marketingSlug }, { markEmailVerified = true } = {}) {
   const typeUpper = normalizeOrderType(type);
 
   // 1. Fetch canonical price from the owning service — never trust client
@@ -1809,7 +1812,7 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
         );
         // Still a completed checkout from the caller's perspective — the success
         // page is gated on a verified email, so flip the flag here too.
-        await markBuyerEmailVerified(userId, owned.order.order_id);
+        if (markEmailVerified) await markBuyerEmailVerified(userId, owned.order.order_id);
         return {
           orderId: owned.order.order_id,
           free: true,
@@ -1965,7 +1968,7 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
       await redis.del(lockKey);
       // A free checkout fulfils immediately and never passes through completePayment,
       // so the quick-registered buyer is verified here instead.
-      await markBuyerEmailVerified(userId, outOrderId);
+      if (markEmailVerified) await markBuyerEmailVerified(userId, outOrderId);
       return {
         orderId: outOrderId,
         free: true,
@@ -2102,6 +2105,85 @@ async function createOrder(userId, { type, entityId, couponCode, referralCode, c
     await redis.del(lockKey).catch(() => { });
     throw err;
   }
+}
+
+// ─── Marketing guest checkout (existing account, no sign-in) ─────────────────
+
+/** Is `marketingSlug` a published landing page that sells exactly this course? */
+async function isPublishedMarketingPageFor(marketingSlug, courseId) {
+  try {
+    const { data, status } = await axios.get(
+      `${config.courseServiceUrl}/internal/marketing-pages/by-slug/${encodeURIComponent(marketingSlug)}`,
+      {
+        timeout: 8000,
+        headers: { 'x-internal-api-key': config.internalApiKey },
+        validateStatus: (s) => s === 200 || s === 404,
+      }
+    );
+    if (status !== 200) return false;
+    const page = parseApiResponse(data);
+    return !!page && !!page.is_published && String(page.course_id) === String(courseId);
+  } catch (err) {
+    logger.warn(`[orders] isPublishedMarketingPageFor("${marketingSlug}") failed: ${err.message}`);
+    return false;
+  }
+}
+
+/**
+ * Marketing landing-page checkout for a buyer who is not signed in and did not tick
+ * "create an account", but whose email already has one. Asking them for a password
+ * (or a code) would turn an optional account back into a mandatory sign-in, so the
+ * order is placed on that account and the payment is the only step.
+ *
+ * No session is issued — typing an email proves nothing about owning it — and the
+ * response reveals nothing about the account behind the email: prefill echoes what
+ * the buyer typed, and the already-owned refusal carries no order id or expiry.
+ * Buyers with no account yet keep the registerQuick path (ACCOUNT_NOT_FOUND here).
+ */
+async function createMarketingGuestOrder({ courseId, marketingSlug, fullName, email, mobile, referralCode, utm }) {
+  const slug = String(marketingSlug).trim();
+  if (!(await isPublishedMarketingPageFor(slug, courseId))) {
+    throw new AppError('This checkout page is no longer available.', 404);
+  }
+
+  const emailNorm = String(email).trim().toLowerCase();
+  const userId = await fetchUserIdByEmail(emailNorm);
+  if (!userId) throw new AppError('No account found for this email', 404, 'ACCOUNT_NOT_FOUND');
+
+  let result;
+  try {
+    result = await createOrder(
+      userId,
+      {
+        type: 'course',
+        entityId: courseId,
+        marketingSlug: slug,
+        referralCode,
+        utm,
+        buyer_name: fullName,
+        buyer_email: emailNorm,
+        buyer_mobile: mobile,
+      },
+      { markEmailVerified: false }
+    );
+  } catch (err) {
+    if (err instanceof AppError && err.statusCode === 409) {
+      throw new AppError(
+        'This email already has access to this course. Sign in to open it from My Courses.',
+        409,
+        'ALREADY_PURCHASED'
+      );
+    }
+    throw err;
+  }
+
+  const { accessExpiresAt: _hidden, ...rest } = result;
+  return { ...rest, prefill: { name: fullName, email: emailNorm, contact: mobile } };
+}
+
+/** The Razorpay signature is the proof here; the order row is matched by id alone. */
+function verifyMarketingGuestOrder(body) {
+  return verifyOrder(null, body);
 }
 
 // ─── Payment link checkout (amount from admin-service; guest OK) ─────────────
@@ -2495,8 +2577,10 @@ async function verifyOrder(userId, { orderId, razorpay_order_id, razorpay_paymen
     .digest('hex');
   if (expected !== razorpay_signature) throw new AppError('Invalid signature', 400);
 
-  // 2. Load our order
-  const order = await Order.findOne({ where: { order_id: orderId, user_id: userId } });
+  // 2. Load our order. userId is null only for marketing guest checkout — the signed
+  //    Razorpay order id cross-checked in step 3 is what binds the payment to the row.
+  const where = userId != null ? { order_id: orderId, user_id: userId } : { order_id: orderId, type: 'course' };
+  const order = await Order.findOne({ where });
   if (!order) throw new AppError('Order not found', 404);
 
   // 3. Cross-check: the Razorpay order ID signed must match what we stored
@@ -4802,6 +4886,8 @@ module.exports = {
   emitCourseAccessEmailOutbox,
   createPaymentLinkOrder,
   verifyPaymentLinkOrder,
+  createMarketingGuestOrder,
+  verifyMarketingGuestOrder,
   listOrders,
   listMyPurchases,
   getInvoice,

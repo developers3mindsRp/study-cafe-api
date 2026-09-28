@@ -12,6 +12,10 @@ function register(router) {
   router.post('/orders/payment-link/create', optionalUserId, validate(schemas.paymentLinkCreateOrder), ordersController.createPaymentLink);
   router.post('/orders/payment-link/verify', validate(schemas.paymentLinkVerifyOrder), ordersController.verifyPaymentLink);
 
+  // Public — marketing checkout for an existing account that skipped sign-in (no session issued)
+  router.post('/orders/marketing-guest/create', validate(schemas.marketingGuestCreateOrder), ordersController.createMarketingGuest);
+  router.post('/orders/marketing-guest/verify', validate(schemas.verifyOrder), ordersController.verifyMarketingGuest);
+
   router.post('/orders/create', requireUserId, validate(schemas.createOrder), ordersController.create);
   router.post('/orders/verify', requireUserId, validate(schemas.verifyOrder), ordersController.verify);
   router.get('/orders', requireUserId, ordersController.list);

@@ -262,6 +262,16 @@ const verifyPaymentLink = asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 });
 
+const createMarketingGuest = asyncHandler(async (req, res) => {
+  const result = await ordersService.createMarketingGuestOrder(req.body);
+  sendCreated(res, result);
+});
+
+const verifyMarketingGuest = asyncHandler(async (req, res) => {
+  const result = await ordersService.verifyMarketingGuestOrder(req.body);
+  sendSuccess(res, result);
+});
+
 const listActiveCoupons = asyncHandler(async (req, res) => {
   const coupons = await ordersService.listActiveCoupons();
   sendSuccess(res, coupons);
@@ -337,6 +347,8 @@ module.exports = {
   webhook,
   createPaymentLink,
   verifyPaymentLink,
+  createMarketingGuest,
+  verifyMarketingGuest,
   createManualOrder,
   createBulkCourseOrders,
   createBulkMembershipOrders,
