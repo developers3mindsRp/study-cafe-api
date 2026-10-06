@@ -429,6 +429,15 @@ const claimCertificateLink = {
     }),
 };
 
+const retrieveCertificateLink = {
+    params: Joi.object({
+        token: Joi.string().trim().max(64).required(),
+    }),
+    body: Joi.object({
+        email: Joi.string().trim().email({ minDomainSegments: 2, tlds: false }).max(190).required(),
+    }),
+};
+
 /** YYYY-MM-DD, kept as a string so a date-only value never shifts across the +05:30 offset. */
 const certificateDateOnly = Joi.string()
     .trim()
@@ -505,6 +514,7 @@ module.exports = {
     certificateCourseIdParam,
     certificateLinkTokenParam,
     claimCertificateLink,
+    retrieveCertificateLink,
     createCertificateLink,
     updateCertificateLink,
     listCertificateLinksQuery,

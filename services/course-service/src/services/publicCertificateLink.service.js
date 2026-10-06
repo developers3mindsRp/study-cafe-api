@@ -154,7 +154,7 @@ function courseCanIssue(course) {
 
 async function findPublicCertificate(courseId, emailNorm, t = null) {
   const rows = await sequelize.query(
-    `SELECT id, serial, name FROM public_certificates
+    `SELECT id, serial, name, issued_at FROM public_certificates
       WHERE course_id = :cid AND email_norm = :email LIMIT 1`,
     {
       replacements: { cid: courseId, email: emailNorm },
@@ -444,7 +444,7 @@ async function claim(token, payload, meta = {}) {
       // Frozen at first claim. Returning the just-submitted name instead would let anyone
       // re-submit against a known email and print an arbitrary name on an issued serial.
       studentName: existing.name,
-      completionDate,
+      completionDate: issuedCertificateDate(link, existing),
       certificateNumber: formatCertificateSerial(existing.serial),
     };
   }
@@ -493,7 +493,6 @@ async function claim(token, payload, meta = {}) {
       completionDate,
       certificateNumber: formatCertificateSerial(serial),
       token: link.token,
-      publicCertificateId,
     });
   }
 
@@ -506,14 +505,65 @@ async function claim(token, payload, meta = {}) {
 }
 
 /**
- * Fire-and-forget copy of the certificate by email, first claim only.
- *
- * Deliberately does NOT pass userId/courseId: auth-service only attaches a PDF when both are set,
- * and it fetches that PDF back through getCertificateDataInternal(), which requires completed
- * course progress. An anonymous claimant has none, so every claim would 404 and log a warning.
- * `publicCertificateId` routes it to the public PDF endpoint instead.
+ * The date printed on a certificate someone ALREADY holds: the link's event date when set,
+ * otherwise the day it was first issued — not today, or a re-download prints a different date.
  */
-function sendClaimEmail({ to, name, courseTitle, completionDate, certificateNumber, token, publicCertificateId }) {
+function issuedCertificateDate(link, existing) {
+  if (link.certificate_date) return toDateOnly(link.certificate_date);
+  return toDateOnly(existing.issued_at || new Date());
+}
+
+/**
+ * Re-show a certificate that was ALREADY issued, by email alone. Never mints a serial.
+ *
+ * The claim email's button points at the claim page, and a link expires, gets disabled or fills
+ * up long after that email lands — so unlike claim(), this ignores the link's status and refuses
+ * only links that should not be known to exist (unknown, draft, soft-deleted). Closing a link
+ * stops NEW certificates; it does not take back the ones people hold. For the same reason the
+ * course's certificate_enabled flag is not checked here.
+ *
+ * Exposes nothing claim() does not already return for a known email on an active link.
+ */
+async function retrieve(token, payload) {
+  const link = plain(await findLinkByToken(token));
+  if (!link || link.deleted_at || link.status === 'draft') {
+    throw new AppError('Certificate link not found', 404);
+  }
+
+  const emailNorm = normalizeEmail(payload.email);
+  const existing = await findPublicCertificate(link.course_id, emailNorm);
+  if (!existing) {
+    throw new AppError(
+      'No certificate was found for this email. Use the same email address you entered when you first got your certificate.',
+      404,
+    );
+  }
+
+  // Count the re-download on this link's lead row when there is one; never create a lead row here.
+  await sequelize.query(
+    `UPDATE certificate_link_claims
+        SET download_count = download_count + 1, last_claimed_at = NOW(), updated_at = NOW()
+      WHERE link_id = :lid AND email_norm = :email`,
+    { replacements: { lid: link.id, email: emailNorm }, type: QueryTypes.UPDATE },
+  );
+
+  const course = await loadCourseLite(link.course_id);
+  return {
+    courseTitle: course?.title?.trim() || 'Course',
+    studentName: existing.name,
+    completionDate: issuedCertificateDate(link, existing),
+    certificateNumber: formatCertificateSerial(existing.serial),
+  };
+}
+
+/**
+ * Fire-and-forget "your certificate is ready" email, first claim only. No PDF is attached — the
+ * client asked for the email to carry only the claim link, where the certificate is downloaded.
+ *
+ * Deliberately does NOT pass userId/courseId: auth-service attaches the learner PDF when both are
+ * set, which would also go through getCertificateDataInternal() and its completed-progress check.
+ */
+function sendClaimEmail({ to, name, courseTitle, completionDate, certificateNumber, token }) {
   if (!to) return;
   (async () => {
     try {
@@ -525,7 +575,6 @@ function sendClaimEmail({ to, name, courseTitle, completionDate, certificateNumb
           courseTitle,
           completionDate,
           certificateNumber,
-          publicCertificateId,
           claimUrl: `${config.publicSiteUrl}/certificate/${token}`,
         },
         { headers: { 'x-internal-api-key': config.internalApiKey }, timeout: 15000 },
@@ -726,6 +775,7 @@ module.exports = {
   // public
   getPublicByToken,
   claim,
+  retrieve,
   // internal
   listInternal,
   getByIdInternal,

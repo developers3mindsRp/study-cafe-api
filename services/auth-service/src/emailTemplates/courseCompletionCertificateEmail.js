@@ -20,7 +20,8 @@ function siteHostnameForFooter(url) {
  * Serves two audiences from one template:
  *   - a learner who finished a course (no claimUrl — they go to their account)
  *   - someone who claimed a certificate through a public certificate link (claimUrl present — they
- *     re-open that link, where re-entering the same email returns the same serial)
+ *     re-open that link and enter the same email to get the same certificate back — this keeps
+ *     working after the link expires or fills up, see retrieve() in course-service)
  *
  * @param {object} opts
  * @param {string} opts.name
@@ -40,7 +41,7 @@ function buildCourseCompletionCertificateEmailHtml(opts) {
   const ctaHref = safeClaimUrl || `${safeUrl}/account`;
   const ctaLabel = safeClaimUrl ? 'Download my certificate' : 'Go to my account';
   const howToGetIt = safeClaimUrl
-    ? 'Your certificate is attached, and you can download it again any time from the link below.'
+    ? 'Your certificate is ready. To download it again at any time, open the link below and enter this email address.'
     : 'Your certificate is ready. Open the course page, click <strong>Certificate</strong>, and print / save as PDF.';
   const serialLine = safeSerial
     ? `<p style="margin:12px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
@@ -130,7 +131,7 @@ function buildCourseCompletionCertificateEmailPlainText(opts) {
   const serial = opts.certificateNumber || '';
 
   const howToGetIt = claimUrl
-    ? 'Your certificate is attached, and you can download it again any time from the link below.'
+    ? 'Your certificate is ready. To download it again at any time, open the link below and enter this email address.'
     : 'Your certificate is ready. Open the course page and click Certificate to print / save as PDF.';
   const serialLine = serial ? `Certificate Serial No.: ${serial}\n` : '';
   const cta = claimUrl

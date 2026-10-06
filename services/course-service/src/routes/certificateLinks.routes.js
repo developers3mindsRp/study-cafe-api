@@ -6,7 +6,7 @@ const { validate } = require('../../../../shared');
 /**
  * Public certificate download links.
  *
- * The two `/certificate-links/:token` routes are PUBLIC — no JWT, no course access check, no
+ * The `/certificate-links/:token` routes are PUBLIC — no JWT, no course access check, no
  * x-user-id. They are exposed through the gateway by explicit method+path (never a prefix mount),
  * so nothing added here later becomes world-readable by accident.
  */
@@ -21,6 +21,11 @@ function register(router) {
     '/certificate-links/:token/claim',
     validate(schemas.claimCertificateLink),
     certificateLinkController.claimCertificate,
+  );
+  router.post(
+    '/certificate-links/:token/retrieve',
+    validate(schemas.retrieveCertificateLink),
+    certificateLinkController.retrieveCertificate,
   );
 
   // ── Internal (admin-service over internalAuth) ───────────────────

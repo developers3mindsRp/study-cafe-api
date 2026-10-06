@@ -185,6 +185,7 @@ function register(app) {
    */
   app.get('/api/certificate-links/:token', publicCertificateLinkProxy);
   app.post('/api/certificate-links/:token/claim', publicCertificateLinkProxy);
+  app.post('/api/certificate-links/:token/retrieve', publicCertificateLinkProxy);
   /** Certificate metadata for client-rendered certificates (courseTitle, studentName, completionDate). */
   app.get('/api/certificates/course/:courseId', validateJWT, injectUserId, certificateProxy);
   app.use('/api/progress', validateJWT, injectUserId, progressProxy);

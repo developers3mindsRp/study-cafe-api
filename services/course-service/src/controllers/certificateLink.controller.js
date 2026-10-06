@@ -53,6 +53,17 @@ const claimCertificate = asyncHandler(async (req, res) => {
   }
 });
 
+/**
+ * POST /certificate-links/:token/retrieve
+ *
+ * Email only. Returns a certificate this email already holds — even after the link has expired,
+ * been disabled or filled up — and never issues a new one. Same response shape as claim.
+ */
+const retrieveCertificate = asyncHandler(async (req, res) => {
+  const data = await certificateLinkService.retrieve(req.params.token, req.body);
+  sendSuccess(res, data);
+});
+
 // ── Internal (admin-service, internalAuth) ─────────────────────────
 
 const listInternal = asyncHandler(async (req, res) => {
@@ -112,6 +123,7 @@ const getPublicCertificatePdfInternal = asyncHandler(async (req, res) => {
 module.exports = {
   getPublicLink,
   claimCertificate,
+  retrieveCertificate,
   listInternal,
   getByIdInternal,
   createInternal,
