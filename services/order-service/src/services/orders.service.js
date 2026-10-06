@@ -4300,6 +4300,30 @@ async function ensurePaymentCaptured(orderRow, razorpayPaymentId, { signature = 
   }
 }
 
+/**
+ * Record an admin-entered payment reference from the Order Edit form.
+ *
+ * Same storage rule as createManualOrder's shared mode. A reference that already backs
+ * another order (a membership and the courses allotted with it are routinely paid by one
+ * settlement) cannot go on this order's payments row — `payments` is UNIQUE on it — so it
+ * is recorded on orders.rp_payment_id while the payments row keeps a per-order `manual:`
+ * capture ref. `preferShared` keeps an order that is already in shared mode there. A
+ * reference nothing else uses is captured on the payments row exactly as before.
+ */
+async function attachAdminPaymentRef(orderRow, ref, { transaction, preferShared = false }) {
+  const otherOrder = { [Op.ne]: orderRow.id };
+  const shared =
+    preferShared ||
+    (await Payment.count({ where: { razorpay_payment_id: ref, order_id: otherOrder }, transaction })) > 0 ||
+    (await Order.count({ where: { rp_payment_id: ref, id: otherOrder }, transaction })) > 0;
+  if (!shared) {
+    return ensurePaymentCaptured(orderRow, ref, { source: 'manual', transaction });
+  }
+  await ensurePaymentCaptured(orderRow, `manual:${orderRow.order_id}`, { source: 'manual', transaction });
+  await orderRow.update({ rp_payment_id: ref }, { transaction });
+  return ref;
+}
+
 async function createManualOrder(data) {
   const {
     user_id,
@@ -4714,8 +4738,11 @@ async function updateOrder(id, data) {
           400
         );
       }
-      const paymentRef = adminPaymentRef || `manual:${reloaded.order_id}`;
-      await ensurePaymentCaptured(reloaded, paymentRef, { source: 'manual', transaction: t });
+      if (adminPaymentRef) {
+        await attachAdminPaymentRef(reloaded, adminPaymentRef, { transaction: t });
+      } else {
+        await ensurePaymentCaptured(reloaded, `manual:${reloaded.order_id}`, { source: 'manual', transaction: t });
+      }
       await emitPurchaseOutbox(reloaded, t, { isManual: true });
       // Membership orders already get their own email via MEMBERSHIP_ACTIVATED (emitPurchaseOutbox above).
       if (reloaded.type === 'course') {
@@ -4727,7 +4754,31 @@ async function updateOrder(id, data) {
       (oldStatus === 'paid' || oldStatus === 'completed')
     ) {
       // Update payment reference on an already-paid order without re-fulfilling.
-      await ensurePaymentCaptured(reloaded, adminPaymentRef, { source: 'manual', transaction: t });
+      //
+      // Order Edit re-sends the payment ID it displays on every save, so an unchanged ID
+      // must be a no-op: re-recording a shared reference would collide with the order
+      // that holds it on its payments row, and fail an unrelated edit (a buyer name fix).
+      const currentPayments = await Payment.findAll({
+        where: { order_id: reloaded.id },
+        order: [['id', 'DESC']],
+        raw: true,
+        transaction: t,
+      });
+      if (resolveAdminPaymentId(reloaded.get({ plain: true }), currentPayments) !== adminPaymentRef) {
+        const hasRealPayment = currentPayments.some(
+          (p) => !isSyntheticPaymentRef(p.razorpay_payment_id) && p.status !== 'failed'
+        );
+        if (hasRealPayment) {
+          // A real gateway payment is on file: keep the strict one-order-per-reference rule
+          // rather than shadowing it with a shared reference.
+          await ensurePaymentCaptured(reloaded, adminPaymentRef, { source: 'manual', transaction: t });
+        } else {
+          await attachAdminPaymentRef(reloaded, adminPaymentRef, {
+            transaction: t,
+            preferShared: !!reloaded.rp_payment_id,
+          });
+        }
+      }
     }
 
     // Paid/completed order had item swapped: grant new course/plan without duplicate affiliate commission.
@@ -4914,6 +4965,9 @@ module.exports = {
   validateCouponForPreview,
   getOrderStats,
   getRevenueTimeSeries,
+  // For repair scripts: the same "which payment ID does an admin see" rule as the UI.
+  resolveAdminPaymentId,
+  isSyntheticPaymentRef,
 };
 
 /**

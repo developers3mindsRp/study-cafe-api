@@ -44,10 +44,18 @@ const BULK_CONCURRENCY = 10;
  * Create a manual 'paid' course order so an admin-allotted course surfaces under
  * the user's "Purchased Course" tab (order-service GET /orders/my-purchases reads
  * the orders table). Best-effort: failures are logged, never thrown, so a broken
- * order write can't fail the enrollment itself.
+ * order write can't fail the enrollment itself — but the outcome is returned so the
+ * caller can tell the admin instead of reporting a clean save.
+ *
+ * Booked in shared-payment mode, like bulk allotment. One settlement routinely covers a
+ * membership and the courses allotted with it, and `payments` is UNIQUE on the
+ * reference: without shared mode the second order carrying that reference is rejected,
+ * and the learner ends up enrolled with no order at all.
+ *
+ * @returns {Promise<{ created: boolean, error?: string }>}
  */
 async function createCourseOrder({ userId, courseId, price, paymentId, contact }) {
-  if (!courseId) return false;
+  if (!courseId) return { created: false, error: 'courseId is required to record the order' };
   try {
     let buyer = contact || null;
     if (!buyer) {
@@ -68,11 +76,15 @@ async function createCourseOrder({ userId, courseId, price, paymentId, contact }
       buyer_mobile: buyer?.phone || null,
       status: 'paid',
       payment_id: paymentId || undefined,
+      shared_payment_id: true,
     });
-    return true;
+    return { created: true };
   } catch (orderErr) {
     console.error('[createCourseOrder] order creation failed:', orderErr?.response?.data ?? orderErr?.message ?? orderErr);
-    return false;
+    return {
+      created: false,
+      error: orderErr?.response?.data?.error || orderErr?.message || 'Order could not be created',
+    };
   }
 }
 
@@ -708,6 +720,7 @@ const grantUserMembership = asyncHandler(async (req, res) => {
   });
 
   // Create a manual order record when price or paymentId is provided
+  let orderOutcome = null;
   if (price || paymentId) {
     try {
       const { data: contact } = await authClient.get(`/internal/users/${req.params.id}/contact`);
@@ -721,14 +734,22 @@ const grantUserMembership = asyncHandler(async (req, res) => {
         buyer_mobile: contact?.phone || null,
         status: 'paid',
         payment_id: paymentId || undefined,
+        // The courses allotted alongside this membership are usually paid by the same
+        // settlement and are booked against the same reference (see createCourseOrder).
+        shared_payment_id: true,
       });
+      orderOutcome = { orderCreated: true };
     } catch (orderErr) {
       console.error('[grantUserMembership] order creation failed:', orderErr?.response?.data ?? orderErr?.message ?? orderErr);
+      orderOutcome = {
+        orderCreated: false,
+        orderError: orderErr?.response?.data?.error || orderErr?.message || 'Order could not be created',
+      };
     }
   }
 
   await adminLogsService.logAction(adminId, 'GRANT_MEMBERSHIP', 'user_membership', String(req.params.id), { membershipType, startsAt, expiresAt, paymentId }, req.ip);
-  sendSuccess(res, { granted: true });
+  sendSuccess(res, { granted: true, ...(orderOutcome || {}) });
 });
 
 // Downgrade a user to the Free tier — expires every active membership row and
@@ -759,7 +780,8 @@ const addBatchEnrollment = asyncHandler(async (req, res) => {
   // Always create a manual course order on a fresh enrollment so the course shows
   // under "Purchased Course". Skip re-enrollments (created === false) to avoid dupes.
   if (data.created !== false && courseId) {
-    await createCourseOrder({ userId: user_id, courseId, price, paymentId });
+    const order = await createCourseOrder({ userId: user_id, courseId, price, paymentId });
+    return sendCreated(res, { ...data, orderCreated: order.created, orderError: order.error || null });
   }
 
   sendCreated(res, data);
@@ -787,7 +809,8 @@ const setUserCourseBatch = asyncHandler(async (req, res) => {
   );
 
   if (data.firstEnrollment && courseId) {
-    await createCourseOrder({ userId: user_id, courseId, price, paymentId });
+    const order = await createCourseOrder({ userId: user_id, courseId, price, paymentId });
+    return sendSuccess(res, { ...data, orderCreated: order.created, orderError: order.error || null });
   }
 
   sendSuccess(res, data);
