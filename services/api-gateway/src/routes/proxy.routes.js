@@ -193,6 +193,8 @@ function register(app) {
   app.post('/api/orders/webhook/razorpay', orderProxy);
   app.post('/api/orders/payment-link/create', optionalJWT, injectOptionalUserId, orderProxy);
   app.post('/api/orders/payment-link/verify', orderProxy);
+  app.post('/api/orders/marketing-guest/create', orderProxy);
+  app.post('/api/orders/marketing-guest/verify', orderProxy);
   app.get('/api/coupons', orderProxy);
   const injectOrderUserId = (req, _res, next) => {
     const uid = req.user?.userId ?? req.user?.id;
