@@ -16,6 +16,7 @@ module.exports = (sequelize) => {
       sort_order: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
       tier_rank: { type: DataTypes.TINYINT.UNSIGNED, allowNull: false, defaultValue: 0 },
       is_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+      hide_from_public: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       is_popular: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       affiliate_commission: { type: DataTypes.DECIMAL(10, 2), allowNull: false, defaultValue: 0 },
     },
