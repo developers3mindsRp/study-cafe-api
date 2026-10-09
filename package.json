@@ -2,7 +2,7 @@
   "name": "studycafe-ms",
   "private": true,
   "scripts": {
-    "start": "npm run start:services",
+    "start": "node api.js && npm run start:services",
     "start:services": "npx concurrently -n gateway,auth,course,order,admin,platform,platform-worker,downloads -c blue,green,yellow,magenta,cyan,white,gray,red \"npm run start:gateway\" \"npm run start:auth\" \"npm run start:course\" \"npm run start:order\" \"npm run start:admin\" \"npm run start:platform\" \"npm run start:platform-worker\" \"npm run start:downloads\"",
     "start:gateway": "cd services/api-gateway && cross-env NODE_ENV=production PORT=3000 node src/server.js",
     "start:auth": "cd services/auth-service && cross-env NODE_ENV=production PORT=4001 node src/server.js",
@@ -16,7 +16,7 @@
     "pm2:reload": "pm2 reload ecosystem.config.cjs",
     "pm2:stop": "pm2 delete ecosystem.config.cjs",
     "pm2:logs": "pm2 logs",
-    "dev": "npm run dev:wait && npm run dev:fix-db && npm run dev:services",
+    "dev": "node api.js && npm run dev:wait && npm run dev:fix-db && npm run dev:services",
     "dev:services": "npx concurrently -n gateway,auth,course,order,admin,platform,platform-worker,downloads -c blue,green,yellow,magenta,cyan,white,gray,red \"npm run dev:gateway\" \"npm run dev:auth\" \"npm run dev:course\" \"npm run dev:order\" \"npm run dev:admin\" \"npm run dev:platform\" \"npm run dev:platform-worker\" \"npm run dev:downloads\"",
     "dev:wait": "npx wait-on tcp:127.0.0.1:3306 tcp:127.0.0.1:6379 -t 60000",
     "dev:gateway": "cd services/api-gateway && cross-env PORT=3000 node --watch src/server.js",
