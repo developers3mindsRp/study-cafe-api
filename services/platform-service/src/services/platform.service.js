@@ -929,9 +929,14 @@ async function putSiteAds(body) {
   return merged;
 }
 
+/**
+ * Public plan listing (pricing page, home, comparison table).
+ * Unlisted plans (hide_from_public) are excluded here but stay openable and purchasable
+ * via /plans/<slug> — getPlanBySlugPublic, upgrade pricing and order lookups only check is_active.
+ */
 async function getPlansPublic() {
   const rows = await PremiumPlan.findAll({
-    where: { is_active: true },
+    where: { is_active: true, hide_from_public: false },
     order: [
       ['sort_order', 'ASC'],
       ['id', 'ASC'],
@@ -1052,6 +1057,7 @@ async function createPlan(data) {
     sort_order: data.sort_order ?? 0,
     tier_rank: data.tier_rank !== undefined ? Number(data.tier_rank) : 0,
     is_active: data.is_active !== undefined ? !!data.is_active : true,
+    hide_from_public: !!data.hide_from_public,
     affiliate_commission: Number.isFinite(pct) ? pct : 0,
   });
   const planId = row.id;
@@ -1082,6 +1088,7 @@ async function updatePlan(id, data) {
   if (data.sort_order !== undefined) updates.sort_order = data.sort_order;
   if (data.tier_rank !== undefined) updates.tier_rank = Number(data.tier_rank);
   if (data.is_active !== undefined) updates.is_active = !!data.is_active;
+  if (data.hide_from_public !== undefined) updates.hide_from_public = !!data.hide_from_public;
   if (data.is_popular !== undefined) {
     // If marking this plan popular, clear the flag on other plans only — never clear this
     // row in the DB first. Otherwise Sequelize still thinks is_popular is true on the

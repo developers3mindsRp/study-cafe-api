@@ -4,8 +4,8 @@
   "description": "StudyCafe Platform/CMS - home, states, testimonials, footer, plans, articles",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
+    "start": "node init && node src/server.js",
+    "dev": "node init && node --watch src/server.js",
     "worker:article-publish": "node src/workers/article-publish-worker.js",
     "telegram:test": "node scripts/test-telegram.js",
     "db:create-global-settings": "cd ../.. && npm run ensure-global-settings",
